@@ -14,8 +14,6 @@
         { "type": "improvement", "description": "FSD analytics donut chart center now shows a rating label (Great / Good / Okay / Bad) based on FSD usage, with the percentage shown below it." },
         { "type": "improvement", "description": "Time with FSD is now shown in the drive analytics legend." },
         { "type": "improvement", "description": "Aggregate analytics now include average disengagements and average accelerator overrides per drive." },
-        { "type": "improvement", "description": "Map-related settings grouped under a new \"Map UI\" section in Settings." },
-        { "type": "improvement", "description": "Replay marker setting renamed from \"Marker\" to \"Replay Marker\" for clarity." },
         { "type": "fix", "description": "Scrubbing the timeline now snaps the direction arrow immediately instead of animating from its previous position." }
       ]
     },
