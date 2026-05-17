@@ -41,6 +41,16 @@ const UNIT_SYSTEM = {
 };
 let unitSystem = localStorage.getItem('unitSystem') === 'metric' ? 'metric' : 'imperial';
 let lastDrivesMeta = null;
+let markerType  = localStorage.getItem('markerType')  || 'arrow';
+let markerColor = localStorage.getItem('markerColor') || '#ffffff';
+let model3ColoredUrl = null;
+let carColorPicker   = null;
+let markerColorDebounceTimer = null;
+
+function scheduleMarkerColorUpdate(color) {
+  clearTimeout(markerColorDebounceTimer);
+  markerColorDebounceTimer = setTimeout(() => applyMarkerColor(color), 250);
+}
 
 function distVal(mi, decimals = 1) {
   return (mi * UNIT_SYSTEM[unitSystem].dist.mult).toFixed(decimals);
@@ -267,6 +277,71 @@ function initFooter() {
 
     // Re-check for updates with new prerelease setting
     window.electronAPI.checkForUpdate();
+  });
+
+  // Vehicle marker type + color
+  const selMarkerType   = document.getElementById('sel-marker-type');
+  const vehicleColorRow = document.getElementById('vehicle-color-row');
+  const vehiclePreview  = document.getElementById('vehicle-preview-wrap');
+
+  const syncVehicleUI = () => {
+    const isModel3 = markerType === 'model3';
+    vehicleColorRow.classList.toggle('hidden', !isModel3);
+    vehiclePreview.classList.toggle('hidden', !isModel3);
+  };
+
+  selMarkerType.value = markerType;
+  syncVehicleUI();
+
+  // Lazy-init iro color wheel — only once
+  if (!carColorPicker) {
+    carColorPicker = new iro.ColorPicker('#car-color-picker', {
+      width: 160,
+      color: markerColor,
+      layout: [
+        { component: iro.ui.Wheel },
+        { component: iro.ui.Slider, options: { sliderType: 'value' } },
+      ],
+    });
+
+    const hexInput = document.getElementById('inp-car-hex');
+    hexInput.value = markerColor;
+
+    carColorPicker.on('color:change', (color) => {
+      hexInput.value = color.hexString;
+      scheduleMarkerColorUpdate(color.hexString);
+    });
+
+    hexInput.addEventListener('input', () => {
+      const val = hexInput.value;
+      if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+        carColorPicker.color.hexString = val;
+        scheduleMarkerColorUpdate(val);
+      }
+    });
+
+    document.getElementById('btn-car-color-close').addEventListener('click', () => {
+      document.getElementById('car-color-popup').classList.add('hidden');
+    });
+  }
+
+  const swatch = document.getElementById('btn-car-color-swatch');
+  swatch.style.background = markerColor;
+  swatch.addEventListener('click', () => {
+    const popup = document.getElementById('car-color-popup');
+    const rect  = swatch.getBoundingClientRect();
+    popup.style.top  = `${rect.bottom + 8}px`;
+    popup.style.left = `${Math.min(rect.left, window.innerWidth - 220)}px`;
+    popup.classList.toggle('hidden');
+  });
+
+  if (markerType === 'model3') applyMarkerColor(markerColor);
+
+  selMarkerType.addEventListener('change', () => {
+    markerType = selMarkerType.value;
+    localStorage.setItem('markerType', markerType);
+    syncVehicleUI();
+    if (markerType === 'model3') applyMarkerColor(markerColor);
   });
 
   // Hide other drives setting
@@ -2252,12 +2327,13 @@ function drawSelectedDrive(drive) {
   // earliest samples are often stationary parked GPS noise that gives a
   // meaningless bearing.
   const initBearing = computeInitBearing(drive.points, drive.gearStates);
+  const { w: mW, h: mH } = getMarkerSize();
   replayMarker = L.marker(latLngs[0], {
     icon: L.divIcon({
       className: '',
-      html: `<img id="replay-arrow" src="../../assets/arrow.png" style="width:128px;height:128px;transform:rotate(${initBearing}deg);transition:transform 60ms linear;filter:drop-shadow(0 0 4px rgba(0,0,0,0.5));" />`,
-      iconSize: [128, 128],
-      iconAnchor: [64, 64],
+      html: buildMarkerHtml(initBearing),
+      iconSize: [mW, mH],
+      iconAnchor: [mW / 2, mH / 2],
     }),
     zIndexOffset: 1000,
   }).addTo(map);
@@ -2453,6 +2529,106 @@ function calcBearing(lat1, lon1, lat2, lon2) {
   const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
             Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+// ─── Marker helpers ──────────────────────────────────────────────────────────
+
+const MARKER_SIZES = {
+  arrow:  { w: 128, h: 128 },
+  model3: { w: 56,  h: 90  },
+};
+
+function getMarkerSize() {
+  return MARKER_SIZES[markerType] ?? MARKER_SIZES.arrow;
+}
+
+function buildMarkerHtml(bearing) {
+  const shadow = 'filter:drop-shadow(0 0 4px rgba(0,0,0,0.5))';
+  const { w, h } = getMarkerSize();
+  if (markerType === 'model3' && model3ColoredUrl) {
+    return `<img id="replay-arrow" src="${model3ColoredUrl}" style="width:${w}px;height:${h}px;transform:rotate(${bearing}deg);transition:transform 60ms linear;${shadow};" />`;
+  }
+  return `<img id="replay-arrow" src="../../assets/map-ui/arrow.png" style="width:${w}px;height:${h}px;transform:rotate(${bearing}deg);transition:transform 60ms linear;${shadow};" />`;
+}
+
+function renderModel3Color(color) {
+  return new Promise((resolve) => {
+    const imgT = new Image();
+    const imgC = new Image();
+    let loaded = 0;
+
+    const onLoad = () => {
+      if (++loaded < 2) return;
+
+      const canvas = document.createElement('canvas');
+      canvas.width  = imgT.naturalWidth;
+      canvas.height = imgT.naturalHeight;
+      const ctx = canvas.getContext('2d');
+
+      // Base texture
+      ctx.drawImage(imgT, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = imageData.data;
+
+      // Color mask (scaled to base dimensions in case they differ)
+      const maskCanvas = document.createElement('canvas');
+      maskCanvas.width  = imgT.naturalWidth;
+      maskCanvas.height = imgT.naturalHeight;
+      const maskCtx = maskCanvas.getContext('2d');
+      maskCtx.drawImage(imgC, 0, 0, imgT.naturalWidth, imgT.naturalHeight);
+      const maskD = maskCtx.getImageData(0, 0, canvas.width, canvas.height).data;
+
+      const tr = parseInt(color.slice(1, 3), 16);
+      const tg = parseInt(color.slice(3, 5), 16);
+      const tb = parseInt(color.slice(5, 7), 16);
+
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 10) continue;
+        const maskLum = (maskD[i] * 0.299 + maskD[i + 1] * 0.587 + maskD[i + 2] * 0.114) / 255;
+        if (maskLum > 0.5) continue; // window / tire / trim — leave untouched
+        // _t has a black body: dark pixels → chosen color, bright specular → white.
+        // lerp(color, white, luminance) gives realistic shading on a dark base.
+        const baseLum = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255;
+        d[i]     = Math.round(tr + (255 - tr) * baseLum);
+        d[i + 1] = Math.round(tg + (255 - tg) * baseLum);
+        d[i + 2] = Math.round(tb + (255 - tb) * baseLum);
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      resolve(canvas.toDataURL());
+    };
+
+    imgT.onload = onLoad;
+    imgC.onload = onLoad;
+    imgT.src = '../../assets/map-ui/Model3_t.png';
+    imgC.src = '../../assets/map-ui/Model3_c.png';
+  });
+}
+
+async function applyMarkerColor(color) {
+  markerColor = color;
+  localStorage.setItem('markerColor', color);
+  model3ColoredUrl = await renderModel3Color(color);
+
+  // Keep swatch button in sync
+  const swatch = document.getElementById('btn-car-color-swatch');
+  if (swatch) swatch.style.background = color;
+
+  // Update preview canvas in settings
+  const previewCanvas = document.getElementById('vehicle-preview-canvas');
+  if (previewCanvas && model3ColoredUrl) {
+    const img = new Image();
+    img.onload = () => {
+      previewCanvas.width  = img.naturalWidth;
+      previewCanvas.height = img.naturalHeight;
+      previewCanvas.getContext('2d').drawImage(img, 0, 0);
+    };
+    img.src = model3ColoredUrl;
+  }
+
+  // Refresh live replay marker if one is on the map
+  const arrowEl = document.getElementById('replay-arrow');
+  if (arrowEl && markerType === 'model3') arrowEl.src = model3ColoredUrl;
 }
 
 function computeInitBearing(pts, gearStates) {

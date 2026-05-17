@@ -9,6 +9,7 @@
     style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com;
     font-src https://fonts.gstatic.com;
     img-src 'self' data: blob: https://unpkg.com https://*.basemaps.cartocdn.com https://*.openstreetmap.org https://*.google.com;
+    worker-src blob:;
     connect-src https://*.basemaps.cartocdn.com https://*.google.com https://unpkg.com;
   " />
   <title>Sentry Drive</title>
@@ -157,6 +158,24 @@
                 <button type="button" class="settings-segment-btn" data-value="imperial" role="radio">Imperial</button>
                 <button type="button" class="settings-segment-btn" data-value="metric" role="radio">Metric</button>
               </div>
+            </div>
+          </div>
+          <div class="settings-section" style="margin-top: 16px;">
+            <div class="settings-section-title">Map UI</div>
+            <div class="settings-divider"></div>
+            <div class="settings-row">
+              <span class="settings-row-label">Replay Marker</span>
+              <select id="sel-marker-type" class="settings-select">
+                <option value="arrow">Arrow</option>
+                <option value="model3">Model 3</option>
+              </select>
+            </div>
+            <div id="vehicle-color-row" class="settings-row hidden">
+              <span class="settings-row-label">Color</span>
+              <button id="btn-car-color-swatch" class="car-color-swatch"></button>
+            </div>
+            <div id="vehicle-preview-wrap" class="hidden">
+              <canvas id="vehicle-preview-canvas" class="vehicle-preview-canvas"></canvas>
             </div>
           </div>
           <div class="settings-section" style="margin-top: 16px;">
@@ -427,7 +446,21 @@
 
   </div>
 
+  <!-- ── Car Color Picker Popup ────────────────────────────────────────── -->
+  <div id="car-color-popup" class="hidden">
+    <div class="car-color-popup-header">
+      <span class="car-color-popup-title">Car Color</span>
+      <button id="btn-car-color-close" class="car-color-popup-close">&times;</button>
+    </div>
+    <div id="car-color-picker"></div>
+    <div class="car-color-hex-row">
+      <span class="settings-row-label">Hex</span>
+      <input type="text" id="inp-car-hex" class="settings-hex-input" maxlength="7" spellcheck="false" placeholder="#ffffff" />
+    </div>
+  </div>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@jaames/iro@5/dist/iro.min.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

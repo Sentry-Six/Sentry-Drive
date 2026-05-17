@@ -1,6 +1,6 @@
 {
   "name": "sentry-drive",
-  "version": "1.1.0-beta.3",
+  "version": "1.1.2",
   "type": "module",
   "description": "Standalone Tesla dashcam drives processor - replicates Sentry USB drives processing",
   "main": "src/main/electron-main.cjs",
@@ -28,13 +28,13 @@
     "artifactName": "Sentry-Drive-Setup-${version}.${ext}",
     "win": {
       "target": "nsis",
-      "icon": "assets/sentrydrive.ico"
+      "icon": "assets/app-icon/sentrydrive.ico"
     },
     "mac": {
       "target": [{ "target": "dmg", "arch": ["x64", "arm64"] }],
       "category": "public.app-category.utilities",
       "artifactName": "Sentry-Drive-${version}-${arch}.${ext}",
-      "icon": "assets/sentrydrive.icns"
+      "icon": "assets/app-icon/sentrydrive.icns"
     },
     "nsis": {
       "oneClick": false,

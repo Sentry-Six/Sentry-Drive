@@ -1701,6 +1701,103 @@ html, body {
   color: #fff;
 }
 
+/* ── Vehicle Settings ──────────────────────────────────────────────────── */
+.settings-select {
+  background: var(--input-bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.settings-select:focus { outline: none; border-color: var(--blue); }
+
+.car-color-swatch {
+  width: 36px;
+  height: 22px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+.car-color-swatch:hover { border-color: var(--text-muted); }
+
+#car-color-popup {
+  position: fixed;
+  z-index: 9100;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.car-color-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.car-color-popup-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.car-color-popup-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.car-color-popup-close:hover { color: var(--text); }
+
+.car-color-hex-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-hex-input {
+  width: 80px;
+  background: var(--input-bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  padding: 4px 8px;
+  text-align: center;
+}
+.settings-hex-input:focus { outline: none; border-color: var(--blue); }
+
+#vehicle-preview-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 110px;
+  overflow: hidden;
+}
+
+.vehicle-preview-canvas {
+  display: block;
+  width: 110px;
+  height: 176px;
+  border-radius: var(--radius-sm);
+  transform: rotate(90deg);
+}
+
 /* ── Changelog Modal ───────────────────────────────────────────────────── */
 #changelog-overlay {
   position: fixed;

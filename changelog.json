@@ -1,6 +1,25 @@
 {
   "versions": [
     {
+      "version": "1.1.2",
+      "date": "2026-05-17",
+      "title": "Custom Markers, Tessie Import & Analytics Polish",
+      "changes": [
+        { "type": "feature", "description": "Delete drives — remove any drive from your drive list directly from the app." },
+        { "type": "feature", "description": "Revert to stable — if you're on a beta build, you can roll back to the last stable release from Settings." },
+        { "type": "feature", "description": "Tessie API import — enter your Tessie access token, select your vehicle, set a date range, preview the import count, and confirm to pull drives directly from the Tessie API." },
+        { "type": "feature", "description": "Tessie CSV import — alternatively, import drives from a Tessie CSV export (drives + driving states files)." },
+        { "type": "feature", "description": "Choose your replay marker in Settings — pick between the classic Arrow or a Model 3 top-down view." },
+        { "type": "feature", "description": "Added ability to change map replay marker from arrow to car (only legacy Model 3 at the moment)." },
+        { "type": "improvement", "description": "FSD analytics donut chart center now shows a rating label (Great / Good / Okay / Bad) based on FSD usage, with the percentage shown below it." },
+        { "type": "improvement", "description": "Time with FSD is now shown in the drive analytics legend." },
+        { "type": "improvement", "description": "Aggregate analytics now include average disengagements and average accelerator overrides per drive." },
+        { "type": "improvement", "description": "Map-related settings grouped under a new \"Map UI\" section in Settings." },
+        { "type": "improvement", "description": "Replay marker setting renamed from \"Marker\" to \"Replay Marker\" for clarity." },
+        { "type": "fix", "description": "Scrubbing the timeline now snaps the direction arrow immediately instead of animating from its previous position." }
+      ]
+    },
+    {
       "version": "1.1.2-beta.2",
       "date": "2026-04-25",
       "title": "Tessie Import & Analytics Polish",
