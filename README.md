@@ -4,7 +4,7 @@ Sentry Drive is a desktop app for visualizing and analyzing your drive history. 
 <img width="1920" height="1005" alt="image" src="https://github.com/user-attachments/assets/cd95c638-fe3e-4ca4-9a6d-4d3940000eb0" />
 
 ## How It Works
-Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam files! By reading that data, we extract and process that data so that your drives are overlayed on top of a map. The data shares information such as GPS data, self-driving state, speed, pedal presses, and more.
+Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam files! By reading that data, we extract and process that data so that your drives are overlayed on top of a map. The data shares information such as GPS data, self-driving state, speed, pedal presses, and more. All data is handled locally and is not uploaded at any point.
 
 ## Features
 - **Visualize your Recent Drives**
@@ -18,6 +18,8 @@ Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam file
 <br> Add tags to your drives for your organization.
 - **Drive Timelines**
 <br> Observe each drive in detail at your own pace - up to 10x speed.
+- **Tessie Import**
+<br> Import your drives from Tessie for a more extensive drive history using the Tessie API!
 
 ### Sentry USB-Compatible
 Running Sentry USB? You can import your drive data! Simply locate your drives-data.json and load it! If it's in your TeslaCam folder, it'll automatically locate and load it for you.
