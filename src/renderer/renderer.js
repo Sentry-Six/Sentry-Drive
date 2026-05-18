@@ -398,6 +398,7 @@ function initFooter() {
 const CHANGELOG_TYPE_ICONS = { feature: '✦', improvement: '↑', fix: '✓', note: '•' };
 const CHANGELOG_TYPE_LABELS = { feature: 'Feature', improvement: 'Improvement', fix: 'Fix', note: 'Note' };
 let changelogVersions = [];
+let pendingChangelogShow = null;
 
 async function initChangelogModal() {
   const overlay = document.getElementById('changelog-overlay');
@@ -458,7 +459,7 @@ async function initChangelogModal() {
 
   titleEl.textContent = 'What’s New';
   contentEl.innerHTML = renderChangelogEntry(entry);
-  overlay.classList.remove('hidden');
+  pendingChangelogShow = () => overlay.classList.remove('hidden');
 }
 
 function renderInline(s) {
@@ -699,6 +700,8 @@ async function loadDefaultPaths() {
       }
     }
   }
+  pendingChangelogShow?.();
+  pendingChangelogShow = null;
 }
 
 async function autoLoadDriveData(filePath) {
@@ -2055,12 +2058,7 @@ function selectDrive(drive) {
     } else if (hideOtherDrives) {
       map.removeLayer(layer);
     } else if (layer.setStyle) {
-      const isTessie = layer._source === 'tessie';
-      layer.setStyle({
-        color: isTessie ? '#7c3aed' : '#555566',
-        opacity: isTessie ? 0.7 : 1,
-        dashArray: isTessie ? '6 4' : null,
-      });
+      layer.setStyle({ color: '#555566', opacity: 1, dashArray: null });
     }
   }
 
@@ -2088,12 +2086,7 @@ function applyOtherDrivesVisibility() {
     } else {
       if (!map.hasLayer(layer)) layer.addTo(map);
       if (layer.setStyle) {
-        const isTessie = layer._source === 'tessie';
-        layer.setStyle({
-          color: isTessie ? '#7c3aed' : '#555566',
-          opacity: isTessie ? 0.7 : 1,
-          dashArray: isTessie ? '6 4' : null,
-        });
+        layer.setStyle({ color: '#555566', opacity: 1, dashArray: null });
       }
     }
   }
