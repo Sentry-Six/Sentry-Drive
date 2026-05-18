@@ -2037,12 +2037,28 @@ function showListTagSuggestions(drive, item, query) {
   });
 }
 
+// Drop the lazy-loaded heavy fields from a drive so renderer memory doesn't
+// grow unboundedly as the user clicks through many drives. The full detail
+// stays cached in the main process and is refetched on next selection.
+function freeDriveDetail(driveId) {
+  if (driveId == null) return;
+  const d = drives.find((x) => x.id === driveId);
+  if (!d) return;
+  delete d.points;
+  delete d.fsdStates;
+  delete d.gearStates;
+  delete d.fsdEvents;
+}
+
 async function selectDrive(drive) {
   // Toggle: clicking the same drive deselects it
   if (selectedDriveId === drive.id) {
     deselectDrive();
     return;
   }
+
+  // Free the previously selected drive's heavy fields before swapping.
+  freeDriveDetail(selectedDriveId);
 
   document.querySelectorAll('.drive-item').forEach((el) => el.classList.remove('selected'));
   const selectedEl = document.querySelector(`[data-drive-id="${drive.id}"]`);
@@ -2065,7 +2081,12 @@ async function selectDrive(drive) {
 
   document.getElementById('btn-back-overview').classList.remove('hidden');
   if (!drive.points) {
+    const requestedId = drive.id;
     const detail = await window.electronAPI.getDriveDetail(drive.id);
+    // Discard if the user navigated away while we were waiting on IPC —
+    // otherwise we'd reattach heavy fields to a drive that's no longer selected
+    // (and render a stale polyline on top of the current one).
+    if (selectedDriveId !== requestedId) return;
     if (detail.success) {
       drive.points = detail.points;
       drive.fsdStates = detail.fsdStates;
@@ -2104,6 +2125,7 @@ function applyOtherDrivesVisibility() {
 
 function deselectDrive() {
   cleanupReplay();
+  freeDriveDetail(selectedDriveId);
   selectedDriveId = null;
   document.querySelectorAll('.drive-item').forEach((el) => el.classList.remove('selected'));
   clearLayers(selectedLayers);
