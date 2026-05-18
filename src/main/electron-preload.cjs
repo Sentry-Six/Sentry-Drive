@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkDriveData: (dir) => ipcRenderer.invoke('check-drive-data', dir),
   getCpuCount: () => ipcRenderer.invoke('get-cpu-count'),
   loadAndGroupDrives: (fp) => ipcRenderer.invoke('load-and-group-drives', fp),
+  getDriveDetail: (driveId) => ipcRenderer.invoke('get-drive-detail', driveId),
   repairGPS: (args) => ipcRenderer.invoke('repair-gps', args),
   checkOnline: () => ipcRenderer.invoke('check-online'),
   revertGPS: (fp) => ipcRenderer.invoke('revert-gps', fp),

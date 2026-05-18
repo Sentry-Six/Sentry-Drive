@@ -325,9 +325,11 @@ function buildDriveStats(clips, idx) {
 
   // Remove null-island points, then apply group-level outlier filtering —
   // matches Sentry-USB-Rusty's collect→filter→compute approach.
-  for (let i = allPoints.length - 1; i >= 0; i--) {
-    if (Math.abs(allPoints[i].lat) < 1 && Math.abs(allPoints[i].lng) < 1) allPoints.splice(i, 1);
+  let w = 0;
+  for (let i = 0; i < allPoints.length; i++) {
+    if (Math.abs(allPoints[i].lat) >= 1 || Math.abs(allPoints[i].lng) >= 1) allPoints[w++] = allPoints[i];
   }
+  allPoints.length = w;
   filterGPSOutliers(allPoints);
 
   // Compute distance and speeds
@@ -566,13 +568,13 @@ function filterGPSOutliers(points) {
   medLat /= count;
   medLng /= count;
 
-  // Step 2: Remove any point that is >50 km from the median cluster.
+  // Step 2: Remove any point that is >1,000 km from the median cluster.
   const MAX_FROM_MEDIAN_M = 1000000; // 1,000 km
-  for (let i = points.length - 1; i >= 0; i--) {
-    if (haversineM(points[i].lat, points[i].lng, medLat, medLng) > MAX_FROM_MEDIAN_M) {
-      points.splice(i, 1);
-    }
+  let mw = 0;
+  for (let i = 0; i < points.length; i++) {
+    if (haversineM(points[i].lat, points[i].lng, medLat, medLng) <= MAX_FROM_MEDIAN_M) points[mw++] = points[i];
   }
+  points.length = mw;
 
   // Step 3: Remove isolated outliers far from both neighbors.
   const MAX_JUMP_M = 5000; // 5 km — impossible between consecutive ~1s samples

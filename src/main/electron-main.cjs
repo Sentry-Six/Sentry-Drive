@@ -8,6 +8,19 @@ const fs = require('fs');
 
 let mainWindow;
 let activeChild = null;
+let driveDetailCache = null;
+
+function downsampleForIPC(pts, maxPts) {
+  if (!pts || pts.length === 0) return [];
+  if (pts.length <= maxPts) return pts.map((p) => [p[0], p[1]]);
+  const result = [];
+  const step = (pts.length - 1) / (maxPts - 1);
+  for (let i = 0; i < maxPts; i++) {
+    const p = pts[Math.round(i * step)];
+    result.push([p[0], p[1]]);
+  }
+  return result;
+}
 
 // ─── Window State Persistence ────────────────────────────────────────────────
 const WINDOW_STATE_FILE = () => path.join(app.getPath('userData'), 'window-state.json');
@@ -266,18 +279,27 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
       d.tags = driveTags[d.startTime] ?? [];
     }
 
-    // Extract lightweight route points for overview map (one polyline per clip)
-    const overviewRoutes = [];
-    for (const r of (data.routes ?? [])) {
-      if (r.points && r.points.length > 1) {
-        overviewRoutes.push(r.points);
-      }
+    // Cache full drive detail in the main process; strip large point arrays from
+    // the IPC payload so we don't serialize millions of GPS coordinates over the
+    // context bridge (the main cause of the V8 heap OOM on large files).
+    driveDetailCache = new Map();
+    for (const d of drives) {
+      driveDetailCache.set(d.id, {
+        points: d.points,
+        fsdStates: d.fsdStates,
+        gearStates: d.gearStates,
+        fsdEvents: d.fsdEvents,
+      });
+      d.overviewPoints = downsampleForIPC(d.points, 200);
+      delete d.points;
+      delete d.fsdStates;
+      delete d.gearStates;
+      delete d.fsdEvents;
     }
 
     return {
       success: true,
       drives,
-      overviewRoutes,
       driveTags,
       totalRoutes: (data.routes ?? []).length,
       processedFileCount: (data.processedFiles ?? []).length,
@@ -290,6 +312,13 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
   } catch (err) {
     return { success: false, error: err.message };
   }
+});
+
+ipcMain.handle('get-drive-detail', (_e, driveId) => {
+  if (!driveDetailCache) return { success: false, error: 'No drives loaded' };
+  const detail = driveDetailCache.get(driveId);
+  if (!detail) return { success: false, error: 'Drive not found' };
+  return { success: true, ...detail };
 });
 
 ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount, reprocessAll }) => {

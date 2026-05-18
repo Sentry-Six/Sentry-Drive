@@ -2036,7 +2036,7 @@ function showListTagSuggestions(drive, item, query) {
   });
 }
 
-function selectDrive(drive) {
+async function selectDrive(drive) {
   // Toggle: clicking the same drive deselects it
   if (selectedDriveId === drive.id) {
     deselectDrive();
@@ -2063,6 +2063,15 @@ function selectDrive(drive) {
   }
 
   document.getElementById('btn-back-overview').classList.remove('hidden');
+  if (!drive.points) {
+    const detail = await window.electronAPI.getDriveDetail(drive.id);
+    if (detail.success) {
+      drive.points = detail.points;
+      drive.fsdStates = detail.fsdStates;
+      drive.gearStates = detail.gearStates;
+      drive.fsdEvents = detail.fsdEvents;
+    }
+  }
   drawSelectedDrive(drive);
   renderSelectedDriveStats(drive);
 }
@@ -2120,9 +2129,9 @@ function deselectDrive() {
   // Fit map to all drives
   const allLatLngs = [];
   for (const drive of drives) {
-    if (!drive.points || drive.points.length < 2) continue;
-    allLatLngs.push([drive.points[0][0], drive.points[0][1]]);
-    allLatLngs.push([drive.points[drive.points.length - 1][0], drive.points[drive.points.length - 1][1]]);
+    if (!drive.overviewPoints || drive.overviewPoints.length < 2) continue;
+    allLatLngs.push(drive.overviewPoints[0]);
+    allLatLngs.push(drive.overviewPoints[drive.overviewPoints.length - 1]);
   }
   if (allLatLngs.length > 0) {
     map.fitBounds(L.latLngBounds(allLatLngs), { padding: [30, 30] });
@@ -2149,8 +2158,8 @@ function renderOverviewOnMap() {
   // without having to rely on color alone (accessibility).
   let anyTessie = false;
   for (const drive of drives) {
-    if (!drive.points || drive.points.length < 2) continue;
-    const lls = downsample(drive.points, 500).map((p) => [p[0], p[1]]);
+    if (!drive.overviewPoints || drive.overviewPoints.length < 2) continue;
+    const lls = drive.overviewPoints;
     allLatLngs.push(...lls);
 
     const isTessie = drive.source === 'tessie';
