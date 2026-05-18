@@ -323,6 +323,13 @@ function buildDriveStats(clips, idx) {
     }
   }
 
+  // Remove null-island points, then apply group-level outlier filtering —
+  // matches Sentry-USB-Rusty's collect→filter→compute approach.
+  for (let i = allPoints.length - 1; i >= 0; i--) {
+    if (Math.abs(allPoints[i].lat) < 1 && Math.abs(allPoints[i].lng) < 1) allPoints.splice(i, 1);
+  }
+  filterGPSOutliers(allPoints);
+
   // Compute distance and speeds
   let totalDistanceM = 0;
   let maxSpeedMps = 0;
@@ -331,20 +338,19 @@ function buildDriveStats(clips, idx) {
   const hasSEISpeeds = allPoints.some((p) => p.seiSpeed > 0);
 
   for (let i = 1; i < allPoints.length; i++) {
-    const d = haversineM(
-      allPoints[i - 1].lat, allPoints[i - 1].lng,
-      allPoints[i].lat, allPoints[i].lng
-    );
+    const p0 = allPoints[i - 1];
+    const p1 = allPoints[i];
+    const d = haversineM(p0.lat, p0.lng, p1.lat, p1.lng);
+    const dt = (p1.timeMs - p0.timeMs) / 1000.0;
     totalDistanceM += d;
 
     if (hasSEISpeeds) {
-      const speed = allPoints[i].seiSpeed;
+      const speed = p1.seiSpeed;
       if (speed >= 0 && speed < 100) {
         speedSamples.push(speed);
         if (speed > maxSpeedMps) maxSpeedMps = speed;
       }
     } else {
-      const dt = (allPoints[i].timeMs - allPoints[i - 1].timeMs) / 1000.0;
       if (dt > 0) {
         const speed = d / dt;
         if (speed < 70) {
