@@ -5,10 +5,119 @@ const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const { chain } = require('stream-chain');
+const parser = require('stream-json/parser.js');
+const Assembler = require('stream-json/assembler.js');
+
+// Give V8 more old-space headroom so the main process can parse large
+// drive-data.json files (hundreds of MB to ~1GB). Must be set before
+// app.whenReady(). The renderer inherits the same flag.
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=8192');
 
 let mainWindow;
 let activeChild = null;
 let driveDetailCache = null;
+
+// ─── Streaming drive-data.json reader ───────────────────────────────────────
+// JSON.parse on a 900MB+ file OOMs the main process: it requires the source
+// JS string (V8 caps strings at ~1GB) plus the parsed tree (~3-5x the source
+// size) in heap simultaneously. This streams the file once, capturing each
+// top-level field with the minimum memory needed:
+//
+//   • routes      — built one element at a time with a sub-Assembler
+//   • driveTags   — assembled in full (usually small)
+//   • processedFiles — counted only; the actual file paths aren't needed
+//                     downstream, just the count for the UI footer
+//
+// Three-pass parsing (one stream per field) works but takes 3x longer because
+// each pass re-tokenizes the whole file. Single-pass parses the 939MB user
+// file in ~80s vs ~360s for three passes.
+
+function readDriveDataStreaming(filePath, onProgress) {
+  return new Promise((resolve, reject) => {
+    let processedFileCount = 0;
+    const routes = [];
+    let driveTags = {};
+
+    // depth: 1 = inside top-level object; 2 = inside a top-level field's
+    // value (array or object); 3 = inside a route element.
+    let depth = 0;
+    let currentTopKey = null;
+    let asm = null;             // sub-assembler for current route or driveTags
+    let asmExitDepth = -1;      // depth at which asm completes
+
+    // Track raw bytes read so we can drive a progress bar in the renderer.
+    // Throttled to ~10 updates/sec to keep IPC traffic reasonable.
+    const totalBytes = onProgress ? fs.statSync(filePath).size : 0;
+    let bytesRead = 0;
+    let lastEmit = 0;
+
+    const readStream = fs.createReadStream(filePath);
+    if (onProgress) {
+      readStream.on('data', (chunk) => {
+        bytesRead += chunk.length;
+        const now = Date.now();
+        if (now - lastEmit >= 100) {
+          lastEmit = now;
+          onProgress(bytesRead, totalBytes);
+        }
+      });
+    }
+
+    const pipeline = chain([
+      readStream,
+      parser({ packKeys: true, packStrings: true, packNumbers: true }),
+    ]);
+
+    pipeline.on('data', (token) => {
+      const name = token.name;
+
+      if (asm) {
+        asm.consume(token);
+        if (name === 'startObject' || name === 'startArray') depth++;
+        else if (name === 'endObject' || name === 'endArray') {
+          depth--;
+          if (depth === asmExitDepth) {
+            if (currentTopKey === 'routes') routes.push(asm.current);
+            else if (currentTopKey === 'driveTags') driveTags = asm.current;
+            asm = null;
+          }
+        }
+        return;
+      }
+
+      if (name === 'startObject' || name === 'startArray') {
+        const before = depth;
+        depth++;
+        // Start assembling a route element (object at depth 3, inside routes array).
+        if (before === 2 && name === 'startObject' && currentTopKey === 'routes') {
+          asm = new Assembler();
+          asmExitDepth = before;
+          asm.consume(token);
+        }
+        // Start assembling the driveTags object (object at depth 2, value of driveTags key).
+        else if (before === 1 && name === 'startObject' && currentTopKey === 'driveTags') {
+          asm = new Assembler();
+          asmExitDepth = before;
+          asm.consume(token);
+        }
+      } else if (name === 'endObject' || name === 'endArray') {
+        depth--;
+        if (depth === 1) currentTopKey = null;
+      } else if (name === 'keyValue' && depth === 1) {
+        currentTopKey = token.value;
+      } else if (name === 'stringValue' && depth === 2 && currentTopKey === 'processedFiles') {
+        processedFileCount++;
+      }
+    });
+
+    pipeline.on('end', () => {
+      if (onProgress && totalBytes > 0) onProgress(totalBytes, totalBytes);
+      resolve({ processedFileCount, routes, driveTags });
+    });
+    pipeline.on('error', reject);
+  });
+}
 
 function downsampleForIPC(pts, maxPts) {
   if (!pts || pts.length === 0) return [];
@@ -228,21 +337,27 @@ ipcMain.handle('get-changelog', () => {
 
 ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
   try {
-    // Inline the read so V8 can release the JSON string buffer (~200MB for large
-    // files) as soon as parse completes — keeping both in scope simultaneously
-    // was a meaningful contributor to peak heap on the OOM crash.
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    // Extract everything we need from data up-front so we can null out
-    // data.routes (the largest array) right after grouping completes.
-    const totalRoutes = (data.routes ?? []).length;
-    const processedFileCount = (data.processedFiles ?? []).length;
-    const driveTags = data.driveTags ?? {};
+    const sendProgress = (phase, current, total) => {
+      mainWindow?.webContents.send('load-progress', { phase, current, total });
+    };
 
+    // Stream-parse the file in a single pass — JSON.parse on a 900MB+ file
+    // OOMs the main process even with --max-old-space-size=8192 because peak
+    // memory (source string + parsed tree) hits 3-5x the file size.
+    const parsed = await readDriveDataStreaming(filePath, (current, total) => {
+      sendProgress('reading', current, total);
+    });
+    const totalRoutes = parsed.routes.length;
+    const processedFileCount = parsed.processedFileCount;
+    const driveTags = parsed.driveTags ?? {};
+
+    sendProgress('grouping', 0, 0);
     const { groupIntoDrives } = await import('../processing/grouper.js');
-    const { drives: groupedDrives, timeGroupCount, routeCount, droppedCount } = groupIntoDrives(data.routes ?? []);
-    // groupedDrives owns fresh point arrays and does not reference the input,
-    // so we can release the raw clip array now.
-    data.routes = null;
+    const { drives: groupedDrives, timeGroupCount, routeCount, droppedCount } = groupIntoDrives(parsed.routes);
+    // groupedDrives owns fresh point arrays and doesn't reference the input,
+    // so release the raw clip array now to free hundreds of MB.
+    parsed.routes = null;
+    sendProgress('preparing', 0, 0);
 
     // SEI always wins: any imported (Tessie) drive whose time window overlaps
     // a real dashcam drive is hidden at load time. The Tessie clips remain in

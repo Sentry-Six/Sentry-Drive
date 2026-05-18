@@ -602,12 +602,55 @@ function onUpdateStatus({ status, version, percent, message }) {
 }
 
 // ─── Loading Overlay ─────────────────────────────────────────────────────────
-function showLoading(msg = 'Loading drive data...') {
-  document.getElementById('loading-overlay').querySelector('.loading-text').textContent = msg;
-  document.getElementById('loading-overlay').classList.remove('hidden');
+let loadProgressUnsubscribe = null;
+
+function formatMB(bytes) {
+  return (bytes / (1024 * 1024)).toFixed(0) + ' MB';
 }
+
+function showLoading(msg = 'Loading drive data...') {
+  const overlay = document.getElementById('loading-overlay');
+  overlay.querySelector('.loading-text').textContent = msg;
+  overlay.classList.remove('hidden');
+
+  // Reset and arm the progress bar. It stays hidden until the first
+  // load-progress event arrives (avoids flashing an empty bar for actions
+  // that don't emit progress, like tag edits that re-render but don't load).
+  const progressEl = document.getElementById('load-progress');
+  const barEl = document.getElementById('load-bar');
+  const detailEl = document.getElementById('load-detail');
+  if (progressEl) {
+    progressEl.classList.add('hidden');
+    if (barEl) barEl.style.width = '0%';
+    if (detailEl) detailEl.textContent = '';
+  }
+
+  // Subscribe to load progress; auto-unsubscribed in hideLoading.
+  if (loadProgressUnsubscribe) { loadProgressUnsubscribe(); loadProgressUnsubscribe = null; }
+  loadProgressUnsubscribe = window.electronAPI.onLoadProgress?.(({ phase, current, total }) => {
+    if (progressEl?.classList.contains('hidden')) progressEl.classList.remove('hidden');
+    if (phase === 'reading') {
+      // Map bytes 0..total to bar width 0..90% so grouping/preparing have
+      // visible headroom for the final push.
+      const frac = total > 0 ? current / total : 0;
+      if (barEl) barEl.style.width = (frac * 90).toFixed(1) + '%';
+      overlay.querySelector('.loading-text').textContent = 'Reading drive data…';
+      if (detailEl) detailEl.textContent = `${formatMB(current)} / ${formatMB(total)}`;
+    } else if (phase === 'grouping') {
+      if (barEl) barEl.style.width = '95%';
+      overlay.querySelector('.loading-text').textContent = 'Grouping drives…';
+      if (detailEl) detailEl.textContent = '';
+    } else if (phase === 'preparing') {
+      if (barEl) barEl.style.width = '99%';
+      overlay.querySelector('.loading-text').textContent = 'Preparing display…';
+      if (detailEl) detailEl.textContent = '';
+    }
+  });
+}
+
 function hideLoading() {
   document.getElementById('loading-overlay').classList.add('hidden');
+  if (loadProgressUnsubscribe) { loadProgressUnsubscribe(); loadProgressUnsubscribe = null; }
 }
 
 // ─── Processing Tab ───────────────────────────────────────────────────────────

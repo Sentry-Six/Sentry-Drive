@@ -1,6 +1,15 @@
 {
   "versions": [
     {
+      "version": "1.1.6",
+      "date": "2026-05-18",
+      "title": "Large File Support",
+      "changes": [
+        { "type": "improvement", "description": "Sentry Drive can now open drive-data.json files in the hundreds-of-MB to ~1GB range without crashing. The file is read incrementally with a streaming JSON parser instead of being loaded into memory all at once, and the main process is given more heap headroom — files that previously triggered an out-of-memory crash on load should now open successfully." },
+        { "type": "improvement", "description": "The loading screen now shows a progress bar with MB read / total so large files don't look like the app is frozen." }
+      ]
+    },
+    {
       "version": "1.1.5",
       "date": "2026-05-18",
       "title": "Memory Leak Fix",

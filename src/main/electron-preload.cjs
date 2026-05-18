@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCpuCount: () => ipcRenderer.invoke('get-cpu-count'),
   loadAndGroupDrives: (fp) => ipcRenderer.invoke('load-and-group-drives', fp),
   getDriveDetail: (driveId) => ipcRenderer.invoke('get-drive-detail', driveId),
+  onLoadProgress: (cb) => {
+    const listener = (_ev, data) => cb(data);
+    ipcRenderer.on('load-progress', listener);
+    return () => ipcRenderer.off('load-progress', listener);
+  },
   repairGPS: (args) => ipcRenderer.invoke('repair-gps', args),
   checkOnline: () => ipcRenderer.invoke('check-online'),
   revertGPS: (fp) => ipcRenderer.invoke('revert-gps', fp),
