@@ -1370,6 +1370,7 @@ async function repairGPS() {
   const pctEl = document.getElementById('repair-pct');
   const barEl = document.getElementById('repair-bar');
 
+  let removeProgressListener = null;
   try {
     // Check connectivity for road-snapped bridging
     const isOnline = await window.electronAPI.checkOnline();
@@ -1392,7 +1393,7 @@ async function repairGPS() {
     barEl.style.width = '0%';
 
     const etaEl = document.getElementById('repair-eta');
-    const removeProgressListener = window.electronAPI.onRepairProgress(({ phase, current, total, etaSec }) => {
+    removeProgressListener = window.electronAPI.onRepairProgress(({ phase, current, total, etaSec }) => {
       phaseEl.textContent = phase;
       if (total > 0) {
         const pct = Math.round((current / total) * 100);
@@ -1411,7 +1412,6 @@ async function repairGPS() {
     btn.textContent = useRouting ? 'Routing…' : 'Checking…';
 
     const result = await window.electronAPI.repairGPS({ filePath: loadedFilePath, useRouting });
-    removeProgressListener();
 
     if (!result.success) {
       alert(`Failed to repair GPS data:\n${result.error}`);
@@ -1439,6 +1439,7 @@ async function repairGPS() {
     }
     hideLoading();
   } finally {
+    if (removeProgressListener) removeProgressListener();
     btn.textContent = 'Check Drives';
     btn.disabled = false;
     progressEl.classList.add('hidden');

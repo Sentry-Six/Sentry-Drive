@@ -228,10 +228,21 @@ ipcMain.handle('get-changelog', () => {
 
 ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const data = JSON.parse(raw);
+    // Inline the read so V8 can release the JSON string buffer (~200MB for large
+    // files) as soon as parse completes — keeping both in scope simultaneously
+    // was a meaningful contributor to peak heap on the OOM crash.
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    // Extract everything we need from data up-front so we can null out
+    // data.routes (the largest array) right after grouping completes.
+    const totalRoutes = (data.routes ?? []).length;
+    const processedFileCount = (data.processedFiles ?? []).length;
+    const driveTags = data.driveTags ?? {};
+
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives: groupedDrives, timeGroupCount, routeCount, droppedCount } = groupIntoDrives(data.routes ?? []);
+    // groupedDrives owns fresh point arrays and does not reference the input,
+    // so we can release the raw clip array now.
+    data.routes = null;
 
     // SEI always wins: any imported (Tessie) drive whose time window overlaps
     // a real dashcam drive is hidden at load time. The Tessie clips remain in
@@ -274,7 +285,6 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
     }
 
     // Attach tags to drives
-    const driveTags = data.driveTags ?? {};
     for (const d of drives) {
       d.tags = driveTags[d.startTime] ?? [];
     }
@@ -301,8 +311,8 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
       success: true,
       drives,
       driveTags,
-      totalRoutes: (data.routes ?? []).length,
-      processedFileCount: (data.processedFiles ?? []).length,
+      totalRoutes,
+      processedFileCount,
       timeGroupCount,
       routeCount,
       droppedCount,
