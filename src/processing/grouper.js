@@ -55,6 +55,21 @@ function parseFileTimestamp(filePath) {
 // mirrors Sentry-USB-Rusty/crates/drives.
 
 /**
+ * True when a route lives under a top-level SavedClips/ or SentryClips/ event
+ * folder. Mirrors Sentry-USB-Rusty `is_event_folder_path` (grouper.rs:322):
+ * these are parked sentry/event recordings (and path-duplicates of RecentClips
+ * data) that must not be counted as drives. Native scans already skip them
+ * (process.js:91); this is the grouper-level safety net for a loaded or
+ * imported drive-data.json that may still contain them. Only a top-level
+ * segment counts — "MySavedClips/…" and "foo/SavedClips/…" are NOT events.
+ */
+export function isEventFolderPath(file) {
+  if (!file) return false;
+  const norm = String(file).replace(/\\/g, "/");
+  return norm.startsWith("SavedClips/") || norm.startsWith("SentryClips/");
+}
+
+/**
  * Group routes into logical drives based on time gaps and gear state.
  */
 export function groupIntoDrives(routes) {
@@ -63,6 +78,11 @@ export function groupIntoDrives(routes) {
   const seen = new Set();
   const unique = [];
   for (const r of routes) {
+    // Drop SavedClips/SentryClips event-folder routes before dedup — parity
+    // with Rust group_clips (grouper.rs:334). They duplicate RecentClips data
+    // under a path dedup-by-path can't catch and would otherwise surface parked
+    // recordings as spurious drives.
+    if (isEventFolderPath(r.file)) continue;
     const norm = r.file.replace(/\\/g, "/");
     if (!seen.has(norm)) {
       seen.add(norm);
