@@ -17,15 +17,15 @@
 // lines between the breadcrumbs Tessie gives us look less pretty but match
 // reality much more closely.
 
-function toRad(d) { return (d * Math.PI) / 180; }
-function haversineM(lat1, lon1, lat2, lon2) {
-  const R = 6371000;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
+// Drive-math constants and haversine come from the shared single-source module.
+const {
+  haversineM,
+  MPH_TO_MPS,
+  GEAR_PARK,
+  GEAR_DRIVE,
+  GEAR_REVERSE,
+  GEAR_NEUTRAL,
+} = require('../shared/drive-calc.cjs');
 
 // ─── CSV parser (RFC 4180 subset, handles quoted fields with commas) ─────────
 
@@ -207,7 +207,7 @@ function parseDrivingStatesCSV(text) {
 
 // ─── Joining drives ↔ points ─────────────────────────────────────────────────
 
-const GEAR_MAP = { P: 0, D: 1, R: 2, N: 3 };
+const GEAR_MAP = { P: GEAR_PARK, D: GEAR_DRIVE, R: GEAR_REVERSE, N: GEAR_NEUTRAL };
 
 /**
  * Tessie's drives CSV header names a timezone (e.g. "EDT") that reflects the
@@ -449,7 +449,7 @@ function buildClipsForDrive(originalDrive, statesIndex) {
     lat: r.lat,
     lng: r.lng,
     timeMs: r.timeMs,
-    speedMps: (r.speedMph || 0) * 0.44704,
+    speedMps: (r.speedMph || 0) * MPH_TO_MPS,
     gear: GEAR_MAP[r.shift] ?? 1,
   }));
 
@@ -521,7 +521,7 @@ function buildClipsForApiDrive(apiDrive) {
       // Tessie's /path gives Unix seconds. Normalize to ms.
       timeMs: p.timestamp > 1e12 ? p.timestamp : p.timestamp * 1000,
       // speed is mph; convert to m/s for downstream code.
-      speedMps: Number.isFinite(p.speed) ? p.speed * 0.44704 : 0,
+      speedMps: Number.isFinite(p.speed) ? p.speed * MPH_TO_MPS : 0,
       gear: 1,
       apState: mapAutopilotString(p.autopilot),
     }))

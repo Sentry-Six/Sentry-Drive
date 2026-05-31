@@ -2,9 +2,22 @@
 // Faithful port of Sentry-USB server/drives/grouper.go
 
 import { GEAR_PARK, AUTOPILOT_OFF, AUTOPILOT_FSD, AUTOPILOT_AUTOSTEER, AUTOPILOT_TACC } from "./extract.js";
-
-const DRIVE_GAP_MS = 5 * 60 * 1000; // 5 minutes (matches Sentry USB)
-const PARK_GAP_SECONDS = 2.0;
+import {
+  haversineM,
+  round2,
+  DRIVE_GAP_MS,
+  PARK_GAP_SECONDS,
+  CLIP_DURATION_MS,
+  NULL_ISLAND_DEG,
+  MAX_FROM_MEDIAN_M,
+  MAX_JUMP_M,
+  SEI_SPEED_MAX_MPS,
+  DERIVED_SPEED_MAX_MPS,
+  M_PER_MILE,
+  M_PER_KM,
+  MPS_TO_MPH,
+  MPS_TO_KMH,
+} from "../shared/drive-calc.cjs";
 
 const FILE_TIMESTAMP_RE = /(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/;
 
@@ -37,22 +50,9 @@ function parseFileTimestamp(filePath) {
   return isNaN(t.getTime()) ? null : t;
 }
 
-/**
- * Haversine distance in meters between two GPS coordinates.
- */
-function haversineM(lat1, lon1, lat2, lon2) {
-  const R = 6371000.0;
-  const toRad = (d) => (d * Math.PI) / 180.0;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
+// haversineM, round2, and every drive-calc constant come from
+// ../shared/drive-calc.cjs (imported above) — the single source of truth that
+// mirrors Sentry-USB-Rusty/crates/drives.
 
 /**
  * Group routes into logical drives based on time gaps and gear state.
@@ -235,7 +235,7 @@ function splitClipAtParkGaps(clip) {
     const segSpeeds = clip.speeds ? clip.speeds.slice(startIdx, endIdx) : [];
     const segAccel = clip.accelPositions ? clip.accelPositions.slice(startIdx, endIdx) : [];
 
-    const offsetMs = startFrac * 60000;
+    const offsetMs = startFrac * CLIP_DURATION_MS;
     result.push({
       route: {
         ...clip,
@@ -291,14 +291,14 @@ function buildDriveStats(clips, idx) {
   const firstClip = clips[0];
   const lastClip = clips[clips.length - 1];
   const startTime = firstClip.timestamp;
-  const endTime = new Date(lastClip.timestamp.getTime() + 60000);
+  const endTime = new Date(lastClip.timestamp.getTime() + CLIP_DURATION_MS);
 
   // Merge all points with interpolated timestamps
   const allPoints = [];
   for (const clip of clips) {
     const clipStart = clip.timestamp.getTime();
     const n = clip.points.length;
-    const clipDurationMs = 60000;
+    const clipDurationMs = CLIP_DURATION_MS;
     const hasAP = clip.autopilotStates && clip.autopilotStates.length === n;
     const hasGears = clip.gearStates && clip.gearStates.length === n;
     const hasSpeeds = clip.speeds && clip.speeds.length === n;
@@ -327,7 +327,7 @@ function buildDriveStats(clips, idx) {
   // matches Sentry-USB-Rusty's collect→filter→compute approach.
   let w = 0;
   for (let i = 0; i < allPoints.length; i++) {
-    if (Math.abs(allPoints[i].lat) >= 1 || Math.abs(allPoints[i].lng) >= 1) allPoints[w++] = allPoints[i];
+    if (Math.abs(allPoints[i].lat) >= NULL_ISLAND_DEG || Math.abs(allPoints[i].lng) >= NULL_ISLAND_DEG) allPoints[w++] = allPoints[i];
   }
   allPoints.length = w;
   filterGPSOutliers(allPoints);
@@ -348,14 +348,14 @@ function buildDriveStats(clips, idx) {
 
     if (hasSEISpeeds) {
       const speed = p1.seiSpeed;
-      if (speed >= 0 && speed < 100) {
+      if (speed >= 0 && speed < SEI_SPEED_MAX_MPS) {
         speedSamples.push(speed);
         if (speed > maxSpeedMps) maxSpeedMps = speed;
       }
     } else {
       if (dt > 0) {
         const speed = d / dt;
-        if (speed < 70) {
+        if (speed < DERIVED_SPEED_MAX_MPS) {
           speedSamples.push(speed);
           if (speed > maxSpeedMps) maxSpeedMps = speed;
         }
@@ -383,7 +383,7 @@ function buildDriveStats(clips, idx) {
     } else if (i > 0) {
       const d = haversineM(allPoints[i - 1].lat, allPoints[i - 1].lng, p.lat, p.lng);
       const dt = (p.timeMs - allPoints[i - 1].timeMs) / 1000.0;
-      speed = dt > 0 ? Math.min(d / dt, 70) : 0;
+      speed = dt > 0 ? Math.min(d / dt, DERIVED_SPEED_MAX_MPS) : 0;
     } else {
       speed = 0;
     }
@@ -498,7 +498,7 @@ function buildDriveStats(clips, idx) {
   }
 
   const durationMs = endTime.getTime() - startTime.getTime();
-  const r2 = (v) => Math.round(v * 100) / 100;
+  const r2 = round2;
   const pct = (part) => totalDistanceM > 0 ? Math.round((part / totalDistanceM) * 1000) / 10 : 0;
 
   return {
@@ -507,12 +507,12 @@ function buildDriveStats(clips, idx) {
     startTime: formatISO(startTime),
     endTime: formatISO(endTime),
     durationMs,
-    distanceMi: r2(totalDistanceM / 1609.344),
-    distanceKm: r2(totalDistanceM / 1000),
-    avgSpeedMph: r2(avgSpeedMps * 2.23694),
-    maxSpeedMph: r2(maxSpeedMps * 2.23694),
-    avgSpeedKmh: r2(avgSpeedMps * 3.6),
-    maxSpeedKmh: r2(maxSpeedMps * 3.6),
+    distanceMi: r2(totalDistanceM / M_PER_MILE),
+    distanceKm: r2(totalDistanceM / M_PER_KM),
+    avgSpeedMph: r2(avgSpeedMps * MPS_TO_MPH),
+    maxSpeedMph: r2(maxSpeedMps * MPS_TO_MPH),
+    avgSpeedKmh: r2(avgSpeedMps * MPS_TO_KMH),
+    maxSpeedKmh: r2(maxSpeedMps * MPS_TO_KMH),
     clipCount: clips.length,
     pointCount: allPoints.length,
     points: pointData,
@@ -524,18 +524,18 @@ function buildDriveStats(clips, idx) {
     fsdDisengagements,
     fsdAccelPushes,
     fsdPercent: pct(fsdDistanceM),
-    fsdDistanceKm: r2(fsdDistanceM / 1000),
-    fsdDistanceMi: r2(fsdDistanceM / 1609.344),
+    fsdDistanceKm: r2(fsdDistanceM / M_PER_KM),
+    fsdDistanceMi: r2(fsdDistanceM / M_PER_MILE),
     // Autosteer (state=2)
     autosteerEngagedMs: Math.round(autosteerEngagedMs),
     autosteerPercent: pct(autosteerDistanceM),
-    autosteerDistanceKm: r2(autosteerDistanceM / 1000),
-    autosteerDistanceMi: r2(autosteerDistanceM / 1609.344),
+    autosteerDistanceKm: r2(autosteerDistanceM / M_PER_KM),
+    autosteerDistanceMi: r2(autosteerDistanceM / M_PER_MILE),
     // TACC (state=3)
     taccEngagedMs: Math.round(taccEngagedMs),
     taccPercent: pct(taccDistanceM),
-    taccDistanceKm: r2(taccDistanceM / 1000),
-    taccDistanceMi: r2(taccDistanceM / 1609.344),
+    taccDistanceKm: r2(taccDistanceM / M_PER_KM),
+    taccDistanceMi: r2(taccDistanceM / M_PER_MILE),
     // Assisted aggregate (any state > 0 — for map/UI use)
     assistedPercent: pct(assistedDistanceM),
     routeFiles: clips.map((c) => c.file),
@@ -568,8 +568,8 @@ function filterGPSOutliers(points) {
   medLat /= count;
   medLng /= count;
 
-  // Step 2: Remove any point that is >1,000 km from the median cluster.
-  const MAX_FROM_MEDIAN_M = 1000000; // 1,000 km
+  // Step 2: Remove any point that is >1,000 km from the median cluster
+  // (MAX_FROM_MEDIAN_M, imported from the shared single-source calc module).
   let mw = 0;
   for (let i = 0; i < points.length; i++) {
     if (haversineM(points[i].lat, points[i].lng, medLat, medLng) <= MAX_FROM_MEDIAN_M) points[mw++] = points[i];
@@ -577,7 +577,8 @@ function filterGPSOutliers(points) {
   points.length = mw;
 
   // Step 3: Remove isolated outliers far from both neighbors.
-  const MAX_JUMP_M = 5000; // 5 km — impossible between consecutive ~1s samples
+  // MAX_JUMP_M (5 km — impossible between consecutive ~1s samples) is imported
+  // from the shared single-source calc module.
 
   for (let i = points.length - 1; i >= 0; i--) {
     const prev = i > 0 ? points[i - 1] : null;

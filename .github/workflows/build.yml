@@ -35,6 +35,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run drive-calc lock tests
+        run: npm test
+
       - name: Build (Windows)
         if: runner.os == 'Windows'
         run: npx electron-builder --win --publish never

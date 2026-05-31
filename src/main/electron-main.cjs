@@ -8,6 +8,7 @@ const fs = require('fs');
 const { chain } = require('stream-chain');
 const parser = require('stream-json/parser.js');
 const Assembler = require('stream-json/assembler.js');
+const { haversineM, GEAR_PARK, CLIP_DURATION_MS, DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
 
 // Give V8 more old-space headroom so the main process can parse large
 // drive-data.json files (hundreds of MB to ~1GB). Must be set before
@@ -687,15 +688,7 @@ ipcMain.handle('repair-gps', async (_e, { filePath, useRouting }) => {
     let bridgedGaps = 0;
     let routedGaps = 0;
 
-    const toRad = (d) => (d * Math.PI) / 180;
-    const haversineM = (lat1, lon1, lat2, lon2) => {
-      const R = 6371000;
-      const dLat = toRad(lat2 - lat1);
-      const dLon = toRad(lon2 - lon1);
-      const a = Math.sin(dLat / 2) ** 2 +
-        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    };
+    // haversineM is imported at module scope from ../shared/drive-calc.cjs.
 
     const FILE_TS_RE = /(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/;
     const parseTs = (file) => {
@@ -716,9 +709,8 @@ ipcMain.handle('repair-gps', async (_e, { filePath, useRouting }) => {
 
     // --- Bridge gaps ---
     // Only bridge gaps > 60s (normal clip boundaries are ~60s and don't need bridging)
-    const GEAR_PARK = 0;
-    const MIN_BRIDGE_MS = 60 * 1000;
-    const MAX_BRIDGE_MS = 5 * 60 * 1000;
+    const MIN_BRIDGE_MS = CLIP_DURATION_MS; // clip boundaries (~60s) don't need bridging
+    const MAX_BRIDGE_MS = DRIVE_GAP_MS;     // gaps beyond the drive split aren't one drive
     const timedRoutes = routes
       .map((r, idx) => ({ idx, ts: parseTs(r.file), route: r }))
       .filter((r) => r.ts !== null)
@@ -733,7 +725,7 @@ ipcMain.handle('repair-gps', async (_e, { filePath, useRouting }) => {
       const curR = cur.route;
       const nextR = next.route;
 
-      const curEnd = new Date(cur.ts.getTime() + 60000);
+      const curEnd = new Date(cur.ts.getTime() + CLIP_DURATION_MS);
       const gapMs = next.ts - curEnd;
       if (gapMs <= MIN_BRIDGE_MS || gapMs > MAX_BRIDGE_MS) continue;
       if (!curR.points || curR.points.length === 0) continue;

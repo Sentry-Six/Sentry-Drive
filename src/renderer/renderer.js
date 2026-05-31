@@ -28,6 +28,11 @@ let replayDrive = null;
 let replaySpeed = 1;        // 1x, 2x, 5x, 10x
 const REPLAY_BASE_MS = 100; // base interval per point at 1x
 
+// Drive-calc constants come from the shared single-source module, exposed by
+// the preload bridge (see src/shared/drive-calc.cjs). Using them here keeps the
+// renderer's display conversions identical to the processing pipeline.
+const { MI_TO_KM, M_PER_MILE, MPS_TO_MPH } = window.driveCalc;
+
 // Units
 const UNIT_SYSTEM = {
   imperial: {
@@ -35,8 +40,8 @@ const UNIT_SYSTEM = {
     speed: { mult: 1,       short: 'mph',  long: 'MPH' },
   },
   metric: {
-    dist:  { mult: 1.60934, short: 'km',   long: 'Kilometers' },
-    speed: { mult: 1.60934, short: 'km/h', long: 'KM/H' },
+    dist:  { mult: MI_TO_KM, short: 'km',   long: 'Kilometers' },
+    speed: { mult: MI_TO_KM, short: 'km/h', long: 'KM/H' },
   },
 };
 let unitSystem = localStorage.getItem('unitSystem') === 'metric' ? 'metric' : 'imperial';
@@ -1599,10 +1604,10 @@ function renderSelectedDriveStats(drive) {
   const totalMin = Math.floor((totalMs % 3_600_000) / 60_000);
   const durStr = totalHrs > 0 ? `${totalHrs}H ${totalMin}M` : `${totalMin}M`;
 
-  const totalDistM = (drive.distanceKm ?? (drive.distanceMi ?? 0) * 1.60934) * 1000;
-  const fsdDistM = (drive.fsdDistanceKm ?? (drive.fsdDistanceMi ?? 0) * 1.60934) * 1000;
-  const apDistM = (drive.autosteerDistanceKm ?? (drive.autosteerDistanceMi ?? 0) * 1.60934) * 1000;
-  const taccDistM = (drive.taccDistanceKm ?? (drive.taccDistanceMi ?? 0) * 1.60934) * 1000;
+  const totalDistM = (drive.distanceKm ?? (drive.distanceMi ?? 0) * MI_TO_KM) * 1000;
+  const fsdDistM = (drive.fsdDistanceKm ?? (drive.fsdDistanceMi ?? 0) * MI_TO_KM) * 1000;
+  const apDistM = (drive.autosteerDistanceKm ?? (drive.autosteerDistanceMi ?? 0) * MI_TO_KM) * 1000;
+  const taccDistM = (drive.taccDistanceKm ?? (drive.taccDistanceMi ?? 0) * MI_TO_KM) * 1000;
   const fsdPct   = Math.round(drive.fsdPercent        ?? (totalDistM > 0 ? (fsdDistM  / totalDistM) * 100 : 0));
   const apPct    = Math.round(drive.autosteerPercent  ?? (totalDistM > 0 ? (apDistM   / totalDistM) * 100 : 0));
   const taccPct  = Math.round(drive.taccPercent       ?? (totalDistM > 0 ? (taccDistM / totalDistM) * 100 : 0));
@@ -1613,7 +1618,7 @@ function renderSelectedDriveStats(drive) {
   const accelOverrides = drive.fsdAccelPushes ?? 0;
   const fsdTimeMs = drive.fsdEngagedMs ?? 0;
 
-  const metersToDistStr = (m) => fmt(distVal(m / 1609.34, 0));
+  const metersToDistStr = (m) => fmt(distVal(m / M_PER_MILE, 0));
 
   let summary = `
     <div class="map-stat"><span class="map-stat-val">${fmt(distVal(totalMi, 1))}</span><span class="map-stat-lbl">${distLong()}</span></div>
@@ -1779,10 +1784,10 @@ function renderDriveStats(drives, meta) {
   const durStr = totalHrs > 0 ? `${totalHrs}H ${totalMin}M` : `${totalMin}M`;
 
   // FSD analytics denominator: SEI-only distance.
-  const seiDistM = seiDrives.reduce((s, d) => s + (d.distanceKm ?? d.distanceMi * 1.60934) * 1000, 0);
-  const fsdDistM = seiDrives.reduce((s, d) => s + (d.fsdDistanceKm ?? d.fsdDistanceMi * 1.60934) * 1000, 0);
-  const apDistM = seiDrives.reduce((s, d) => s + (d.autosteerDistanceKm ?? (d.autosteerDistanceMi ?? 0) * 1.60934) * 1000, 0);
-  const taccDistM = seiDrives.reduce((s, d) => s + (d.taccDistanceKm ?? (d.taccDistanceMi ?? 0) * 1.60934) * 1000, 0);
+  const seiDistM = seiDrives.reduce((s, d) => s + (d.distanceKm ?? d.distanceMi * MI_TO_KM) * 1000, 0);
+  const fsdDistM = seiDrives.reduce((s, d) => s + (d.fsdDistanceKm ?? d.fsdDistanceMi * MI_TO_KM) * 1000, 0);
+  const apDistM = seiDrives.reduce((s, d) => s + (d.autosteerDistanceKm ?? (d.autosteerDistanceMi ?? 0) * MI_TO_KM) * 1000, 0);
+  const taccDistM = seiDrives.reduce((s, d) => s + (d.taccDistanceKm ?? (d.taccDistanceMi ?? 0) * MI_TO_KM) * 1000, 0);
   const fsdPct = seiDistM > 0 ? Math.round((fsdDistM / seiDistM) * 100) : 0;
   const apPct = seiDistM > 0 ? Math.round((apDistM / seiDistM) * 100) : 0;
   const taccPct = seiDistM > 0 ? Math.round((taccDistM / seiDistM) * 100) : 0;
@@ -1798,7 +1803,7 @@ function renderDriveStats(drives, meta) {
   const avgDisengagements = seiDrives.length > 0 ? (disengagements / seiDrives.length).toFixed(1) : '—';
   const avgAccelOverrides = seiDrives.length > 0 ? (accelOverrides / seiDrives.length).toFixed(1) : '—';
 
-  const metersToDistStr = (m) => fmt(distVal(m / 1609.34, 0));
+  const metersToDistStr = (m) => fmt(distVal(m / M_PER_MILE, 0));
 
   let summary = `
     <div class="map-stat"><span class="map-stat-val">${fmt(drives.length)}</span><span class="map-stat-lbl">Drives</span></div>
@@ -2751,7 +2756,7 @@ function updateReplayData(idx) {
   const pt = drive.points[idx];
 
   // Speed (pt[3] is m/s)
-  const mph = pt[3] * 2.23694;
+  const mph = pt[3] * MPS_TO_MPH;
   document.getElementById('replay-speed-val').textContent = `${speedVal(mph)} ${speedShort()}`;
 
   // FSD

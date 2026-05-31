@@ -7,8 +7,10 @@
   "scripts": {
     "start": "electron .",
     "process": "node src/processing/process.js",
+    "test": "node --test src/shared/drive-calc.test.js",
+    "prebuild": "npm test",
     "build": "electron-builder --win",
-    "publish": "electron-builder --win --publish always"
+    "publish": "npm test && electron-builder --win --publish always"
   },
   "build": {
     "appId": "com.jefffromtheirs.sentry-drive",
@@ -23,7 +25,8 @@
       "changelog.json"
     ],
     "asarUnpack": [
-      "src/processing/**"
+      "src/processing/**",
+      "src/shared/**"
     ],
     "artifactName": "Sentry-Drive-Setup-${version}.${ext}",
     "win": {
