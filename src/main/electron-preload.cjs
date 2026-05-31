@@ -1,6 +1,7 @@
 'use strict';
 
 const { contextBridge, ipcRenderer } = require('electron');
+const driveCalc = require('../shared/drive-calc.cjs');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   selectDirectory: (opts) => ipcRenderer.invoke('select-directory', opts),
@@ -67,3 +68,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.off('tessie-progress', listener);
   },
 });
+
+// Drive-calc constants/helpers — the single source of truth shared with the
+// processing pipeline. Exposed read-only so the renderer's display conversions
+// use the exact same numbers as the rest of the app (src/shared/drive-calc.cjs).
+contextBridge.exposeInMainWorld('driveCalc', { ...driveCalc });
