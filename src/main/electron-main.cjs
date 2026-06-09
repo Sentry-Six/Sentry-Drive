@@ -8,7 +8,7 @@ const fs = require('fs');
 const { chain } = require('stream-chain');
 const parser = require('stream-json/parser.js');
 const Assembler = require('stream-json/assembler.js');
-const { haversineM, GEAR_PARK, CLIP_DURATION_MS, DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
+const { geodesicM, GEAR_PARK, CLIP_DURATION_MS, DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
 
 // Give V8 more old-space headroom so the main process can parse large
 // drive-data.json files (hundreds of MB to ~1GB). Must be set before
@@ -260,6 +260,23 @@ ipcMain.handle('check-drive-data', (_e, dir) =>
 
 ipcMain.handle('get-cpu-count', () => require('os').cpus().length);
 
+// Reverse geocoding for drive-list location pins. Lazy-init the disk cache on
+// first use (app is ready by then), then geocode via Nominatim in the main
+// process (throttled, cached, no renderer CSP involved).
+let _geocodeInited = false;
+ipcMain.handle('reverse-geocode', async (_e, { lat, lng } = {}) => {
+  try {
+    const geocode = require('../processing/geocode.cjs');
+    if (!_geocodeInited) {
+      geocode.init(path.join(app.getPath('userData'), 'geocode-cache.json'));
+      _geocodeInited = true;
+    }
+    return { label: await geocode.reverseGeocode(lat, lng) };
+  } catch {
+    return { label: null };
+  }
+});
+
 ipcMain.handle('open-external', (_e, url) => shell.openExternal(url));
 
 ipcMain.handle('get-app-version', () => app.getVersion());
@@ -360,13 +377,13 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
     parsed.routes = null;
     sendProgress('preparing', 0, 0);
 
-    // SEI always wins: any imported (Tessie) drive whose time window overlaps
-    // a real dashcam drive is hidden at load time. The Tessie clips remain in
-    // drive-data.json so the user can recover them by removing SEI later;
-    // they're just filtered out of the displayed drive list.
+    // SEI always wins: any imported (Tessie / Teslascope) drive whose time
+    // window overlaps a real dashcam drive is hidden at load time. The imported
+    // clips remain in drive-data.json so the user can recover them by removing
+    // SEI later; they're just filtered out of the displayed drive list.
     const seiRanges = [];
     for (const d of groupedDrives) {
-      if (d.source === 'tessie' || !d.startTime || !d.endTime) continue;
+      if (d.source !== 'sei' || !d.startTime || !d.endTime) continue;
       const s = Date.parse(d.startTime);
       const e = Date.parse(d.endTime);
       if (Number.isFinite(s) && Number.isFinite(e)) seiRanges.push({ s, e });
@@ -377,7 +394,7 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
     const hiddenTessieDrives = [];
     const drives = [];
     for (const d of groupedDrives) {
-      if (d.source === 'tessie') {
+      if (d.source !== 'sei') {
         const s = Date.parse(d.startTime);
         const e = Date.parse(d.endTime);
         let overlapsSEI = false;
@@ -519,12 +536,54 @@ async function routesToWireFormat(routes) {
 // Stream-write the full drive-data.json so large files don't blow past
 // V8's max string length (~512MB) during JSON.stringify. The routes array
 // is emitted route-by-route; top-level maps/arrays use a normal stringify.
-function writeDriveDataJSON(filePath, data) {
+// Serialize drive-data.json read-modify-write operations so concurrent edits
+// (e.g. rapid tag changes via the optimistic UI) can't race or lose updates.
+let driveDataLock = Promise.resolve();
+function withDriveDataLock(fn) {
+  const result = driveDataLock.then(fn, fn);
+  driveDataLock = result.then(() => {}, () => {});
+  return result;
+}
+
+// Rename with a few retries — on Windows a transient EPERM/EBUSY can occur if a
+// reader briefly holds the destination file open.
+function renameWithRetry(from, to, attempts = 5) {
   return new Promise((resolve, reject) => {
-    const ws = fs.createWriteStream(filePath);
-    let errored = false;
-    ws.on('error', (err) => { errored = true; reject(err); });
-    ws.on('finish', () => { if (!errored) resolve(); });
+    const tryOnce = (n) => {
+      try { fs.renameSync(from, to); resolve(); }
+      catch (err) {
+        if (n > 0 && (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES')) {
+          setTimeout(() => tryOnce(n - 1), 40);
+        } else {
+          reject(err);
+        }
+      }
+    };
+    tryOnce(attempts);
+  });
+}
+
+function writeDriveDataJSON(filePath, data) {
+  // Write to a unique temp file, then atomically rename over the target so
+  // readers (the streaming loader, get/set-drive-tags, etc.) never see a
+  // half-written/truncated file — the cause of intermittent "Unexpected end of
+  // JSON input" errors when a read overlapped a write.
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  return new Promise((resolve, reject) => {
+    const ws = fs.createWriteStream(tmpPath);
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      try { ws.destroy(); } catch {}
+      fs.unlink(tmpPath, () => reject(err));
+    };
+    ws.on('error', fail);
+    ws.on('finish', () => {
+      if (settled) return;
+      settled = true;
+      renameWithRetry(tmpPath, filePath).then(resolve, (err) => fs.unlink(tmpPath, () => reject(err)));
+    });
 
     const write = (chunk) => {
       // Respect backpressure — wait for drain on full buffers.
@@ -558,9 +617,7 @@ function writeDriveDataJSON(filePath, data) {
         await write('\n}\n');
         ws.end();
       } catch (err) {
-        errored = true;
-        ws.destroy();
-        reject(err);
+        fail(err);
       }
     })();
   });
@@ -588,7 +645,7 @@ ipcMain.handle('get-drive-tags', (_e, filePath) => {
   }
 });
 
-ipcMain.handle('set-drive-tags', async (_e, { filePath, driveKey, tags }) => {
+ipcMain.handle('set-drive-tags', (_e, { filePath, driveKey, tags }) => withDriveDataLock(async () => {
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const data = JSON.parse(raw);
@@ -606,7 +663,7 @@ ipcMain.handle('set-drive-tags', async (_e, { filePath, driveKey, tags }) => {
   } catch (err) {
     return { success: false, error: err.message };
   }
-});
+}));
 
 ipcMain.handle('get-all-tag-names', (_e, filePath) => {
   try {
@@ -688,7 +745,7 @@ ipcMain.handle('repair-gps', async (_e, { filePath, useRouting }) => {
     let bridgedGaps = 0;
     let routedGaps = 0;
 
-    // haversineM is imported at module scope from ../shared/drive-calc.cjs.
+    // geodesicM is imported at module scope from ../shared/drive-calc.cjs.
 
     const FILE_TS_RE = /(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/;
     const parseTs = (file) => {
@@ -789,7 +846,7 @@ ipcMain.handle('repair-gps', async (_e, { filePath, useRouting }) => {
       }
 
       const nPts = interpPoints.length;
-      const distM = haversineM(lastPt[0], lastPt[1], firstPt[0], firstPt[1]);
+      const distM = geodesicM(lastPt[0], lastPt[1], firstPt[0], firstPt[1]);
       const avgSpeed = distM / (gapMs / 1000);
 
       const bridgeTs = new Date(curEnd.getTime());
@@ -1199,6 +1256,182 @@ ipcMain.handle('tessie-api-import', async (_e, { token, vin, fromSec, toSec, dri
   }
 });
 
+// ─── Teslascope API Import ─────────────────────────────────────────────────
+// Mirrors the Tessie API path against teslascope.com. Field mapping lives in
+// teslascope-api.cjs (defensive; set TESLASCOPE_DEBUG=1 to log raw responses).
+
+const TESLASCOPE_TOKEN_FILE = () => path.join(app.getPath('userData'), 'teslascope-token.bin');
+
+function saveTeslascopeToken(token) {
+  if (!token) {
+    try { fs.unlinkSync(TESLASCOPE_TOKEN_FILE()); } catch {}
+    return;
+  }
+  const buf = safeStorage.isEncryptionAvailable()
+    ? safeStorage.encryptString(token)
+    : Buffer.from('plain:' + token, 'utf-8');
+  fs.writeFileSync(TESLASCOPE_TOKEN_FILE(), buf);
+}
+
+function loadTeslascopeToken() {
+  try {
+    const buf = fs.readFileSync(TESLASCOPE_TOKEN_FILE());
+    if (buf.slice(0, 6).toString('utf-8') === 'plain:') {
+      return buf.slice(6).toString('utf-8');
+    }
+    return safeStorage.decryptString(buf);
+  } catch {
+    return '';
+  }
+}
+
+function sendTeslascopeProgress(data) {
+  mainWindow?.webContents.send('teslascope-progress', data);
+}
+
+ipcMain.handle('teslascope-api-get-token', () => ({ token: loadTeslascopeToken() }));
+
+ipcMain.handle('teslascope-api-save-token', (_e, { token }) => {
+  try { saveTeslascopeToken(token); return { success: true }; }
+  catch (err) { return { success: false, error: err.message }; }
+});
+
+ipcMain.handle('teslascope-api-validate', async (_e, { token }) => {
+  try {
+    const { fetchVehicles } = require('../processing/teslascope-api.cjs');
+    const vehicles = await fetchVehicles(token);
+    return {
+      success: true,
+      vehicles: vehicles.map((v) => ({
+        publicId: v.publicId,
+        vin: v.vin || '',
+        displayName: v.name || v.vin || 'Vehicle',
+      })).filter((v) => v.publicId != null),
+    };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+let teslascopeApiCancel = false;
+ipcMain.handle('teslascope-api-cancel', () => { teslascopeApiCancel = true; return { success: true }; });
+
+ipcMain.handle('teslascope-api-preview', async (_e, { token, publicId, fromSec, toSec, driveDataPath }) => {
+  try {
+    const { fetchDrives, normalizeDrive } = require('../processing/teslascope-api.cjs');
+    const { buildExistingDriveRanges, hasOverlap, buildExternalSignature } = require('../processing/tessie-import.cjs');
+
+    const drives = await fetchDrives(token, publicId, { from: fromSec, to: toSec });
+
+    let existingRanges = [];
+    const existingSignatures = new Set();
+    if (driveDataPath && fs.existsSync(driveDataPath)) {
+      const data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+      const { groupIntoDrives } = await import('../processing/grouper.js');
+      const { drives: existing } = groupIntoDrives(data.routes ?? []);
+      existingRanges = buildExistingDriveRanges(existing);
+      for (const r of (data.routes ?? [])) {
+        if (r.externalSignature) existingSignatures.add(r.externalSignature);
+      }
+    }
+
+    let toImport = 0, overlapSkipped = 0, duplicateSkipped = 0;
+    for (const d of drives) {
+      const n = normalizeDrive(d);
+      const key = { startedAt: n.startedAt, endedAt: n.endedAt, startingOdometer: n.startingOdometer };
+      if (existingSignatures.has(buildExternalSignature(key, 'teslascope'))) { duplicateSkipped++; continue; }
+      if (hasOverlap(key, existingRanges)) { overlapSkipped++; continue; }
+      toImport++;
+    }
+    return { success: true, totalDrives: drives.length, toImport, overlapSkipped, duplicateSkipped };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, toSec, driveDataPath }) => {
+  teslascopeApiCancel = false;
+  try {
+    const { fetchDrives, fetchDrivePath, normalizeDrive, Throttler } = require('../processing/teslascope-api.cjs');
+    const { buildExistingDriveRanges, hasOverlap, buildExternalSignature, buildClipsForApiDrive } = require('../processing/tessie-import.cjs');
+
+    sendTeslascopeProgress({ phase: 'Fetching drives list…', current: 0, total: 1 });
+    const drivesList = await fetchDrives(token, publicId, { from: fromSec, to: toSec });
+
+    let data;
+    if (fs.existsSync(driveDataPath)) {
+      fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
+      data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+    } else {
+      data = { routes: [], processedFiles: [], driveTags: {} };
+    }
+    if (!Array.isArray(data.routes)) data.routes = [];
+    if (!Array.isArray(data.processedFiles)) data.processedFiles = [];
+
+    const { groupIntoDrives } = await import('../processing/grouper.js');
+    const { drives: existingDrives } = groupIntoDrives(data.routes);
+    const existingRanges = buildExistingDriveRanges(existingDrives);
+    const existingSignatures = new Set();
+    for (const r of data.routes) {
+      if (r.externalSignature) existingSignatures.add(r.externalSignature);
+    }
+
+    const candidates = [];
+    for (const d of drivesList) {
+      const n = normalizeDrive(d);
+      const key = { startedAt: n.startedAt, endedAt: n.endedAt, startingOdometer: n.startingOdometer };
+      if (existingSignatures.has(buildExternalSignature(key, 'teslascope'))) continue;
+      if (hasOverlap(key, existingRanges)) continue;
+      candidates.push(d);
+    }
+
+    sendTeslascopeProgress({ phase: 'Fetching paths…', current: 0, total: candidates.length });
+    const throttler = new Throttler(1000);
+    let imported = 0, canceled = false;
+    const skipReasons = {};
+    const startMs = Date.now();
+
+    for (let i = 0; i < candidates.length; i++) {
+      if (teslascopeApiCancel) { canceled = true; break; }
+      const d = candidates[i];
+      const elapsed = Date.now() - startMs;
+      const etaSec = i > 0 ? Math.round((elapsed / i) * (candidates.length - i) / 1000) : 0;
+      sendTeslascopeProgress({ phase: 'Fetching paths…', current: i + 1, total: candidates.length, etaSec });
+
+      await throttler.wait();
+
+      const summary = normalizeDrive(d);
+      let detail = null;
+      try {
+        detail = await fetchDrivePath(token, publicId, summary.id);
+      } catch (err) {
+        // Detail fetch failed — fall back to summary-only (start/end markers).
+        skipReasons['detail-fetch-error'] = (skipReasons['detail-fetch-error'] || 0) + 1;
+      }
+      const apiDrive = normalizeDrive(d, detail);
+      const result = buildClipsForApiDrive(apiDrive, 'teslascope');
+      if (!result.clips) {
+        skipReasons[result.reason || 'unknown'] = (skipReasons[result.reason || 'unknown'] || 0) + 1;
+        continue;
+      }
+      for (const clip of result.clips) {
+        data.routes.push(clip);
+        data.processedFiles.push(clip.file);
+      }
+      imported++;
+    }
+
+    sendTeslascopeProgress({ phase: 'Saving…', current: candidates.length, total: candidates.length });
+    data.routes = await routesToWireFormat(data.routes);
+    await writeDriveDataJSON(driveDataPath, data);
+    return { success: true, imported, canceled, totalCandidates: candidates.length, skipReasons };
+  } catch (err) {
+    return { success: false, error: err.message };
+  } finally {
+    teslascopeApiCancel = false;
+  }
+});
+
 // Remove only the Tessie clips whose grouped drive is hidden by SEI overlap.
 // Useful for cleaning up legacy imports that landed on the wrong side of an
 // overlap-check edge case before this was tightened.
@@ -1266,6 +1499,79 @@ ipcMain.handle('tessie-remove-all', async (_e, { driveDataPath }) => {
     data.routes = (data.routes ?? []).filter((r) => r.source !== 'tessie');
     data.processedFiles = (data.processedFiles ?? []).filter(
       (f) => !tessieFiles.has((f || '').replace(/\\/g, '/'))
+    );
+
+    data.routes = await routesToWireFormat(data.routes);
+    await writeDriveDataJSON(driveDataPath, data);
+    return { success: true, removed };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('teslascope-remove-hidden', async (_e, { driveDataPath }) => {
+  try {
+    if (!fs.existsSync(driveDataPath)) return { success: false, error: 'File not found' };
+    const data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+
+    const { groupIntoDrives } = await import('../processing/grouper.js');
+    const { drives } = groupIntoDrives(data.routes ?? []);
+
+    const seiRanges = [];
+    for (const d of drives) {
+      if (d.source !== 'sei' || !d.startTime || !d.endTime) continue;
+      const s = Date.parse(d.startTime);
+      const e = Date.parse(d.endTime);
+      if (Number.isFinite(s) && Number.isFinite(e)) seiRanges.push({ s, e });
+    }
+    seiRanges.sort((a, b) => a.s - b.s);
+
+    const hiddenSignatures = new Set();
+    for (const d of drives) {
+      if (d.source !== 'teslascope') continue;
+      const s = Date.parse(d.startTime);
+      const e = Date.parse(d.endTime);
+      for (const r of seiRanges) {
+        if (r.e <= s) continue;
+        if (r.s >= e) break;
+        if (d.externalSignature) hiddenSignatures.add(d.externalSignature);
+        break;
+      }
+    }
+
+    if (hiddenSignatures.size === 0) return { success: true, removed: 0 };
+
+    fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
+    const before = (data.routes ?? []).length;
+    data.routes = (data.routes ?? []).filter(
+      (r) => !(r.source === 'teslascope' && hiddenSignatures.has(r.externalSignature))
+    );
+    const removedRoutes = before - data.routes.length;
+    data.routes = await routesToWireFormat(data.routes);
+    await writeDriveDataJSON(driveDataPath, data);
+    return { success: true, removed: hiddenSignatures.size, removedRoutes };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('teslascope-remove-all', async (_e, { driveDataPath }) => {
+  try {
+    if (!fs.existsSync(driveDataPath)) return { success: false, error: 'File not found' };
+    fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
+    const data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+
+    const tsFiles = new Set(
+      (data.routes ?? [])
+        .filter((r) => r.source === 'teslascope')
+        .map((r) => (r.file || '').replace(/\\/g, '/'))
+    );
+    const removed = tsFiles.size;
+    if (removed === 0) return { success: true, removed: 0 };
+
+    data.routes = (data.routes ?? []).filter((r) => r.source !== 'teslascope');
+    data.processedFiles = (data.processedFiles ?? []).filter(
+      (f) => !tsFiles.has((f || '').replace(/\\/g, '/'))
     );
 
     data.routes = await routesToWireFormat(data.routes);

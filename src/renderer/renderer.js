@@ -193,6 +193,7 @@ function initFooter() {
   // Settings modal
   document.getElementById('btn-settings').addEventListener('click', () => {
     document.getElementById('settings-overlay').classList.remove('hidden');
+    refreshTessieStatus();
   });
   document.getElementById('btn-close-settings').addEventListener('click', () => {
     document.getElementById('settings-overlay').classList.add('hidden');
@@ -202,6 +203,181 @@ function initFooter() {
       document.getElementById('settings-overlay').classList.add('hidden');
     }
   });
+
+  // Settings tabs (scoped classes so they don't collide with the main tab bar).
+  // The last-active tab persists across opens (no reset on open).
+  document.querySelectorAll('.settings-tab-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const stab = btn.dataset.stab;
+      document.querySelectorAll('.settings-tab-btn').forEach((b) => b.classList.remove('active'));
+      document.querySelectorAll('.settings-pane').forEach((p) => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById(`stab-${stab}`).classList.add('active');
+    });
+  });
+
+  // ── Integrations tab: Tessie (inline connect/auth) ─────────────────────
+  const tessieConnectForm = document.getElementById('tessie-connect-form');
+  const tessieConnectedView = document.getElementById('tessie-connected');
+  const tessieTokenInput = document.getElementById('tessie-token-input');
+  const tessieTokenMask = document.getElementById('tessie-token-mask');
+  const tessieConnectErr = document.getElementById('tessie-connect-error');
+  const tessieStatusPill = document.getElementById('tessie-conn-status');
+  const tessieConnectBtn = document.getElementById('btn-tessie-connect');
+
+  const maskToken = (t) => (t && t.length > 4 ? '••••••' + t.slice(-4) : '••••');
+
+  function showTessieError(msg) {
+    if (!tessieConnectErr) return;
+    tessieConnectErr.textContent = msg;
+    tessieConnectErr.classList.remove('hidden');
+  }
+
+  // Paint the card for the current connection state (connected → token + import,
+  // disconnected → connect form). Drives the header status pill too.
+  function renderTessieState(token) {
+    const connected = !!token;
+    if (tessieStatusPill) {
+      tessieStatusPill.textContent = connected ? 'Connected' : 'Not connected';
+      tessieStatusPill.classList.toggle('pill-connected', connected);
+      tessieStatusPill.classList.toggle('pill-idle', !connected);
+    }
+    if (tessieConnectForm) tessieConnectForm.classList.toggle('hidden', connected);
+    if (tessieConnectedView) tessieConnectedView.classList.toggle('hidden', !connected);
+    if (connected && tessieTokenMask) tessieTokenMask.textContent = maskToken(token);
+  }
+
+  function refreshTessieStatus() {
+    if (!tessieStatusPill) return;
+    Promise.resolve(window.electronAPI && window.electronAPI.tessieApiGetToken())
+      .then((res) => renderTessieState(res && res.token))
+      .catch(() => {});
+  }
+
+  if (tessieConnectBtn) {
+    tessieConnectBtn.addEventListener('click', async () => {
+      const token = (tessieTokenInput.value || '').trim();
+      tessieConnectErr.classList.add('hidden');
+      if (!token) { showTessieError('Paste your Tessie access token first.'); return; }
+      const orig = tessieConnectBtn.textContent;
+      tessieConnectBtn.disabled = true;
+      tessieConnectBtn.textContent = 'Connecting…';
+      try {
+        const result = await window.electronAPI.tessieApiValidate({ token });
+        if (!result || !result.success) {
+          showTessieError(result && result.error ? `Couldn't validate: ${result.error}` : "Couldn't validate that token.");
+          return;
+        }
+        await window.electronAPI.tessieApiSaveToken({ token });
+        tessieTokenInput.value = '';
+        renderTessieState(token);
+      } catch {
+        showTessieError('Connection failed. Check your network and try again.');
+      } finally {
+        tessieConnectBtn.disabled = false;
+        tessieConnectBtn.textContent = orig;
+      }
+    });
+  }
+
+  const tessieDisconnectBtn = document.getElementById('btn-tessie-disconnect');
+  if (tessieDisconnectBtn) {
+    tessieDisconnectBtn.addEventListener('click', async () => {
+      try { await window.electronAPI.tessieApiSaveToken({ token: '' }); } catch {}
+      renderTessieState('');
+    });
+  }
+
+  const tessieGetTokenLink = document.getElementById('tessie-get-token-link');
+  if (tessieGetTokenLink) {
+    tessieGetTokenLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (window.electronAPI) window.electronAPI.openExternal('https://dash.tessie.com/settings/api');
+    });
+  }
+
+  // Import is launched from the View Drives tab → "Import Drives" (which opens
+  // the service-aware import modal). Integrations is token management only.
+
+  refreshTessieStatus();
+
+  // ── Integrations tab: Teslascope (connect-only for now) ────────────────
+  const teslascopeConnectForm = document.getElementById('teslascope-connect-form');
+  const teslascopeConnectedView = document.getElementById('teslascope-connected');
+  const teslascopeTokenInput = document.getElementById('teslascope-token-input');
+  const teslascopeTokenMask = document.getElementById('teslascope-token-mask');
+  const teslascopeConnectErr = document.getElementById('teslascope-connect-error');
+  const teslascopeStatusPill = document.getElementById('teslascope-conn-status');
+  const teslascopeConnectBtn = document.getElementById('btn-teslascope-connect');
+
+  function showTeslascopeError(msg) {
+    if (!teslascopeConnectErr) return;
+    teslascopeConnectErr.textContent = msg;
+    teslascopeConnectErr.classList.remove('hidden');
+  }
+
+  function renderTeslascopeState(token) {
+    const connected = !!token;
+    if (teslascopeStatusPill) {
+      teslascopeStatusPill.textContent = connected ? 'Connected' : 'Not connected';
+      teslascopeStatusPill.classList.toggle('pill-connected', connected);
+      teslascopeStatusPill.classList.toggle('pill-idle', !connected);
+    }
+    if (teslascopeConnectForm) teslascopeConnectForm.classList.toggle('hidden', connected);
+    if (teslascopeConnectedView) teslascopeConnectedView.classList.toggle('hidden', !connected);
+    if (connected && teslascopeTokenMask) teslascopeTokenMask.textContent = maskToken(token);
+  }
+
+  function refreshTeslascopeStatus() {
+    if (!teslascopeStatusPill) return;
+    Promise.resolve(window.electronAPI && window.electronAPI.teslascopeApiGetToken())
+      .then((res) => renderTeslascopeState(res && res.token))
+      .catch(() => {});
+  }
+
+  if (teslascopeConnectBtn) {
+    teslascopeConnectBtn.addEventListener('click', async () => {
+      const token = (teslascopeTokenInput.value || '').trim();
+      teslascopeConnectErr.classList.add('hidden');
+      if (!token) { showTeslascopeError('Paste your Teslascope API token first.'); return; }
+      const orig = teslascopeConnectBtn.textContent;
+      teslascopeConnectBtn.disabled = true;
+      teslascopeConnectBtn.textContent = 'Connecting…';
+      try {
+        const result = await window.electronAPI.teslascopeApiValidate({ token });
+        if (!result || !result.success) {
+          showTeslascopeError(result && result.error ? `Couldn't validate: ${result.error}` : "Couldn't validate that token.");
+          return;
+        }
+        await window.electronAPI.teslascopeApiSaveToken({ token });
+        teslascopeTokenInput.value = '';
+        renderTeslascopeState(token);
+      } catch {
+        showTeslascopeError('Connection failed. Check your network and try again.');
+      } finally {
+        teslascopeConnectBtn.disabled = false;
+        teslascopeConnectBtn.textContent = orig;
+      }
+    });
+  }
+
+  const teslascopeDisconnectBtn = document.getElementById('btn-teslascope-disconnect');
+  if (teslascopeDisconnectBtn) {
+    teslascopeDisconnectBtn.addEventListener('click', async () => {
+      try { await window.electronAPI.teslascopeApiSaveToken({ token: '' }); } catch {}
+      renderTeslascopeState('');
+    });
+  }
+
+  const teslascopeGetTokenLink = document.getElementById('teslascope-get-token-link');
+  if (teslascopeGetTokenLink) {
+    teslascopeGetTokenLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (window.electronAPI) window.electronAPI.openExternal('https://teslascope.com/account');
+    });
+  }
+
+  refreshTeslascopeStatus();
 
   // Version display
   window.electronAPI.getAppVersion().then(async (v) => {
@@ -342,11 +518,14 @@ function initFooter() {
 
   if (markerType === 'model3') applyMarkerColor(markerColor);
 
-  selMarkerType.addEventListener('change', () => {
+  selMarkerType.addEventListener('change', async () => {
     markerType = selMarkerType.value;
     localStorage.setItem('markerType', markerType);
     syncVehicleUI();
-    if (markerType === 'model3') applyMarkerColor(markerColor);
+    // Ensure the model3 texture is ready before rebuilding the icon — otherwise
+    // buildMarkerHtml falls back to the arrow.
+    if (markerType === 'model3') await applyMarkerColor(markerColor);
+    refreshReplayMarkerIcon();
   });
 
   // Hide other drives setting
@@ -984,7 +1163,13 @@ function initViewDrivesTab() {
     drives = drives.filter((d) => d.startTime !== drive.startTime);
     if (wasSelected) deselectDrive();
     renderDriveList(drives);
+    // Redraw the map so the deleted drive's polyline is removed immediately —
+    // renderOverviewOnMap() clears all layers and rebuilds from `drives`.
+    // Without this the line lingered until the next map render (e.g. selecting
+    // another drive).
+    renderOverviewOnMap();
     renderDriveStats(drives, { totalRoutes: 0, processedFileCount: 0 });
+    updateTessieButtonStates();
   });
 }
 
@@ -1007,6 +1192,82 @@ function initTessieImport() {
   const vinSelect = document.getElementById('tessie-api-vin');
   const fromInput = document.getElementById('tessie-api-from');
   const toInput = document.getElementById('tessie-api-to');
+  const serviceSelect = document.getElementById('import-service');
+
+  // Connected-service registry. The modal routes every call through the
+  // selected service; tokens live in Settings → Integrations (not entered here).
+  const SERVICES = {
+    tessie: {
+      label: 'Tessie', idField: 'vin',
+      getToken: () => window.electronAPI.tessieApiGetToken(),
+      validate: (token) => window.electronAPI.tessieApiValidate({ token }),
+      preview: (a) => window.electronAPI.tessieApiPreview(a),
+      runImport: (a) => window.electronAPI.tessieApiImport(a),
+      cancel: () => window.electronAPI.tessieApiCancel(),
+      onProgress: (cb) => window.electronAPI.onTessieProgress(cb),
+      removeHidden: () => window.electronAPI.tessieRemoveHidden({ driveDataPath: loadedFilePath }),
+      csv: true,
+      csvPreview: (a) => window.electronAPI.tessiePreview(a),
+      csvImport: (a) => window.electronAPI.tessieImport(a),
+      csvCancel: () => window.electronAPI.tessieImportCancel(),
+    },
+    teslascope: {
+      label: 'Teslascope', idField: 'publicId',
+      getToken: () => window.electronAPI.teslascopeApiGetToken(),
+      validate: (token) => window.electronAPI.teslascopeApiValidate({ token }),
+      preview: (a) => window.electronAPI.teslascopeApiPreview(a),
+      runImport: (a) => window.electronAPI.teslascopeApiImport(a),
+      cancel: () => window.electronAPI.teslascopeApiCancel(),
+      onProgress: (cb) => window.electronAPI.onTeslascopeProgress(cb),
+      removeHidden: () => window.electronAPI.teslascopeRemoveHidden({ driveDataPath: loadedFilePath }),
+      csv: false,
+    },
+  };
+  let selectedService = 'tessie';
+  const svc = () => SERVICES[selectedService] || SERVICES.tessie;
+
+  // Populate the dropdown with CONNECTED services (token saved in Integrations).
+  async function populateServices() {
+    const opts = [];
+    for (const [key, s] of Object.entries(SERVICES)) {
+      try { const r = await s.getToken(); if (r && r.token) opts.push({ key, label: s.label }); } catch {}
+    }
+    if (opts.length === 0) {
+      serviceSelect.innerHTML = '<option value="">No connected services</option>';
+      serviceSelect.disabled = true;
+      return false;
+    }
+    serviceSelect.innerHTML = opts.map((o) => `<option value="${o.key}">${o.label}</option>`).join('');
+    serviceSelect.disabled = false;
+    if (!opts.some((o) => o.key === selectedService)) selectedService = opts[0].key;
+    serviceSelect.value = selectedService;
+    return true;
+  }
+
+  // CSV tab only shows for services that support it (Tessie today).
+  function applyServiceUI() {
+    const csvBtn = document.querySelector('.tessie-mode-btn[data-mode="csv"]');
+    if (csvBtn) csvBtn.classList.toggle('hidden', !svc().csv);
+    if (!svc().csv && tessieImportMode === 'csv') {
+      tessieImportMode = 'api';
+      document.querySelectorAll('.tessie-mode-btn').forEach((x) => x.classList.toggle('active', x.dataset.mode === 'api'));
+      document.getElementById('tessie-mode-api').classList.remove('hidden');
+      document.getElementById('tessie-mode-csv').classList.add('hidden');
+    }
+  }
+
+  if (serviceSelect) {
+    serviceSelect.addEventListener('change', async () => {
+      selectedService = serviceSelect.value || 'tessie';
+      applyServiceUI();
+      try {
+        const r = await svc().getToken();
+        tokenInput.value = (r && r.token) || '';
+        if (tokenInput.value) await validateApiToken(true);
+      } catch {}
+      await maybePreview();
+    });
+  }
 
   const resetModal = () => {
     tessieDrivesPath = '';
@@ -1018,7 +1279,7 @@ function initTessieImport() {
     progressEl.classList.add('hidden');
     confirmBtn.disabled = true;
     confirmBtn.textContent = 'Import';
-    closeBtn.textContent = 'Close';
+    closeBtn.title = 'Close';
   };
 
   // Mode toggle
@@ -1054,22 +1315,24 @@ function initTessieImport() {
       return;
     }
     resetModal();
-    // Populate saved token
-    try {
-      const { token } = await window.electronAPI.tessieApiGetToken();
-      if (token) {
-        tokenInput.value = token;
-        // Auto-validate quietly so the VIN dropdown is ready
-        validateApiToken(true);
-      }
-    } catch {}
+    const hasConnected = await populateServices();
+    applyServiceUI();
+    if (!hasConnected) {
+      previewEl.classList.remove('hidden');
+      previewEl.innerHTML = 'Connect a service in <strong>Settings → Integrations</strong> first.';
+    } else {
+      try {
+        const { token } = await svc().getToken();
+        if (token) { tokenInput.value = token; validateApiToken(true); }
+      } catch {}
+    }
     overlay.classList.remove('hidden');
   });
 
   closeBtn.addEventListener('click', () => {
     if (confirmBtn.textContent === 'Importing…') {
-      if (tessieImportMode === 'api') window.electronAPI.tessieApiCancel();
-      else window.electronAPI.tessieImportCancel();
+      if (tessieImportMode === 'api') svc().cancel();
+      else if (svc().csvCancel) svc().csvCancel();
       return;
     }
     overlay.classList.add('hidden');
@@ -1103,26 +1366,26 @@ function initTessieImport() {
   async function validateApiToken(silent) {
     const token = tokenInput.value.trim();
     if (!token) {
-      if (!silent) alert('Paste your Tessie access token first.');
+      if (!silent) alert(`Connect ${svc().label} in Settings → Integrations first.`);
       return;
     }
+    const idField = svc().idField;
     vinSelect.disabled = true;
-    vinSelect.innerHTML = '<option>Validating…</option>';
-    const result = await window.electronAPI.tessieApiValidate({ token });
+    vinSelect.innerHTML = '<option>Loading vehicles…</option>';
+    const result = await svc().validate(token);
     if (!result.success) {
       vinSelect.innerHTML = '<option>Validation failed</option>';
       if (!silent) alert(`Token validation failed:\n${result.error}`);
       return;
     }
-    if (result.vehicles.length === 0) {
+    if (!result.vehicles || result.vehicles.length === 0) {
       vinSelect.innerHTML = '<option>No vehicles on account</option>';
       return;
     }
     vinSelect.innerHTML = result.vehicles
-      .map((v) => `<option value="${escapeHtml(v.vin)}">${escapeHtml(v.displayName || v.vin)}</option>`)
+      .map((v) => `<option value="${escapeHtml(v[idField] ?? v.vin ?? '')}">${escapeHtml(v.displayName || v.vin || v[idField])}</option>`)
       .join('');
     vinSelect.disabled = false;
-    await window.electronAPI.tessieApiSaveToken({ token });
     await maybePreview();
   }
 
@@ -1143,11 +1406,11 @@ function initTessieImport() {
       const fromSec = Math.floor(new Date(fromInput.value + 'T00:00:00').getTime() / 1000);
       const toSec = Math.floor(new Date(toInput.value + 'T23:59:59').getTime() / 1000);
       previewEl.classList.remove('hidden');
-      previewEl.innerHTML = '<em>Querying Tessie API…</em>';
+      previewEl.innerHTML = `<em>Querying ${escapeHtml(svc().label)} API…</em>`;
       confirmBtn.disabled = true;
-      const result = await window.electronAPI.tessieApiPreview({
+      const result = await svc().preview({
         token: tokenInput.value.trim(),
-        vin: vinSelect.value,
+        [svc().idField]: vinSelect.value,
         fromSec, toSec,
         driveDataPath: loadedFilePath,
       });
@@ -1161,7 +1424,7 @@ function initTessieImport() {
       previewEl.classList.remove('hidden');
       previewEl.innerHTML = '<em>Scanning CSVs…</em>';
       confirmBtn.disabled = true;
-      const result = await window.electronAPI.tessiePreview({
+      const result = await svc().csvPreview({
         driveDataPath: loadedFilePath,
         drivesCsvPath: tessieDrivesPath,
         statesCsvPath: tessieStatesPath,
@@ -1176,7 +1439,7 @@ function initTessieImport() {
 
   function renderPreview(result) {
     const parts = [];
-    parts.push(`Found <span class="tessie-preview-count">${fmt(result.totalDrives)}</span> drive(s) on Tessie.`);
+    parts.push(`Found <span class="tessie-preview-count">${fmt(result.totalDrives)}</span> drive(s) on ${escapeHtml(svc().label)}.`);
     parts.push(`<span class="tessie-preview-count">${fmt(result.toImport)}</span> will be imported.`);
     if (result.overlapSkipped > 0) parts.push(`${fmt(result.overlapSkipped)} skipped (overlaps existing SEI data).`);
     if (result.duplicateSkipped > 0) parts.push(`${fmt(result.duplicateSkipped)} skipped (already imported).`);
@@ -1191,7 +1454,7 @@ function initTessieImport() {
 
     confirmBtn.disabled = true;
     confirmBtn.textContent = 'Importing…';
-    closeBtn.textContent = 'Cancel Import';
+    closeBtn.title = 'Cancel import';
     progressEl.classList.remove('hidden');
 
     const phaseEl = document.getElementById('tessie-phase');
@@ -1204,7 +1467,7 @@ function initTessieImport() {
     barEl.style.width = '0%';
 
     if (tessieProgressListener) tessieProgressListener();
-    tessieProgressListener = window.electronAPI.onTessieProgress(({ phase, current, total, etaSec }) => {
+    tessieProgressListener = svc().onProgress(({ phase, current, total, etaSec }) => {
       phaseEl.textContent = phase;
       if (total > 0) {
         const pct = Math.round((current / total) * 100);
@@ -1224,14 +1487,14 @@ function initTessieImport() {
     if (tessieImportMode === 'api') {
       const fromSec = Math.floor(new Date(fromInput.value + 'T00:00:00').getTime() / 1000);
       const toSec = Math.floor(new Date(toInput.value + 'T23:59:59').getTime() / 1000);
-      result = await window.electronAPI.tessieApiImport({
+      result = await svc().runImport({
         token: tokenInput.value.trim(),
-        vin: vinSelect.value,
+        [svc().idField]: vinSelect.value,
         fromSec, toSec,
         driveDataPath: loadedFilePath,
       });
     } else {
-      result = await window.electronAPI.tessieImport({
+      result = await svc().csvImport({
         driveDataPath: loadedFilePath,
         drivesCsvPath: tessieDrivesPath,
         statesCsvPath: tessieStatesPath,
@@ -1239,10 +1502,10 @@ function initTessieImport() {
     }
 
     if (tessieProgressListener) { tessieProgressListener(); tessieProgressListener = null; }
-    closeBtn.textContent = 'Close';
+    closeBtn.title = 'Close';
 
     if (!result.success) {
-      alert(`Tessie import failed:\n${result.error}`);
+      alert(`Import failed:\n${result.error}`);
       confirmBtn.disabled = false;
       confirmBtn.textContent = 'Import';
       return;
@@ -1266,7 +1529,7 @@ function initTessieImport() {
     const lines = [];
     lines.push(result.canceled
       ? `Import canceled. ${fmt(result.imported)} drive(s) written before cancel.`
-      : `Imported ${fmt(result.imported)} Tessie drive(s).`);
+      : `Imported ${fmt(result.imported)} ${escapeHtml(svc().label)} drive(s).`);
     lines.push('');
     lines.push(`Drive count: ${fmt(beforeCount)} → ${fmt(afterCount)} (+${fmt(visibleAdded)})`);
     if (hiddenBySei > 0) {
@@ -1297,10 +1560,10 @@ function initTessieImport() {
       lines.push('Click OK to delete these hidden drives from the file (recoverable from .bak).');
       lines.push('Click Cancel to keep them stored (they will stay hidden as long as SEI covers the same time).');
       if (confirm(lines.join('\n'))) {
-        const cleanupResult = await window.electronAPI.tessieRemoveHidden({ driveDataPath: loadedFilePath });
+        const cleanupResult = await svc().removeHidden();
         if (cleanupResult.success) {
           await reloadDrivesAfterWrite();
-          alert(`Removed ${fmt(cleanupResult.removed)} hidden Tessie drive(s) from the file.`);
+          alert(`Removed ${fmt(cleanupResult.removed)} hidden imported drive(s) from the file.`);
         } else {
           alert(`Cleanup failed: ${cleanupResult.error}`);
         }
@@ -1328,7 +1591,7 @@ function initTessieImport() {
     const beforeCount = drives.length;
     const result = await window.electronAPI.tessieRemoveAll({ driveDataPath: loadedFilePath });
     if (!result.success) {
-      alert(`Failed to remove Tessie data:\n${result.error}`);
+      alert(`Failed to remove imported drives:\n${result.error}`);
       return;
     }
     await reloadDrivesAfterWrite();
@@ -1441,6 +1704,7 @@ async function repairGPS() {
     barEl.style.width = '0%';
 
     const etaEl = document.getElementById('repair-eta');
+    if (removeProgressListener) removeProgressListener();
     removeProgressListener = window.electronAPI.onRepairProgress(({ phase, current, total, etaSec }) => {
       phaseEl.textContent = phase;
       if (total > 0) {
@@ -1577,8 +1841,14 @@ function wireDriveTagInteractions(root, drive) {
     addBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const row = root.querySelector('#tag-input-row');
-      row.classList.toggle('hidden');
-      if (!row.classList.contains('hidden')) root.querySelector('#tag-input').focus();
+      const opened = !row.classList.toggle('hidden');
+      if (opened) {
+        root.querySelector('#tag-input').focus();
+        showTagSuggestions(drive, '');   // show all available tags as bubbles
+      } else {
+        const sug = root.querySelector('#tag-suggestions');
+        if (sug) { sug.classList.add('hidden'); sug.innerHTML = ''; }
+      }
     });
   }
   const tagInput = root.querySelector('#tag-input');
@@ -1663,7 +1933,7 @@ function renderSelectedDriveStats(drive) {
   } else if (isTessie) {
     details += `
       <div class="map-stats-chart-wrap">
-        <div class="map-stats-chart" style="background: conic-gradient(${gradientStops});">
+        <div class="map-stats-chart" style="--donut-bg: conic-gradient(${gradientStops});">
           <div class="map-stats-chart-center">
             <span class="map-stats-chart-val" style="color:${fsdScoreColor(fsdPct)}">${fsdScoreLabel(fsdPct)}</span>
             <span class="map-stats-chart-lbl" style="color:${fsdScoreColor(fsdPct)}">${fsdPct}%</span>
@@ -1682,7 +1952,7 @@ function renderSelectedDriveStats(drive) {
   } else if (slices.length > 0) {
     details += `
       <div class="map-stats-chart-wrap">
-        <div class="map-stats-chart" style="background: conic-gradient(${gradientStops});">
+        <div class="map-stats-chart" style="--donut-bg: conic-gradient(${gradientStops});">
           <div class="map-stats-chart-center">
             <span class="map-stats-chart-val" style="color:${fsdScoreColor(fsdPct)}">${fsdScoreLabel(fsdPct)}</span>
             <span class="map-stats-chart-lbl" style="color:${fsdScoreColor(fsdPct)}">${fsdPct}%</span>
@@ -1839,7 +2109,7 @@ function renderDriveStats(drives, meta) {
   if (slices.length > 0) {
     details += `
       <div class="map-stats-chart-wrap">
-        <div class="map-stats-chart" style="background: conic-gradient(${gradientStops});">
+        <div class="map-stats-chart" style="--donut-bg: conic-gradient(${gradientStops});">
           <div class="map-stats-chart-center">
             <span class="map-stats-chart-val" style="color:${fsdScoreColor(fsdPct)}">${fsdScoreLabel(fsdPct)}</span>
             <span class="map-stats-chart-lbl" style="color:${fsdScoreColor(fsdPct)}">${fsdPct}%</span>
@@ -1943,26 +2213,22 @@ function formatDuration(ms) {
   return h > 0 ? `${h}h ${m}m` : `${m} min`;
 }
 
-function assistedBadge(drive) {
+function assistedChip(drive) {
   const fsd      = drive.fsdPercent      ?? 0;
   const ap       = drive.autosteerPercent ?? 0;
   const tacc     = drive.taccPercent      ?? 0;
   const assisted = drive.assistedPercent  ?? 0;
-  if (!assisted) return null;
+  if (!assisted) return '';
   const modeCount = (fsd > 0) + (ap > 0) + (tacc > 0);
   let label, pct;
   if (modeCount > 1) { label = 'Assisted'; pct = assisted; }
   else if (fsd)  { label = 'FSD'; pct = fsd; }
   else if (ap)   { label = 'AP'; pct = ap; }
   else if (tacc) { label = 'TACC'; pct = tacc; }
-  else return null;
+  else return '';
 
-  let cls;
-  if (fsd >= 95) cls = 'badge-green';
-  else if (fsd >= 50) cls = 'badge-blue';
-  else cls = 'badge-gray';
-
-  return `<span class="drive-badge ${cls}">${pct}% ${label}</span>`;
+  const tone = fsd >= 95 ? 'drive-chip--green' : fsd >= 50 ? 'drive-chip--blue' : 'drive-chip--slate';
+  return `<span class="drive-chip ${tone}"><span class="material-icons">auto_awesome</span>${label} ${pct}%</span>`;
 }
 
 function buildDriveItem(drive) {
@@ -1973,11 +2239,11 @@ function buildDriveItem(drive) {
   const startTime = formatTime12h(drive.startTime);
   const endTime = formatTime12h(drive.endTime);
   const durStr = formatDuration(drive.durationMs);
-  const badge = assistedBadge(drive);
+  const fsdChip = assistedChip(drive);
 
   const disengagements = drive.fsdDisengagements ?? 0;
   const disengageHtml = disengagements > 0
-    ? `<div class="drive-disengagements">${disengagements} disengagement${disengagements !== 1 ? 's' : ''}</div>`
+    ? `<div class="drive-diseng"><span class="material-icons">warning</span>${disengagements} disengagement${disengagements !== 1 ? 's' : ''}</div>`
     : '';
 
   const tagPills = (drive.tags ?? []).map((t) =>
@@ -1988,17 +2254,33 @@ function buildDriveItem(drive) {
     ? '<span class="drive-source-chip">Tessie</span>'
     : '';
 
+  // Place name if already resolved, else GPS coords as a fallback until
+  // reverse-geocoding fills it in (see applyDriveLocations).
+  const startPlace = drive._startName || gpsLabel(drive, 'origin');
+  const endPlace = drive._endName || gpsLabel(drive, 'dest');
+
   item.innerHTML = `
-    <div class="drive-item-header">
-      <span class="drive-time-range">${startTime} — ${endTime}${sourceChip}</span>
-      ${badge ?? ''}
-    </div>
-    <div class="drive-item-stats">
-      <span>${distVal(drive.distanceMi)} ${distShort()}</span>
-      <span>${durStr}</span>
-      <span>${speedVal(drive.avgSpeedMph)} ${speedShort()}</span>
+    <div class="drive-journey">
+      <div class="journey-times">
+        <span class="jt-time">${startTime}</span>
+        <span class="journey-track"><span class="jt-pin jt-pin--origin"></span><span class="jt-dash"></span><span class="jt-pin jt-pin--dest"></span></span>
+        <span class="jt-time">${endTime}</span>
+      </div>
+      <div class="journey-labels">
+        <span class="jt-label">Departed${sourceChip}</span>
+        <span class="jt-label">Arrived</span>
+      </div>
+      <div class="journey-locs">
+        <span class="ep-place ep-place--start" data-ep="origin">${startPlace}</span>
+        <span class="ep-place ep-place--end" data-ep="dest">${endPlace}</span>
+      </div>
     </div>
     ${disengageHtml}
+    <div class="drive-chips">
+      <span class="drive-chip"><span class="material-icons">straighten</span>${distVal(drive.distanceMi)} ${distShort()}</span>
+      <span class="drive-chip"><span class="material-icons">schedule</span>${durStr}</span>
+      ${fsdChip}
+    </div>
     <div class="drive-item-tags">
       ${tagPills}
       <button class="tag-add-btn list-tag-add" title="Add tag">+</button>
@@ -2032,11 +2314,15 @@ function buildDriveItem(drive) {
   item.querySelector('.list-tag-add').addEventListener('click', (e) => {
     e.stopPropagation();
     const row = item.querySelector('.list-tag-input-row');
-    row.classList.toggle('hidden');
-    if (!row.classList.contains('hidden')) {
+    const opened = !row.classList.toggle('hidden');
+    if (opened) {
       const input = item.querySelector('.list-tag-input');
       input.value = '';
       input.focus();
+      showListTagSuggestions(drive, item, '');   // show all available tags as bubbles
+    } else {
+      const sug = item.querySelector('.list-tag-suggestions');
+      if (sug) { sug.classList.add('hidden'); sug.innerHTML = ''; }
     }
   });
 
@@ -2059,7 +2345,52 @@ function buildDriveItem(drive) {
   });
 
   item.addEventListener('click', () => selectDrive(drive));
+
+  // Location pins: resolve start/end place names into the location line under
+  // each Departed/Arrived header. Names cache on the drive object so re-renders
+  // apply instantly; the main process caches across sessions.
+  applyDriveLocations(item, drive);
+
   return item;
+}
+
+function endpointCoord(drive, which) {
+  // List drives only carry the downsampled overviewPoints (full points stay in
+  // the main process); the downsample preserves the exact first/last point.
+  const pts = Array.isArray(drive.points) && drive.points.length ? drive.points : drive.overviewPoints;
+  if (!Array.isArray(pts) || pts.length === 0) return null;
+  const p = which === 'origin' ? pts[0] : pts[pts.length - 1];
+  if (!p || typeof p[0] !== 'number' || typeof p[1] !== 'number') return null;
+  return { lat: p[0], lng: p[1] };
+}
+
+// GPS coords as a placeholder location until reverse-geocoding resolves a name.
+function gpsLabel(drive, role) {
+  const c = endpointCoord(drive, role);
+  return c ? `${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}` : '';
+}
+
+function setEndpointLabel(item, role, name) {
+  const place = item.querySelector(`.ep-place[data-ep="${role}"]`);
+  if (place) place.textContent = name;
+}
+
+function applyDriveLocations(item, drive) {
+  const api = window.electronAPI;
+  const resolve = (role) => {
+    const cacheKey = role === 'origin' ? '_startName' : '_endName';
+    if (drive[cacheKey]) { setEndpointLabel(item, role, drive[cacheKey]); return; }
+    const c = endpointCoord(drive, role);
+    if (!c || !api || !api.reverseGeocode) return;
+    api.reverseGeocode(c).then((res) => {
+      const name = res && res.label;
+      if (!name) return;
+      drive[cacheKey] = name;
+      if (item.isConnected) setEndpointLabel(item, role, name);
+    }).catch(() => {});
+  };
+  resolve('origin');
+  resolve('dest');
 }
 
 function showListTagSuggestions(drive, item, query) {
@@ -2067,7 +2398,7 @@ function showListTagSuggestions(drive, item, query) {
   const existing = drive.tags ?? [];
   const filtered = allTags.filter((t) => !existing.includes(t) && t.toLowerCase().includes(query.toLowerCase()));
 
-  if (filtered.length === 0 || !query) {
+  if (filtered.length === 0) {
     container.classList.add('hidden');
     container.innerHTML = '';
     return;
@@ -2624,6 +2955,27 @@ function buildMarkerHtml(bearing) {
   return `<img id="replay-arrow" src="../../assets/map-ui/arrow.png" style="width:${w}px;height:${h}px;transform:rotate(${bearing}deg);transition:transform 60ms linear;${shadow};" />`;
 }
 
+// Rebuild the live replay-marker icon for the current markerType/size, keeping
+// its position and current bearing. Called when the marker setting changes
+// mid-view so the arrow/car swaps on the map immediately (without this it only
+// updated the next time the marker was recreated, e.g. re-selecting a drive).
+function refreshReplayMarkerIcon() {
+  if (!replayMarker) return;
+  let bearing = 0;
+  const arrowEl = document.getElementById('replay-arrow');
+  if (arrowEl) {
+    const m = /rotate\((-?[0-9.]+)deg\)/.exec(arrowEl.style.transform || '');
+    if (m) bearing = parseFloat(m[1]) || 0;
+  }
+  const { w: mW, h: mH } = getMarkerSize();
+  replayMarker.setIcon(L.divIcon({
+    className: '',
+    html: buildMarkerHtml(bearing),
+    iconSize: [mW, mH],
+    iconAnchor: [mW / 2, mH / 2],
+  }));
+}
+
 function renderModel3Color(color) {
   return new Promise((resolve) => {
     const imgT = new Image();
@@ -2815,47 +3167,59 @@ function renderTagFilter() {
   });
 }
 
+function rebuildAllTagsFromDrives() {
+  const set = new Set();
+  for (const d of drives) for (const t of (d.tags ?? [])) set.add(t);
+  allTags = [...set].sort();
+}
+
 async function addTag(drive, tagName) {
   if (!loadedFilePath) return;
   const tags = [...(drive.tags ?? [])];
   if (tags.includes(tagName)) return;
   tags.push(tagName);
-
   drive.tags = tags;
-  await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags });
 
-  // Update global tag list
+  // Optimistic UI: render immediately so the pill appears without waiting for
+  // the (potentially large) drive-data.json write — set-drive-tags rewrites the
+  // whole file, which is what made this feel sluggish.
   if (!allTags.includes(tagName)) {
     allTags.push(tagName);
     allTags.sort();
     renderTagFilter();
   }
-
-  // Refresh UI
   renderDriveList(drives);
+
+  // Persist; roll back the UI only if the write fails.
+  const res = await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags });
+  if (res && res.success === false) {
+    drive.tags = (drive.tags ?? []).filter((t) => t !== tagName);
+    rebuildAllTagsFromDrives();
+    renderTagFilter();
+    renderDriveList(drives);
+    alert(`Couldn't save tag: ${res.error || 'write failed'}`);
+  }
 }
 
 async function removeTag(drive, tagName) {
   if (!loadedFilePath) return;
-  const tags = (drive.tags ?? []).filter((t) => t !== tagName);
+  const prev = [...(drive.tags ?? [])];
+  drive.tags = prev.filter((t) => t !== tagName);
 
-  drive.tags = tags;
-  await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags });
-
-  // Rebuild global tag list (tag may no longer be used by any drive)
-  const set = new Set();
-  for (const d of drives) {
-    for (const t of (d.tags ?? [])) set.add(t);
-  }
-  allTags = [...set].sort();
-
-  // If the removed tag was the active filter and no longer exists, clear filter
-  if (activeTagFilter === tagName && !allTags.includes(tagName)) {
-    activeTagFilter = '';
-  }
-
+  // Optimistic UI (see addTag).
+  rebuildAllTagsFromDrives();
+  if (activeTagFilter === tagName && !allTags.includes(tagName)) activeTagFilter = '';
   renderTagFilter();
   renderDriveList(drives);
+
+  const res = await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags: drive.tags });
+  if (res && res.success === false) {
+    drive.tags = prev;
+    rebuildAllTagsFromDrives();
+    renderTagFilter();
+    renderDriveList(drives);
+    alert(`Couldn't remove tag: ${res.error || 'write failed'}`);
+  }
 }
 
 function showTagSuggestions(drive, query) {
@@ -2863,7 +3227,7 @@ function showTagSuggestions(drive, query) {
   const existing = drive.tags ?? [];
   const filtered = allTags.filter((t) => !existing.includes(t) && t.toLowerCase().includes(query.toLowerCase()));
 
-  if (filtered.length === 0 || !query) {
+  if (filtered.length === 0) {
     container.classList.add('hidden');
     container.innerHTML = '';
     return;

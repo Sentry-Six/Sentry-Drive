@@ -1,11 +1,14 @@
 // Locked tests for the single-source drive-calc module.
 //
-// These pin the constants and formulas that MUST stay identical to the
-// canonical Rust implementation at Sentry-USB-Rusty/crates/drives. They run on
-// `npm test` and on `prebuild`/`publish`, so any accidental change to a
-// constant or to the haversine formula fails the build before it can ship.
+// These pin the constants and formulas so any accidental change fails the
+// build before it can ship (`npm test`, wired to `prebuild`/`publish`/CI).
 //
-// The haversine vectors are mirrored verbatim from the Rust crate's own tests:
+// Distance: the canonical function is geodesicM (Andoyer–Lambert on WGS-84).
+// Its golden values below were cross-validated against Vincenty (agreement
+// within 0.4 m over 4,100 km). haversineM is kept as the legacy spherical
+// reference mirroring Sentry-USB-Rusty — its vectors come verbatim from the
+// Rust crate's own tests — until the Rust side migrates per
+// docs/RUST-GEODESIC-MIGRATION.md:
 //   - grouper.rs   test_haversine_m             (NYC→LA ≈ 3,944 km, ±50 km)
 //   - grouper.rs   test_haversine_m_same_point  (identical point → 0)
 //   - aggregate.rs haversine_known_distance_sf_to_nyc (SF→NYC 4,000–4,200 km)
@@ -17,6 +20,8 @@ import calc from './drive-calc.cjs';
 test('constants match the canonical Rust crate', () => {
   // Geodesy + unit conversions
   assert.equal(calc.R_EARTH_M, 6371000.0);
+  assert.equal(calc.WGS84_A, 6378137.0);
+  assert.equal(calc.WGS84_F, 1 / 298.257223563);
   assert.equal(calc.M_PER_MILE, 1609.344);
   assert.equal(calc.M_PER_KM, 1000);
   assert.equal(calc.MI_TO_KM, 1.609344);
@@ -58,7 +63,52 @@ test('module is frozen — cannot be mutated at runtime', () => {
   }, TypeError);
 });
 
-// ─── Haversine golden vectors (mirrored from the Rust crate's tests) ──────────
+// ─── geodesicM golden vectors (canonical distance — WGS-84 Andoyer–Lambert) ───
+// Golden values computed from this implementation and cross-validated against
+// an independent Vincenty inverse (|Δ| ≤ 0.4 m on the long pairs, ≤ 1 mm on the
+// short ones). Tolerances allow sub-metre libm variation across platforms.
+
+test('geodesicM: NYC → LA golden value (Vincenty: 3,944,422.232 m)', () => {
+  const d = calc.geodesicM(40.7128, -74.006, 34.0522, -118.2437);
+  assert.ok(Math.abs(d - 3_944_422.179) < 1, `expected 3,944,422.179 ±1 m, got ${d}`);
+});
+
+test('geodesicM: SF → NYC golden value (Vincenty: 4,139,145.472 m)', () => {
+  const d = calc.geodesicM(37.7749, -122.4194, 40.7128, -74.006);
+  assert.ok(Math.abs(d - 4_139_145.867) < 1, `expected 4,139,145.867 ±1 m, got ${d}`);
+});
+
+test('geodesicM: ~30 m one-second GPS segment golden value', () => {
+  const d = calc.geodesicM(37.7749, -122.4194, 37.77517, -122.4194);
+  assert.ok(Math.abs(d - 29.968) < 0.01, `expected 29.968 ±0.01 m, got ${d}`);
+});
+
+test('geodesicM: identical point → exactly 0', () => {
+  assert.equal(calc.geodesicM(37.7749, -122.4194, 37.7749, -122.4194), 0);
+});
+
+test('geodesicM is symmetric', () => {
+  const a = calc.geodesicM(40.7128, -74.006, 34.0522, -118.2437);
+  const b = calc.geodesicM(34.0522, -118.2437, 40.7128, -74.006);
+  assert.equal(a, b);
+});
+
+test('geodesicM stays within 0.5% of haversineM (sanity tie between the two)', () => {
+  const pairs = [
+    [40.7128, -74.006, 34.0522, -118.2437],
+    [37.7749, -122.4194, 40.7128, -74.006],
+    [37.7749, -122.4194, 37.7839, -122.4194],
+    [0.0, 10.0, 0.0, 11.0],
+    [60.0, 25.0, 61.0, 25.0],
+  ];
+  for (const [a1, o1, a2, o2] of pairs) {
+    const g = calc.geodesicM(a1, o1, a2, o2);
+    const h = calc.haversineM(a1, o1, a2, o2);
+    assert.ok(Math.abs(g - h) / h < 0.005, `geodesic ${g} vs haversine ${h}`);
+  }
+});
+
+// ─── Haversine golden vectors (legacy spherical — Rust parity reference) ──────
 
 test('haversineM: NYC → LA ≈ 3,944 km (grouper.rs:test_haversine_m)', () => {
   const d = calc.haversineM(40.7128, -74.006, 34.0522, -118.2437);

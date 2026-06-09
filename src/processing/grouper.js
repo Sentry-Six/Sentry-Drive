@@ -3,7 +3,7 @@
 
 import { GEAR_PARK, AUTOPILOT_OFF, AUTOPILOT_FSD, AUTOPILOT_AUTOSTEER, AUTOPILOT_TACC } from "./extract.js";
 import {
-  haversineM,
+  geodesicM,
   round2,
   DRIVE_GAP_MS,
   PARK_GAP_SECONDS,
@@ -50,9 +50,11 @@ function parseFileTimestamp(filePath) {
   return isNaN(t.getTime()) ? null : t;
 }
 
-// haversineM, round2, and every drive-calc constant come from
-// ../shared/drive-calc.cjs (imported above) — the single source of truth that
-// mirrors Sentry-USB-Rusty/crates/drives.
+// geodesicM (WGS-84 ellipsoidal distance), round2, and every drive-calc
+// constant come from ../shared/drive-calc.cjs (imported above) — the single
+// source of truth. Grouping thresholds still mirror Sentry-USB-Rusty; the
+// distance formula intentionally leads Rust until the migration in
+// docs/RUST-GEODESIC-MIGRATION.md lands there.
 
 /**
  * True when a route lives under a top-level SavedClips/ or SentryClips/ event
@@ -362,7 +364,7 @@ function buildDriveStats(clips, idx) {
   for (let i = 1; i < allPoints.length; i++) {
     const p0 = allPoints[i - 1];
     const p1 = allPoints[i];
-    const d = haversineM(p0.lat, p0.lng, p1.lat, p1.lng);
+    const d = geodesicM(p0.lat, p0.lng, p1.lat, p1.lng);
     const dt = (p1.timeMs - p0.timeMs) / 1000.0;
     totalDistanceM += d;
 
@@ -401,7 +403,7 @@ function buildDriveStats(clips, idx) {
     if (hasSEISpeeds) {
       speed = p.seiSpeed;
     } else if (i > 0) {
-      const d = haversineM(allPoints[i - 1].lat, allPoints[i - 1].lng, p.lat, p.lng);
+      const d = geodesicM(allPoints[i - 1].lat, allPoints[i - 1].lng, p.lat, p.lng);
       const dt = (p.timeMs - allPoints[i - 1].timeMs) / 1000.0;
       speed = dt > 0 ? Math.min(d / dt, DERIVED_SPEED_MAX_MPS) : 0;
     } else {
@@ -435,7 +437,7 @@ function buildDriveStats(clips, idx) {
       const prev = allPoints[i - 1];
       const cur = allPoints[i];
       const dt = cur.timeMs - prev.timeMs;
-      const d = haversineM(prev.lat, prev.lng, cur.lat, cur.lng);
+      const d = geodesicM(prev.lat, prev.lng, cur.lat, cur.lng);
 
       const prevFSD = prev.apState === AUTOPILOT_FSD;
       const curFSD  = cur.apState  === AUTOPILOT_FSD;
@@ -592,7 +594,7 @@ function filterGPSOutliers(points) {
   // (MAX_FROM_MEDIAN_M, imported from the shared single-source calc module).
   let mw = 0;
   for (let i = 0; i < points.length; i++) {
-    if (haversineM(points[i].lat, points[i].lng, medLat, medLng) <= MAX_FROM_MEDIAN_M) points[mw++] = points[i];
+    if (geodesicM(points[i].lat, points[i].lng, medLat, medLng) <= MAX_FROM_MEDIAN_M) points[mw++] = points[i];
   }
   points.length = mw;
 
@@ -605,10 +607,10 @@ function filterGPSOutliers(points) {
     const next = i < points.length - 1 ? points[i + 1] : null;
 
     const farFromPrev = prev
-      ? haversineM(prev.lat, prev.lng, points[i].lat, points[i].lng) > MAX_JUMP_M
+      ? geodesicM(prev.lat, prev.lng, points[i].lat, points[i].lng) > MAX_JUMP_M
       : false;
     const farFromNext = next
-      ? haversineM(points[i].lat, points[i].lng, next.lat, next.lng) > MAX_JUMP_M
+      ? geodesicM(points[i].lat, points[i].lng, next.lat, next.lng) > MAX_JUMP_M
       : false;
 
     if ((prev && next && farFromPrev && farFromNext) ||
