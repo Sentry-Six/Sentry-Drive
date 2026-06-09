@@ -1,31 +1,61 @@
 /* ── Variables ──────────────────────────────────────────────────────────── */
+/* Palette aligned to the Sentry USB (Rust) UI scheme — dark slate surfaces,
+   glass cards, Inter type — with the accent kept on Sentry Drive's blue
+   (the USB build remaps its blue tokens to green; here we keep real blue). */
 :root {
-  --bg:          #0a0a0f;
-  --panel-bg:    #111827;
-  --tab-bar-bg:  #0f1629;
-  --border:      #1e293b;
-  --border-light:#334155;
+  /* Surfaces — slate scale, darkest → raised */
+  --bg:          #07090c;
+  --panel-bg:    #0b0e13;
+  --surface:     #10141b;
+  --surface-2:   #161b24;
+  --tab-bar-bg:  #07090c;
+  --border:      #1e242f;
+  --border-light:#2a3140;
+
+  /* Accent — Sentry Drive blue */
   --accent:      #3b82f6;
+  --accent-hover:#60a5fa;
   --accent-dim:  #2563eb;
-  --text:        #f1f5f9;
-  --text-muted:  #94a3b8;
-  --text-dim:    #475569;
-  --input-bg:    #0f172a;
-  --log-bg:      #0a0f1a;
-  --drive-bg:    #0f172a;
-  --drive-hover: #1e293b;
-  --drive-sel:   #0c1a2e;
+
+  /* Text — slate */
+  --text:        #e6e9ef;
+  --text-muted:  #b8bfcf;
+  --text-dim:    #7a8294;
+
+  --input-bg:    #0b0e13;
+  --log-bg:      #07090c;
+  --drive-bg:    #10141b;
+  --drive-hover: #161b24;
+  --drive-sel:   rgba(59, 130, 246, 0.1);
   --blue:        #3b82f6;
   --blue-light:  #60a5fa;
   --fsd-blue:    #3b82f6;
   --fsd-white:   rgba(180, 210, 240, 0.75);
-  --success:     #1de9a0;
-  --danger:      #ff4455;
-  --warn:        #ffaa00;
+  --success:     #34d399;
+  --danger:      #f87171;
+  --warn:        #fbbf24;
 
-  --radius:  6px;
-  --radius-sm: 4px;
-  --font-mono: 'Consolas', 'Menlo', 'Monaco', monospace;
+  /* ── Liquid Glass surface (Apple-inspired, from Sentry USB) ──────────────
+     Translucent frosted material: a faint white gradient body, a bright
+     specular top rim, a deep float shadow, and heavy backdrop blur+vibrancy
+     on the surfaces that have real content behind them (modals over the map,
+     stat tiles). Tiles sit over an ambient accent glow (#left-panel / the map)
+     so the glass picks up colour to refract. */
+  --glass-blur:    blur(20px) saturate(180%);
+  --glass-border:  rgba(255, 255, 255, 0.12);
+  /* Map overlays sit over the (often bright) map, so they keep a dark tint
+     under the white sheen for text legibility, then blur the map behind. */
+  --map-glass-bg:  linear-gradient(150deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02) 58%, rgba(255, 255, 255, 0.05)), rgba(11, 14, 19, 0.66);
+  --card-bg:       linear-gradient(150deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.03) 55%, rgba(255, 255, 255, 0.05));
+  --card-hover-bg: linear-gradient(150deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.05) 55%, rgba(255, 255, 255, 0.085));
+  --card-shadow:   inset 0 1px 0 rgba(255, 255, 255, 0.22), inset 0 -1px 1px rgba(255, 255, 255, 0.05), 0 12px 34px rgba(0, 0, 0, 0.45);
+  --modal-shadow:  inset 0 1px 0 rgba(255, 255, 255, 0.28), inset 0 -1px 1px rgba(255, 255, 255, 0.06), 0 28px 70px -12px rgba(0, 0, 0, 0.7), 0 8px 24px rgba(0, 0, 0, 0.5);
+
+  --radius:    14px;
+  --radius-sm: 10px;
+  --radius-lg: 20px;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', 'Menlo', 'Monaco', monospace;
 }
 
 /* Material Symbols (loaded from Google Fonts) reused under the existing
@@ -56,8 +86,9 @@ html, body {
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
-  font-family: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-family: var(--font-sans);
   font-size: 13px;
+  font-feature-settings: 'ss01', 'cv11';
   -webkit-font-smoothing: antialiased;
 }
 
@@ -71,13 +102,22 @@ html, body {
 
 /* ── Left Panel ─────────────────────────────────────────────────────────── */
 #left-panel {
-  width: 300px;
-  min-width: 260px;
-  max-width: 360px;
+  /* 330px (was 300) so the distance/time/FSD chips always fit one row. */
+  width: 330px;
+  min-width: 300px;
+  max-width: 380px;
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--panel-bg);
+  /* Ambient glow spans the full panel — through the (transparent) app-title
+     header at the top and the footer at the bottom. */
+  background:
+    radial-gradient(660px 480px at 24% -8%, rgba(59, 130, 246, 0.30), transparent 70%),
+    radial-gradient(560px 440px at 112% 4%, rgba(139, 92, 246, 0.22), transparent 66%),
+    radial-gradient(700px 560px at 50% 48%, rgba(59, 130, 246, 0.07), transparent 70%),
+    radial-gradient(620px 500px at 12% 112%, rgba(99, 102, 241, 0.26), transparent 68%),
+    radial-gradient(540px 460px at 106% 108%, rgba(59, 130, 246, 0.18), transparent 66%),
+    var(--panel-bg);
   border-right: 1px solid var(--border);
   flex-shrink: 0;
   overflow: hidden;
@@ -89,20 +129,19 @@ html, body {
   align-items: center;
   gap: 10px;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--tab-bar-bg);
+  background: transparent;
   flex-shrink: 0;
 }
 
 #app-logo {
-  width: 30px;
-  height: 30px;
-  background: var(--blue);
-  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  background: rgba(59, 130, 246, 0.18);
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--blue-light);
   flex-shrink: 0;
 }
 #app-logo .material-icons {
@@ -110,41 +149,46 @@ html, body {
 }
 
 #app-title {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 600;
   color: var(--text);
-  letter-spacing: 0.02em;
+  letter-spacing: -0.02em;
 }
 
-/* ── Tab Bar ────────────────────────────────────────────────────────────── */
+/* ── Tab Bar (segmented pill — USB scheme) ─────────────────────────────── */
 #tab-bar {
   display: flex;
-  border-bottom: 1px solid var(--border);
-  background: var(--tab-bar-bg);
+  gap: 2px;
+  margin: 12px 14px 4px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
   flex-shrink: 0;
 }
 
 .tab-btn {
   flex: 1;
-  padding: 10px 8px;
+  padding: 8px 12px;
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-muted);
+  border-radius: 9px;
+  color: var(--text-dim);
   cursor: pointer;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  transition: color 0.15s, border-color 0.15s;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  transition: color 0.2s ease, background 0.2s ease;
   outline: none;
 }
 
-.tab-btn:hover { color: var(--text); }
+.tab-btn:hover { color: var(--text-muted); background: rgba(255, 255, 255, 0.06); }
 
 .tab-btn.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+  color: var(--blue-light);
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 2px 10px rgba(0, 0, 0, 0.25);
 }
 
 /* ── Tab Panes ──────────────────────────────────────────────────────────── */
@@ -246,18 +290,18 @@ html, body {
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-secondary {
-  background: #1e3a5f;
+  background: rgba(59, 130, 246, 0.14);
   color: var(--blue-light);
 }
-.btn-secondary:hover:not(:disabled) { background: #264a75; }
+.btn-secondary:hover:not(:disabled) { background: rgba(59, 130, 246, 0.22); }
 
 .btn-danger {
-  background: #0e1420;
+  background: var(--input-bg);
   color: var(--text-muted);
   border: 1px solid var(--border-light);
 }
 .btn-danger:hover:not(:disabled) {
-  background: #180a10;
+  background: rgba(248, 113, 113, 0.08);
   color: var(--danger);
   border-color: var(--danger);
 }
@@ -405,10 +449,11 @@ html, body {
 }
 
 .stat {
-  background: var(--drive-bg);
+  background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 8px 10px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -439,14 +484,19 @@ html, body {
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
+  padding-bottom: 8px;
 }
 
 .drive-date-header {
   position: sticky;
   top: 0;
   z-index: 10;
-  background: rgba(15, 23, 42, 0.92);
-  padding: 6px 12px;
+  /* Translucent + blur so the panel glow flows through while still masking
+     cards that scroll beneath it. */
+  background: rgba(11, 14, 19, 0.72);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  padding: 10px 4px 6px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -454,49 +504,105 @@ html, body {
   color: var(--text-dim);
 }
 
+/* ── Drive cards (Sentry USB Rusty style, adapted to the narrow panel) ── */
 .drive-item {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-  padding: 10px 12px;
-  cursor: pointer;
-  transition: background 0.12s;
-  flex-shrink: 0;
-  scroll-margin-top: 32px;
-}
-
-.drive-item:hover {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.drive-item.selected {
-  background: rgba(59, 130, 246, 0.1);
-  border-left: 2px solid #3b82f6;
-}
-
-.drive-item-header {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 4px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  background: var(--card-bg);
+  box-shadow: var(--card-shadow);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  flex-shrink: 0;
+  scroll-margin-top: 44px;
+}
+.drive-item:hover {
+  border-color: rgba(96, 165, 250, 0.45);
+  background: var(--card-hover-bg);
+}
+.drive-item.selected {
+  border-color: rgba(96, 165, 250, 0.55);
+  background: linear-gradient(150deg, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.06) 60%, rgba(59, 130, 246, 0.1));
 }
 
-.drive-time-range {
-  font-size: 14px;
+/* Horizontal journey — times (start ─┄─ end) across the top, then the
+   Departed/Arrived labels, then the location names, each left ↔ right. */
+.drive-journey { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+
+.journey-times { display: flex; align-items: center; gap: 8px; }
+.jt-time {
+  flex: 0 0 auto;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
 }
+.journey-track { flex: 1 1 auto; min-width: 16px; display: flex; align-items: center; gap: 5px; }
+.jt-pin { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; }
+.jt-pin--origin { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.3); }
+.jt-pin--dest { background: var(--blue-light); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3); }
+.jt-dash { flex: 1 1 auto; height: 0; border-top: 1px dashed rgba(255, 255, 255, 0.22); }
 
-.drive-item-stats {
-  font-size: 11px;
-  color: var(--text-dim);
+.journey-labels {
   display: flex;
-  gap: 12px;
-}
-
-.drive-disengagements {
+  justify-content: space-between;
+  gap: 10px;
   font-size: 11px;
-  color: rgba(248, 113, 113, 0.7);
-  margin-top: 2px;
+  font-weight: 600;
+  color: var(--text-dim);
 }
+.journey-labels .jt-label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+
+.journey-locs { display: flex; justify-content: space-between; gap: 12px; }
+.journey-locs .ep-place {
+  flex: 0 1 auto;
+  max-width: 62%;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.journey-locs .ep-place--end { text-align: right; }
+
+/* Disengagements — its own line between the locations and the drive-info chips. */
+.drive-diseng {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(248, 113, 113, 0.9);
+}
+.drive-diseng .material-icons { font-size: 13px; }
+
+/* Stat chips — compact so all three (incl. FSD) fit one baseline-aligned row */
+.drive-chips { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 5px; }
+.drive-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+}
+.drive-chip .material-icons { font-size: 12px; }
+.drive-chip--green { background: rgba(16, 185, 129, 0.15); color: #34d399; border-color: rgba(16, 185, 129, 0.22); }
+.drive-chip--blue  { background: rgba(59, 130, 246, 0.15); color: var(--blue-light); border-color: rgba(59, 130, 246, 0.22); }
+.drive-chip--slate { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); border-color: rgba(255, 255, 255, 0.1); }
 
 .drive-badge {
   display: inline-block;
@@ -509,7 +615,7 @@ html, body {
 }
 .badge-green { background: rgba(16, 185, 129, 0.15); color: #34d399; }
 .badge-blue  { background: rgba(59, 130, 246, 0.15); color: var(--blue-light); }
-.badge-gray  { background: #334155; color: var(--text-muted); }
+.badge-gray  { background: rgba(255, 255, 255, 0.06); color: var(--text-muted); }
 
 .empty-state {
   color: var(--text-muted);
@@ -586,8 +692,8 @@ html, body {
 .drive-item-tags {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
-  margin-top: 5px;
 }
 
 /* Tag filter bar */
@@ -647,12 +753,16 @@ html, body {
 
 .tag-input-row,
 .list-tag-input-row {
-  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
   margin-top: 6px;
 }
 
 .tag-input {
-  width: 100%;
+  flex: 0 1 160px;
+  width: auto;
   padding: 5px 8px;
   background: var(--input-bg);
   border: 1px solid var(--border-light);
@@ -665,30 +775,28 @@ html, body {
 .tag-input:focus { border-color: var(--accent); }
 .tag-input::placeholder { color: var(--text-dim); }
 
+/* Suggestions render as inline dotted-outline bubbles (matching the dashed
+   "+" add button), not a dropdown — shown next to the input on "+" click. */
 .tag-suggestions {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 10;
-  background: var(--panel-bg);
-  border: 1px solid var(--border-light);
-  border-top: none;
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-  max-height: 120px;
-  overflow-y: auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
 }
 
 .tag-suggestion {
-  padding: 5px 8px;
+  border: 1px dashed var(--text-dim);
+  border-radius: 10px;
+  padding: 2px 9px;
   font-size: 11px;
   color: var(--text-muted);
+  background: transparent;
   cursor: pointer;
-  transition: background 0.1s;
+  transition: border-color 0.15s, color 0.15s;
 }
 .tag-suggestion:hover {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--blue-light);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* ── Map Container ──────────────────────────────────────────────────────── */
@@ -709,8 +817,8 @@ html, body {
   top: 14px;
   left: 14px;
   z-index: 1000;
-  background: rgba(8, 8, 16, 0.75);
-  border: 1px solid var(--border-light);
+  background: var(--map-glass-bg);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius);
   padding: 10px;
   color: var(--text);
@@ -721,24 +829,24 @@ html, body {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--card-shadow);
   transition: background 0.15s, border-color 0.15s;
   outline: none;
 }
 #btn-back-overview:hover {
-  background: rgba(8, 8, 16, 0.9);
-  border-color: var(--accent);
+  border-color: rgba(96, 165, 250, 0.5);
 }
 
 /* ── Leaflet Layer Control (dark theme override) ───────────────────────── */
 .leaflet-control-layers {
-  background: rgba(8, 8, 16, 0.75) !important;
-  border: 1px solid var(--border-light) !important;
-  border-radius: 8px !important;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45) !important;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: var(--map-glass-bg) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 14px !important;
+  box-shadow: var(--card-shadow) !important;
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   color: var(--text) !important;
 }
 .leaflet-control-layers-toggle {
@@ -796,19 +904,20 @@ html, body {
 
 /* ── Map Stats Overlay ──────────────────────────────────────────────────── */
 #map-stats {
-  background: rgba(8, 8, 16, 0.75);
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: var(--map-glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--card-shadow);
   pointer-events: auto;
   cursor: pointer;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: background 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
-#map-stats:hover { background: rgba(12, 12, 24, 0.85); }
+#map-stats:hover { border-color: rgba(96, 165, 250, 0.35); }
 
 .map-stats-header {
   display: flex;
@@ -882,7 +991,7 @@ html, body {
 .map-stats-section-header {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
   margin-bottom: 10px;
 }
 
@@ -923,13 +1032,26 @@ html, body {
   flex-shrink: 0;
   box-shadow: 0 0 0 1px var(--border-light);
 }
+/* The ring itself: the conic gradient (--donut-bg, set inline by the
+   renderer) lives on a pseudo-element with a radial mask punching a truly
+   transparent 24px-thick ring. Masking the pseudo — not .map-stats-chart —
+   keeps the center label unclipped. */
+.map-stats-chart::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--donut-bg);
+  -webkit-mask: radial-gradient(closest-side, transparent calc(100% - 24.5px), #000 calc(100% - 23.5px));
+  mask: radial-gradient(closest-side, transparent calc(100% - 24.5px), #000 calc(100% - 23.5px));
+}
+/* Inner hairline rim around the hole */
 .map-stats-chart::before {
   content: '';
   position: absolute;
   inset: 24px;
   border-radius: 50%;
-  background: rgba(8, 8, 16, 0.95);
-  border: 1px solid var(--border-light);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 .map-stats-chart-center {
   position: absolute;
@@ -1048,14 +1170,15 @@ html, body {
 
 /* ── Replay Controls ───────────────────────────────────────────────────── */
 #replay-bar {
-  background: rgba(8, 8, 16, 0.75);
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
+  background: var(--map-glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
   padding: 10px 14px;
   min-width: 640px;
   max-width: 100%;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--card-shadow);
   pointer-events: auto;
   flex-shrink: 0;
 }
@@ -1115,7 +1238,7 @@ html, body {
   white-space: nowrap;
   pointer-events: none;
   padding: 2px 7px;
-  background: rgba(8, 8, 16, 0.9);
+  background: rgba(7, 9, 12, 0.9);
   border: 1px solid var(--border-light);
   border-radius: 4px;
 }
@@ -1185,14 +1308,16 @@ html, body {
   bottom: 30px;
   right: 14px;
   z-index: 1000;
-  background: rgba(8, 8, 16, 0.88);
-  border: 1px solid var(--border-light);
+  background: var(--map-glass-bg);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
-  padding: 7px 10px;
+  padding: 8px 11px;
   display: flex;
   flex-direction: column;
   gap: 5px;
-  backdrop-filter: blur(8px);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--card-shadow);
   pointer-events: none;
 }
 
@@ -1220,8 +1345,8 @@ html, body {
   align-items: center;
   justify-content: space-between;
   padding: 8px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--tab-bar-bg);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
   flex-shrink: 0;
 }
 
@@ -1293,28 +1418,29 @@ html, body {
 
 #settings-modal {
   width: 380px;
-  max-height: 80vh;
-  background: var(--panel-bg);
-  border: 1px solid var(--border-light);
-  border-radius: 10px;
+  max-height: 86vh;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--modal-shadow);
 }
 
 .settings-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 16px 16px 6px;
+  flex-shrink: 0;
 }
 
 .settings-title {
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 19px;
+  font-weight: 600;
   color: var(--text);
+  letter-spacing: -0.02em;
 }
 
 .settings-close {
@@ -1330,29 +1456,227 @@ html, body {
 }
 .settings-close:hover { color: var(--text); }
 
-.settings-body {
-  padding: 20px 16px;
-  overflow-y: auto;
+/* ── Settings tabs (segmented pill, scoped to the settings modal) ──────── */
+.settings-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 2px 14px 0;
+  padding: 3px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  flex-shrink: 0;
 }
 
-.settings-section {
+.settings-tab-btn {
+  flex: 1;
+  padding: 7px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 9px;
+  color: var(--text-dim);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.2s ease, background 0.2s ease;
+  outline: none;
+}
+.settings-tab-btn:hover { color: var(--text-muted); background: var(--surface); }
+.settings-tab-btn.active {
+  color: var(--blue-light);
+  background: var(--surface-2);
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.settings-body {
+  padding: 14px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  scrollbar-gutter: stable;
+  display: grid;
+}
+
+/* Panes share one grid cell so the body sizes to the TALLEST tab — the modal
+   stays a constant size no matter which tab is active. Inactive panes stay in
+   the layout (visibility:hidden) so they keep reserving that height. */
+.settings-pane {
+  grid-area: 1 / 1;
   display: flex;
   flex-direction: column;
+  gap: 12px;
+  visibility: hidden;
+  pointer-events: none;
+}
+.settings-pane.active { visibility: visible; pointer-events: auto; }
+
+/* Integrations empty state */
+.settings-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
   gap: 10px;
+  padding: 40px 20px 44px;
+}
+.settings-empty-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-empty-icon .material-icons { font-size: 26px; }
+.settings-empty-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.settings-empty-sub { font-size: 12px; color: var(--text-dim); line-height: 1.5; max-width: 280px; }
+
+/* ── Integration cards (Integrations tab) ──────────────────────────────── */
+.integration-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.integration-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.pill-connected { background: rgba(52, 211, 153, 0.15); color: var(--success); }
+.pill-idle      { background: rgba(122, 130, 148, 0.15); color: var(--text-muted); }
+.pill-soon      { background: rgba(251, 191, 36, 0.15); color: var(--warn); }
+.integration-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+/* Inline connect / auth on integration cards */
+.integration-connect { display: flex; flex-direction: column; gap: 8px; }
+.integration-connect .input-row { gap: 6px; }
+.integration-connect .integration-connect-btn {
+  align-self: stretch;
+  flex-shrink: 0;
+  padding: 7px 16px;
+}
+.integration-link {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--blue-light);
+  text-decoration: none;
+  align-self: flex-start;
+}
+.integration-link:hover { text-decoration: underline; }
+.integration-error {
+  font-size: 11px;
+  color: var(--danger);
+  background: rgba(248, 113, 113, 0.08);
+  border: 1px solid rgba(248, 113, 113, 0.22);
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+}
+.integration-connected { display: flex; flex-direction: column; gap: 10px; }
+.integration-token-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.integration-token-icon { font-size: 16px; color: var(--text-dim); }
+.integration-token-mask {
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+.integration-disconnect {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+  outline: none;
+}
+.integration-disconnect:hover { text-decoration: underline; }
+
+/* ── Settings sections as StatusTile-style cards ───────────────────────── */
+.settings-section {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+
+.settings-section-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.settings-section-icon {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-section-icon .material-icons { font-size: 17px; }
+
+/* Brand logo in the icon slot (integration cards) — the PNG carries its own
+   background, so no halo tint; a faint inset ring keeps the edge crisp on the
+   dark card (esp. the black Tessie tile). */
+.settings-section-icon.is-logo {
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.settings-section-icon.is-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .settings-section-title {
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--text);
+  color: var(--text-dim);
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.settings-divider {
-  height: 1px;
-  background: var(--border);
+.settings-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
 }
+
+/* Icon halos (StatusTile) — translucent tint + matching glyph colour */
+.halo-accent { background: rgba(59, 130, 246, 0.15); color: var(--blue-light); }
+.halo-amber  { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+.halo-red    { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+.halo-sky    { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
+.halo-purple { background: rgba(192, 132, 252, 0.15); color: #c084fc; }
+.halo-slate  { background: rgba(122, 130, 148, 0.12); color: var(--text-muted); }
 
 .settings-version-info {
   display: flex;
@@ -1380,7 +1704,6 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: 8px;
   padding: 6px 10px;
   border: 1px solid rgba(34, 204, 85, 0.25);
   border-radius: var(--radius-sm);
@@ -1420,10 +1743,7 @@ html, body {
   justify-content: space-between;
   gap: 12px;
   cursor: pointer;
-  margin-top: 8px;
 }
-.settings-checkbox-row:first-child,
-.settings-section > .settings-row:first-of-type { margin-top: 0; }
 
 .settings-checkbox {
   appearance: none;
@@ -1468,16 +1788,18 @@ html, body {
   font-size: 11px;
   color: var(--warn);
   padding: 6px 10px;
-  background: rgba(255, 170, 0, 0.08);
+  background: rgba(251, 191, 36, 0.08);
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(255, 170, 0, 0.15);
+  border: 1px solid rgba(251, 191, 36, 0.15);
 }
 
 /* ── Reprocess-All / Check Drives / Revert Confirm Modals ─────────────── */
 #reprocess-overlay,
 #check-drives-overlay,
 #revert-overlay,
-#remove-drive-overlay {
+#remove-drive-overlay,
+#tessie-overlay,
+#remove-tessie-overlay {
   position: fixed;
   inset: 0;
   z-index: 9500;
@@ -1491,22 +1813,41 @@ html, body {
 
 .reprocess-modal {
   width: 360px;
-  background: var(--panel-bg);
-  border: 1px solid var(--border-light);
-  border-radius: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
   padding: 28px 24px 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--modal-shadow);
   text-align: center;
 }
 
-.remove-drive-modal-icon {
-  background: rgba(255, 68, 85, 0.12);
-  color: var(--danger);
+/* Import Drives — a floating window with the settings-modal chrome
+   (header + top-right ×) instead of a centered confirm dialog. */
+#tessie-modal {
+  width: 400px;
+  max-width: calc(100vw - 48px);
+  max-height: 86vh;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--modal-shadow);
 }
+.tessie-modal-body {
+  padding: 12px 16px 16px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  scrollbar-gutter: stable;
+}
+#tessie-modal .tessie-mode-tabs { margin-top: 0; }
+#tessie-modal .reprocess-modal-actions { margin-top: 14px; }
 
 .drive-remove-btn {
   display: none;
@@ -1528,12 +1869,10 @@ html, body {
 .reprocess-modal-icon {
   width: 48px;
   height: 48px;
-  border-radius: 10px;
-  background: rgba(255, 170, 0, 0.12);
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--warn);
 }
 .reprocess-modal-icon .material-icons {
   font-size: 26px;
@@ -1558,8 +1897,8 @@ html, body {
   font-weight: 700;
   text-align: center;
   color: var(--danger);
-  background: rgba(255, 68, 85, 0.1);
-  border: 1px solid rgba(255, 68, 85, 0.3);
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid rgba(248, 113, 113, 0.3);
   border-radius: var(--radius-sm);
   padding: 7px 10px;
 }
@@ -1589,15 +1928,15 @@ html, body {
   width: 420px;
   max-width: calc(100vw - 48px);
   max-height: calc(100vh - 80px);
-  background: var(--panel-bg);
-  border: 1px solid var(--border-light);
-  border-radius: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
   padding: 28px 24px 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--modal-shadow);
   text-align: center;
 }
 
@@ -1616,12 +1955,10 @@ html, body {
 .update-modal-icon {
   width: 48px;
   height: 48px;
-  border-radius: 10px;
-  background: rgba(29, 233, 160, 0.12);
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--success);
 }
 .update-modal-icon .material-icons {
   font-size: 26px;
@@ -1709,7 +2046,7 @@ html, body {
   color: var(--text);
   font-size: 12px;
   font-weight: 600;
-  font-family: var(--font);
+  font-family: var(--font-sans);
   padding: 4px 8px;
   cursor: pointer;
 }
@@ -1729,11 +2066,11 @@ html, body {
 #car-color-popup {
   position: fixed;
   z-index: 9100;
-  background: var(--panel-bg);
-  border: 1px solid var(--border-light);
-  border-radius: 10px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
   padding: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--modal-shadow);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1815,14 +2152,14 @@ html, body {
   width: 480px;
   max-width: calc(100vw - 48px);
   max-height: calc(100vh - 80px);
-  background: var(--panel-bg);
-  border: 1px solid var(--border-light);
-  border-radius: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
   padding: 24px 24px 20px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--modal-shadow);
   overflow: hidden;
 }
 
@@ -1832,8 +2169,13 @@ html, body {
   gap: 12px;
 }
 
-.changelog-modal-header svg {
-  color: var(--blue);
+.changelog-modal-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
@@ -1881,8 +2223,8 @@ html, body {
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
-  background: rgba(29, 233, 160, 0.2);
-  border: 1px solid rgba(29, 233, 160, 0.3);
+  background: rgba(52, 211, 153, 0.2);
+  border: 1px solid rgba(52, 211, 153, 0.3);
   border-radius: 6px;
   font-size: 12px;
   font-weight: 700;
@@ -2009,7 +2351,7 @@ html, body {
   height: 26px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--success);
-  background: rgba(29, 233, 160, 0.1);
+  background: rgba(52, 211, 153, 0.1);
   color: var(--success);
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
@@ -2019,7 +2361,7 @@ html, body {
   font-size: 18px;
 }
 .footer-update-btn:hover {
-  background: rgba(29, 233, 160, 0.2);
+  background: rgba(52, 211, 153, 0.2);
 }
 .footer-update-btn:disabled {
   opacity: 0.5;
@@ -2099,8 +2441,8 @@ html, body {
 /* ── Scrollbars ─────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar              { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track        { background: transparent; }
-::-webkit-scrollbar-thumb        { background: #2a2a3a; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover  { background: #3a3a50; }
+::-webkit-scrollbar-thumb        { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover  { background: rgba(255, 255, 255, 0.2); }
 
 /* ── Utility ────────────────────────────────────────────────────────────── */
 .hidden { display: none !important; }
@@ -2108,19 +2450,19 @@ html, body {
 /* ── Leaflet overrides ──────────────────────────────────────────────────── */
 .leaflet-container { background: var(--bg); }
 .leaflet-control-attribution {
-  background: rgba(8, 8, 16, 0.75) !important;
+  background: rgba(7, 9, 12, 0.75) !important;
   color: var(--text-dim) !important;
   font-size: 9px !important;
 }
 .leaflet-control-attribution a { color: var(--text-dim) !important; }
 .leaflet-control-zoom a {
-  background: rgba(14, 14, 24, 0.92) !important;
+  background: rgba(11, 14, 19, 0.92) !important;
   color: var(--text-muted) !important;
   border-color: var(--border) !important;
 }
 .leaflet-control-zoom a:hover { background: var(--drive-hover) !important; }
 .leaflet-tooltip {
-  background: rgba(8, 8, 20, 0.92);
+  background: rgba(11, 14, 19, 0.92);
   border: 1px solid var(--border-light);
   color: var(--text);
   font-size: 11px;
@@ -2156,9 +2498,15 @@ html, body {
 }
 
 .tessie-file-row {
-  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
   text-align: left;
 }
+/* Controls fill the row; flex:none stops them growing vertically in the column. */
+.tessie-file-row > .text-input { flex: none; width: 100%; }
+.tessie-date-row .tessie-file-row { margin-top: 0; }
 
 .tessie-preview {
   margin-top: 12px;
@@ -2227,8 +2575,35 @@ html, body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
-  margin-top: 10px;
+  margin-top: 12px;
 }
 #tessie-api-token { font-family: monospace; letter-spacing: 0.5px; }
 #tessie-token-link { color: #c084fc; text-decoration: underline; cursor: pointer; }
-#tessie-api-vin { width: 100%; padding: 6px 8px; }
+
+/* ── Liquid Glass tiles ─────────────────────────────────────────────────
+   Placed last so the brighter glass rim wins over each tile's own border.
+   Backdrop blur is reserved for surfaces that sit over real content (modals
+   over the map, stat tiles) — the drive list uses translucency over the
+   panel's ambient glow instead, to keep a long list cheap to scroll. */
+.drive-item,
+.stat,
+.settings-section,
+#settings-modal,
+#tessie-modal,
+.reprocess-modal,
+#update-modal,
+#changelog-modal,
+#car-color-popup {
+  border-color: var(--glass-border);
+}
+
+.stat,
+#settings-modal,
+#tessie-modal,
+.reprocess-modal,
+#update-modal,
+#changelog-modal,
+#car-color-popup {
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}

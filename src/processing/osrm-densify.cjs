@@ -14,9 +14,8 @@ const MIN_GAP_M = 100;        // below this, linear interpolation is fine
 const TARGET_HZ = 1;           // output cadence target
 const DEFAULT_RATE_MS = 1000;  // be polite to the public demo server
 
-// Haversine comes from the shared single-source calc module; it is re-exported
-// below so existing consumers of this file keep working.
-const { haversineM } = require('../shared/drive-calc.cjs');
+// Distance comes from the shared single-source calc module (WGS-84 geodesic).
+const { geodesicM } = require('../shared/drive-calc.cjs');
 
 /**
  * Query OSRM for a driving route between two points.
@@ -88,7 +87,7 @@ async function densifyPolyline(sparse, opts = {}) {
 
     const a = sparse[i];
     const b = sparse[i + 1];
-    const distM = haversineM(a.lat, a.lng, b.lat, b.lng);
+    const distM = geodesicM(a.lat, a.lng, b.lat, b.lng);
     const dtMs = Math.max(0, b.timeMs - a.timeMs);
     const dtSec = dtMs / 1000;
     const speedMps = dtSec > 0 ? distM / dtSec : 0;
@@ -145,5 +144,4 @@ async function densifyPolyline(sparse, opts = {}) {
 module.exports = {
   fetchOSRMRoute,
   densifyPolyline,
-  haversineM,
 };

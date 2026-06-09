@@ -17,9 +17,8 @@
 // lines between the breadcrumbs Tessie gives us look less pretty but match
 // reality much more closely.
 
-// Drive-math constants and haversine come from the shared single-source module.
+// Drive-math constants come from the shared single-source module.
 const {
-  haversineM,
   MPH_TO_MPS,
   GEAR_PARK,
   GEAR_DRIVE,
@@ -275,10 +274,10 @@ function joinDriveWithPoints(drive, statesIndex) {
 // Stable signature for idempotent re-imports. Combines rounded-to-minute
 // start time and starting odometer — both are stable even if Tessie slightly
 // adjusts drive boundaries between exports.
-function buildExternalSignature(drive) {
+function buildExternalSignature(drive, source = 'tessie') {
   const minuteBucket = Math.floor(drive.startedAt / 60000);
   const od = drive.startingOdometer != null ? drive.startingOdometer.toFixed(2) : 'x';
-  return `tessie:${minuteBucket}:${od}`;
+  return `${source}:${minuteBucket}:${od}`;
 }
 
 function pad2(n) { return String(n).padStart(2, '0'); }
@@ -291,7 +290,7 @@ function pad2(n) { return String(n).padStart(2, '0'); }
 // sigSuffix embeds the drive's external signature so that adjacent Tessie
 // drives (e.g. a re-park right at the end of a real drive) don't collide
 // on the shared minute boundary — grouper dedupes by file path.
-function formatClipFilename(windowStartMs, sigSuffix) {
+function formatClipFilename(windowStartMs, sigSuffix, source = 'tessie') {
   const d = new Date(windowStartMs);
   const Y = d.getFullYear();
   const Mo = pad2(d.getMonth() + 1);
@@ -299,12 +298,12 @@ function formatClipFilename(windowStartMs, sigSuffix) {
   const H = pad2(d.getHours());
   const Mi = pad2(d.getMinutes());
   const S = pad2(d.getSeconds());
-  return `tessie/${Y}-${Mo}-${D}/${Y}-${Mo}-${D}_${H}-${Mi}-${S}-front-tessie-${sigSuffix}.mp4`;
+  return `${source}/${Y}-${Mo}-${D}/${Y}-${Mo}-${D}_${H}-${Mi}-${S}-front-${source}-${sigSuffix}.mp4`;
 }
 
 function signatureToFilenameSuffix(signature) {
-  // "tessie:28763976:446.49" → "28763976-44649"
-  return signature.replace(/^tessie:/, '').replace(/[^\w]/g, '');
+  // "tessie:28763976:446.49" / "teslascope:…" → "28763976-44649"
+  return signature.replace(/^[a-z]+:/, '').replace(/[^\w]/g, '');
 }
 
 function formatClipDate(windowStartMs) {
@@ -316,7 +315,7 @@ function formatClipDate(windowStartMs) {
  * Split a densified drive into 60-second clips that match the SEI per-clip
  * cadence. Each clip must have ≥1 point; empty windows are skipped.
  */
-function splitIntoSyntheticClips(drive, densePoints) {
+function splitIntoSyntheticClips(drive, densePoints, source = 'tessie') {
   if (densePoints.length === 0) return [];
 
   const firstMs = densePoints[0].timeMs;
@@ -324,7 +323,7 @@ function splitIntoSyntheticClips(drive, densePoints) {
   // align to minute boundaries like Tesla dashcam clips do.
   const anchor = Math.floor(firstMs / 60000) * 60000;
   const lastMs = densePoints[densePoints.length - 1].timeMs;
-  const signature = buildExternalSignature(drive);
+  const signature = buildExternalSignature(drive, source);
   const sigSuffix = signatureToFilenameSuffix(signature);
   const autopilotPercent = drive.distanceMi > 0
     ? Math.max(0, Math.min(100, (drive.autopilotDistanceMi / drive.distanceMi) * 100))
@@ -353,7 +352,7 @@ function splitIntoSyntheticClips(drive, densePoints) {
     }
 
     clips.push({
-      file: formatClipFilename(wStart, sigSuffix),
+      file: formatClipFilename(wStart, sigSuffix, source),
       date: formatClipDate(wStart),
       points,
       gearStates,
@@ -364,7 +363,7 @@ function splitIntoSyntheticClips(drive, densePoints) {
       rawFrameCount: n,
       // Single run of drive gear — prevents splitClipAtParkGaps from firing
       gearRuns: [{ gear: 1, frames: n }],
-      source: 'tessie',
+      source,
       externalSignature: signature,
       tessieAutopilotPercent: Math.round(autopilotPercent * 10) / 10,
     });
@@ -439,7 +438,7 @@ function fillMinuteGaps(rawPts, drive) {
  * produces at least a 2-point straight line (start → end from drives.csv)
  * when Tessie polling missed the drive entirely.
  */
-function buildClipsForDrive(originalDrive, statesIndex) {
+function buildClipsForDrive(originalDrive, statesIndex, source = 'tessie') {
   // Per-drive TZ correction — Tessie's header-declared offset can be wrong
   // for drives that happened outside the export's DST period.
   const drive = calibrateDriveTime(originalDrive, statesIndex);
@@ -456,7 +455,7 @@ function buildClipsForDrive(originalDrive, statesIndex) {
   const allPts = fillMinuteGaps(pts, drive);
   if (allPts.length < 2) return { clips: null, reason: 'no-coords' };
 
-  const clips = splitIntoSyntheticClips(drive, allPts);
+  const clips = splitIntoSyntheticClips(drive, allPts, source);
   if (clips.length === 0) return { clips: null, reason: 'no-clips' };
 
   return { clips, pointCount: allPts.length };
@@ -510,7 +509,7 @@ const { mapAutopilotString } = require('./tessie-api.cjs');
  *   distanceMi, autopilotDistanceMi, startLat/Lng, endLat/Lng, and points[]
  *   where each point has { timestamp, latitude, longitude, speed?, autopilot? }
  */
-function buildClipsForApiDrive(apiDrive) {
+function buildClipsForApiDrive(apiDrive, source = 'tessie') {
   const rawPoints = Array.isArray(apiDrive.points) ? apiDrive.points : [];
 
   const pts = rawPoints
@@ -541,16 +540,16 @@ function buildClipsForApiDrive(apiDrive) {
     pts.push(...fallback);
   }
 
-  const clips = splitIntoApiClips(apiDrive, pts);
+  const clips = splitIntoApiClips(apiDrive, pts, source);
   if (clips.length === 0) return { clips: null, reason: 'no-clips' };
   return { clips, pointCount: pts.length };
 }
 
-function splitIntoApiClips(drive, pts) {
+function splitIntoApiClips(drive, pts, source = 'tessie') {
   const firstMs = pts[0].timeMs;
   const lastMs = pts[pts.length - 1].timeMs;
   const anchor = Math.floor(firstMs / 60000) * 60000;
-  const signature = buildExternalSignature(drive);
+  const signature = buildExternalSignature(drive, source);
   const sigSuffix = signatureToFilenameSuffix(signature);
   const autopilotPercent = drive.distanceMi > 0
     ? Math.max(0, Math.min(100, (drive.autopilotDistanceMi / drive.distanceMi) * 100))
@@ -580,7 +579,7 @@ function splitIntoApiClips(drive, pts) {
     }
 
     clips.push({
-      file: formatClipFilename(wStart, sigSuffix),
+      file: formatClipFilename(wStart, sigSuffix, source),
       date: formatClipDate(wStart),
       points,
       gearStates,
@@ -590,7 +589,7 @@ function splitIntoApiClips(drive, pts) {
       rawParkCount: 0,
       rawFrameCount: n,
       gearRuns: [{ gear: 1, frames: n }],
-      source: 'tessie',
+      source,
       externalSignature: signature,
       tessieAutopilotPercent: Math.round(autopilotPercent * 10) / 10,
     });

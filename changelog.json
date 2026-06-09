@@ -1,6 +1,18 @@
 {
   "versions": [
     {
+      "version": "1.2.0",
+      "date": "2026-06-07",
+      "title": "Settings Redesign & Multi-Service Drive Import",
+      "changes": [
+        { "type": "feature", "description": "Teslascope import — connect your Teslascope account and import your drives directly, alongside Tessie. NOTE: Untested. Feedback requested." },
+        { "type": "improvement", "description": "Improved drive tag handling." },
+        { "type": "improvement", "description": "Unified UI design with the rest of the Sentry Six product line." },
+        { "type": "fix", "description": "Deleting a drive now removes it from the map immediately, instead of lingering until you switch to another drive." },
+        { "type": "improvement", "description": "More accurate mileage — drive distances are now computed on the WGS-84 ellipsoid instead of a spherical Earth model. Displayed distances may shift by up to ~0.3%; the new figures are the more accurate ones." }
+      ]
+    },
+    {
       "version": "1.1.6",
       "date": "2026-05-18",
       "title": "Large File Support",

@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setDriveTags: (args) => ipcRenderer.invoke('set-drive-tags', args),
   getAllTagNames: (fp) => ipcRenderer.invoke('get-all-tag-names', fp),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  reverseGeocode: (args) => ipcRenderer.invoke('reverse-geocode', args),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   setAllowPrerelease: (allow) => ipcRenderer.invoke('set-allow-prerelease', allow),
   revertToStable: () => ipcRenderer.invoke('revert-to-stable'),
@@ -66,6 +67,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_ev, data) => cb(data);
     ipcRenderer.on('tessie-progress', listener);
     return () => ipcRenderer.off('tessie-progress', listener);
+  },
+  // ── Teslascope import ──
+  teslascopeApiGetToken: () => ipcRenderer.invoke('teslascope-api-get-token'),
+  teslascopeApiSaveToken: (args) => ipcRenderer.invoke('teslascope-api-save-token', args),
+  teslascopeApiValidate: (args) => ipcRenderer.invoke('teslascope-api-validate', args),
+  teslascopeApiPreview: (args) => ipcRenderer.invoke('teslascope-api-preview', args),
+  teslascopeApiImport: (args) => ipcRenderer.invoke('teslascope-api-import', args),
+  teslascopeApiCancel: () => ipcRenderer.invoke('teslascope-api-cancel'),
+  teslascopeRemoveAll: (args) => ipcRenderer.invoke('teslascope-remove-all', args),
+  teslascopeRemoveHidden: (args) => ipcRenderer.invoke('teslascope-remove-hidden', args),
+  onTeslascopeProgress: (cb) => {
+    const listener = (_ev, data) => cb(data);
+    ipcRenderer.on('teslascope-progress', listener);
+    return () => ipcRenderer.off('teslascope-progress', listener);
   },
 });
 

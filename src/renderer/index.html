@@ -13,7 +13,7 @@
     connect-src https://*.basemaps.cartocdn.com https://*.google.com https://unpkg.com;
   " />
   <title>Sentry Drive</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600;700;800&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0..1,0" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="styles.css" />
@@ -93,8 +93,8 @@
           <button id="btn-revert-gps" class="btn-danger" disabled><span class="material-icons">undo</span>Revert</button>
         </div>
         <div class="btn-row">
-          <button id="btn-import-tessie" class="btn-primary btn-secondary" disabled><span class="material-icons">cloud_download</span>Import Tessie</button>
-          <button id="btn-remove-tessie" class="btn-danger" disabled><span class="material-icons">delete_sweep</span>Remove Tessie</button>
+          <button id="btn-import-tessie" class="btn-primary btn-secondary" disabled><span class="material-icons">cloud_download</span>Import Drives</button>
+          <button id="btn-remove-tessie" class="btn-danger" disabled><span class="material-icons">delete_sweep</span>Remove Imported Drives</button>
         </div>
 
         <div id="repair-progress" class="hidden">
@@ -144,70 +144,147 @@
           <span class="settings-title">Settings</span>
           <button id="btn-close-settings" class="settings-close">&times;</button>
         </div>
+        <div class="settings-tabs" role="tablist">
+          <button class="settings-tab-btn active" data-stab="general" type="button" role="tab">General</button>
+          <button class="settings-tab-btn" data-stab="mapui" type="button" role="tab">Map UI</button>
+          <button class="settings-tab-btn" data-stab="integrations" type="button" role="tab">Integrations</button>
+        </div>
         <div class="settings-body">
-          <div class="settings-section">
-            <div class="settings-section-title">General</div>
-            <div class="settings-divider"></div>
-            <label class="settings-checkbox-row">
-              <span class="settings-checkbox-label">Load Drive Data on Start</span>
-              <input type="checkbox" id="chk-autoload-drive-data" class="settings-checkbox" />
-            </label>
-            <div class="settings-row">
-              <span class="settings-row-label">Units</span>
-              <div class="settings-segment" id="unit-toggle" role="radiogroup" aria-label="Units">
-                <button type="button" class="settings-segment-btn" data-value="imperial" role="radio">Imperial</button>
-                <button type="button" class="settings-segment-btn" data-value="metric" role="radio">Metric</button>
+          <div class="settings-pane active" id="stab-general">
+            <div class="settings-section">
+              <div class="settings-section-header">
+                <span class="settings-section-icon halo-accent"><span class="material-icons">tune</span></span>
+                <span class="settings-section-title">General</span>
+              </div>
+              <div class="settings-section-body">
+                <label class="settings-checkbox-row">
+                  <span class="settings-checkbox-label">Load Drive Data on Start</span>
+                  <input type="checkbox" id="chk-autoload-drive-data" class="settings-checkbox" />
+                </label>
+                <div class="settings-row">
+                  <span class="settings-row-label">Units</span>
+                  <div class="settings-segment" id="unit-toggle" role="radiogroup" aria-label="Units">
+                    <button type="button" class="settings-segment-btn" data-value="imperial" role="radio">Imperial</button>
+                    <button type="button" class="settings-segment-btn" data-value="metric" role="radio">Metric</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="settings-section">
+              <div class="settings-section-header">
+                <span class="settings-section-icon halo-slate"><span class="material-icons">update</span></span>
+                <span class="settings-section-title">Version</span>
+              </div>
+              <div class="settings-section-body">
+                <div class="settings-version-info">
+                  <span id="settings-version-number">v1.0.0</span>
+                  <span id="settings-update-msg" class="hidden"></span>
+                </div>
+                <div id="revert-stable-pill" class="revert-stable-pill hidden">
+                  <span id="stable-version-label" class="stable-version-label"></span>
+                  <button id="btn-revert-stable" class="btn-revert-stable">Revert to Stable</button>
+                </div>
+                <label class="settings-checkbox-row">
+                  <span class="settings-checkbox-label">Enroll in Beta</span>
+                  <input type="checkbox" id="chk-beta" class="settings-checkbox" />
+                </label>
+                <div id="beta-warning" class="beta-warning hidden">Beta releases may be unstable. Use at your own risk.</div>
+                <button id="btn-check-update" class="btn-primary btn-update-full">Check for Update</button>
+                <button id="btn-view-changelog" class="update-skip-btn settings-view-changelog">View Changelog</button>
               </div>
             </div>
           </div>
-          <div class="settings-section" style="margin-top: 16px;">
-            <div class="settings-section-title">Map UI</div>
-            <div class="settings-divider"></div>
-            <div class="settings-row">
-              <span class="settings-row-label">Replay Marker</span>
-              <select id="sel-marker-type" class="settings-select">
-                <option value="arrow">Arrow</option>
-                <option value="model3">Model 3</option>
-              </select>
+          <div class="settings-pane" id="stab-mapui">
+            <div class="settings-section">
+              <div class="settings-section-header">
+                <span class="settings-section-icon halo-sky"><span class="material-icons">map</span></span>
+                <span class="settings-section-title">Map Elements</span>
+              </div>
+              <div class="settings-section-body">
+                <label class="settings-checkbox-row">
+                  <span class="settings-checkbox-label">Hide other drives when viewing a drive</span>
+                  <input type="checkbox" id="chk-hide-other-drives" class="settings-checkbox" />
+                </label>
+                <label class="settings-checkbox-row" title="Disengagements and accelerator overrides">
+                  <span class="settings-checkbox-label">Show FSD markers</span>
+                  <input type="checkbox" id="chk-show-fsd-markers" class="settings-checkbox" />
+                </label>
+              </div>
             </div>
-            <div id="vehicle-color-row" class="settings-row hidden">
-              <span class="settings-row-label">Color</span>
-              <button id="btn-car-color-swatch" class="car-color-swatch"></button>
-            </div>
-            <div id="vehicle-preview-wrap" class="hidden">
-              <canvas id="vehicle-preview-canvas" class="vehicle-preview-canvas"></canvas>
+            <div class="settings-section">
+              <div class="settings-section-header">
+                <span class="settings-section-icon halo-purple"><span class="material-icons">palette</span></span>
+                <span class="settings-section-title">Customization</span>
+              </div>
+              <div class="settings-section-body">
+                <div class="settings-row">
+                  <span class="settings-row-label">Replay Marker</span>
+                  <select id="sel-marker-type" class="settings-select">
+                    <option value="arrow">Arrow</option>
+                    <option value="model3">Model 3</option>
+                  </select>
+                </div>
+                <div id="vehicle-color-row" class="settings-row hidden">
+                  <span class="settings-row-label">Color</span>
+                  <button id="btn-car-color-swatch" class="car-color-swatch"></button>
+                </div>
+                <div id="vehicle-preview-wrap" class="hidden">
+                  <canvas id="vehicle-preview-canvas" class="vehicle-preview-canvas"></canvas>
+                </div>
+              </div>
             </div>
           </div>
-          <div class="settings-section" style="margin-top: 16px;">
-            <div class="settings-section-title">Map</div>
-            <div class="settings-divider"></div>
-            <label class="settings-checkbox-row">
-              <span class="settings-checkbox-label">Hide other drives when viewing a drive</span>
-              <input type="checkbox" id="chk-hide-other-drives" class="settings-checkbox" />
-            </label>
-            <label class="settings-checkbox-row" title="Disengagements and accelerator overrides">
-              <span class="settings-checkbox-label">Show FSD markers</span>
-              <input type="checkbox" id="chk-show-fsd-markers" class="settings-checkbox" />
-            </label>
-          </div>
-          <div class="settings-section" style="margin-top: 16px;">
-            <div class="settings-section-title">Version</div>
-            <div class="settings-divider"></div>
-            <div class="settings-version-info">
-              <span id="settings-version-number">v1.0.0</span>
-              <span id="settings-update-msg" class="hidden"></span>
+          <div class="settings-pane" id="stab-integrations">
+            <div class="settings-section">
+              <div class="settings-section-header">
+                <span class="settings-section-icon is-logo"><img src="../../assets/integrations-ui/tessie.png" alt="Tessie" /></span>
+                <span class="settings-section-title">Tessie</span>
+                <span id="tessie-conn-status" class="integration-status pill-idle">Not connected</span>
+              </div>
+              <div class="settings-section-body">
+                <div class="integration-desc">Import drive routes and per-point FSD state from your Tessie account — matches Tessie's site exactly.</div>
+                <div id="tessie-connect-form" class="integration-connect">
+                  <div class="input-row">
+                    <input id="tessie-token-input" type="password" class="text-input" placeholder="Paste Tessie access token…" autocomplete="off" spellcheck="false" />
+                    <button id="btn-tessie-connect" class="btn-primary integration-connect-btn">Connect</button>
+                  </div>
+                  <a id="tessie-get-token-link" class="integration-link" href="#">Get an access token →</a>
+                  <div id="tessie-connect-error" class="integration-error hidden"></div>
+                </div>
+                <div id="tessie-connected" class="integration-connected hidden">
+                  <div class="integration-token-row">
+                    <span class="material-icons integration-token-icon">key</span>
+                    <span id="tessie-token-mask" class="integration-token-mask">••••</span>
+                    <button id="btn-tessie-disconnect" class="integration-disconnect">Disconnect</button>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div id="revert-stable-pill" class="revert-stable-pill hidden">
-              <span id="stable-version-label" class="stable-version-label"></span>
-              <button id="btn-revert-stable" class="btn-revert-stable">Revert to Stable</button>
+            <div class="settings-section">
+              <div class="settings-section-header">
+                <span class="settings-section-icon is-logo"><img src="../../assets/integrations-ui/teslascope.png" alt="Teslascope" /></span>
+                <span class="settings-section-title">Teslascope</span>
+                <span id="teslascope-conn-status" class="integration-status pill-idle">Not connected</span>
+              </div>
+              <div class="settings-section-body">
+                <div class="integration-desc">Sync drives from your Teslascope account.</div>
+                <div id="teslascope-connect-form" class="integration-connect">
+                  <div class="input-row">
+                    <input id="teslascope-token-input" type="password" class="text-input" placeholder="Paste Teslascope API token…" autocomplete="off" spellcheck="false" />
+                    <button id="btn-teslascope-connect" class="btn-primary integration-connect-btn">Connect</button>
+                  </div>
+                  <a id="teslascope-get-token-link" class="integration-link" href="#">Get an API token →</a>
+                  <div id="teslascope-connect-error" class="integration-error hidden"></div>
+                </div>
+                <div id="teslascope-connected" class="integration-connected hidden">
+                  <div class="integration-token-row">
+                    <span class="material-icons integration-token-icon">key</span>
+                    <span id="teslascope-token-mask" class="integration-token-mask">••••</span>
+                    <button id="btn-teslascope-disconnect" class="integration-disconnect">Disconnect</button>
+                  </div>
+                </div>
+              </div>
             </div>
-            <label class="settings-checkbox-row">
-              <span class="settings-checkbox-label">Enroll in Beta</span>
-              <input type="checkbox" id="chk-beta" class="settings-checkbox" />
-            </label>
-            <div id="beta-warning" class="beta-warning hidden">Beta releases may be unstable. Use at your own risk.</div>
-            <button id="btn-check-update" class="btn-primary btn-update-full">Check for Update</button>
-            <button id="btn-view-changelog" class="update-skip-btn settings-view-changelog">View Changelog</button>
           </div>
         </div>
       </div>
@@ -216,7 +293,7 @@
     <!-- ── Reprocess-All Confirm Modal ─────────────────────────────── -->
     <div id="reprocess-overlay" class="hidden">
       <div class="reprocess-modal">
-        <div class="reprocess-modal-icon"><span class="material-icons">autorenew</span></div>
+        <div class="reprocess-modal-icon halo-amber"><span class="material-icons">autorenew</span></div>
         <div class="reprocess-modal-title">Reprocess All Drives?</div>
         <div class="reprocess-modal-msg">
           This will re-extract GPS and metadata from every clip in your clips directory. It can take a long time for large libraries. Your drive tags will be preserved.
@@ -231,7 +308,7 @@
     <!-- ── Check Drives Confirm Modal ──────────────────────────────── -->
     <div id="check-drives-overlay" class="hidden">
       <div class="reprocess-modal">
-        <div class="reprocess-modal-icon"><span class="material-icons">build</span></div>
+        <div class="reprocess-modal-icon halo-amber"><span class="material-icons">build</span></div>
         <div class="reprocess-modal-title">Check Drives?</div>
         <div class="reprocess-modal-msg">
           This scans for GPS gaps and bridges missing segments. A backup of your current drive data is written first (.bak), so you can revert if needed.
@@ -247,7 +324,7 @@
     <!-- ── Remove Drive Confirm Modal ───────────────────────────────── -->
     <div id="remove-drive-overlay" class="hidden">
       <div class="reprocess-modal">
-        <div class="reprocess-modal-icon remove-drive-modal-icon"><span class="material-icons">delete</span></div>
+        <div class="reprocess-modal-icon halo-red"><span class="material-icons">delete</span></div>
         <div class="reprocess-modal-title">Remove Drive?</div>
         <div id="remove-drive-modal-msg" class="reprocess-modal-msg"></div>
         <div class="reprocess-modal-actions">
@@ -259,27 +336,31 @@
 
     <!-- ── Tessie Import Modal ─────────────────────────────────────── -->
     <div id="tessie-overlay" class="hidden">
-      <div class="reprocess-modal">
-        <div class="reprocess-modal-icon"><span class="material-icons">cloud_download</span></div>
-        <div class="reprocess-modal-title">Import Tessie Drives</div>
-
+      <div id="tessie-modal">
+        <div class="settings-header">
+          <span class="settings-title">Import Drives</span>
+          <button id="btn-tessie-cancel" class="settings-close" title="Close">&times;</button>
+        </div>
+        <div class="tessie-modal-body">
         <div class="tessie-mode-tabs">
-          <button class="tessie-mode-btn active" data-mode="api" type="button">Tessie API (recommended)</button>
+          <button class="tessie-mode-btn active" data-mode="api" type="button">API (Recommended)</button>
           <button class="tessie-mode-btn" data-mode="csv" type="button">CSV Export</button>
         </div>
 
         <div id="tessie-mode-api" class="tessie-mode-pane">
           <div class="reprocess-modal-msg">
-            Paste your Tessie access token. Generate one at
-            <a href="#" id="tessie-token-link">tessie.com → Developer Settings → Generate Access Token</a>.
-            The API gives dense GPS and per-point FSD state — matches Tessie's website exactly.
+            Importing from the connected account. Manage tokens in <strong>Settings → Integrations</strong>.
+          </div>
+          <!-- Token comes from Integrations; these are kept (hidden) so the
+               import wiring can reuse them without a visible token field. -->
+          <div class="tessie-file-row hidden">
+            <a href="#" id="tessie-token-link" class="hidden"></a>
+            <input id="tessie-api-token" type="password" class="text-input" />
+            <button id="tessie-api-validate" class="btn-icon"><span class="material-icons">check</span></button>
           </div>
           <div class="tessie-file-row">
-            <label class="field-label">Access Token</label>
-            <div class="input-row">
-              <input id="tessie-api-token" type="password" class="text-input" placeholder="Paste token…" />
-              <button id="tessie-api-validate" class="btn-icon" title="Validate"><span class="material-icons">check</span></button>
-            </div>
+            <label class="field-label">Service</label>
+            <select id="import-service" class="text-input"></select>
           </div>
           <div class="tessie-file-row">
             <label class="field-label">Vehicle</label>
@@ -332,21 +413,21 @@
 
         <div class="reprocess-modal-actions">
           <button id="btn-tessie-confirm" class="btn-primary btn-update-full" disabled>Import</button>
-          <button id="btn-tessie-cancel" class="update-skip-btn">Close</button>
+        </div>
         </div>
       </div>
     </div>
 
-    <!-- ── Remove Tessie Confirm Modal ─────────────────────────────── -->
+    <!-- ── Remove Imported Drives Confirm Modal ────────────────────── -->
     <div id="remove-tessie-overlay" class="hidden">
       <div class="reprocess-modal">
-        <div class="reprocess-modal-icon remove-drive-modal-icon"><span class="material-icons">delete_sweep</span></div>
-        <div class="reprocess-modal-title">Remove All Tessie Data?</div>
+        <div class="reprocess-modal-icon halo-red"><span class="material-icons">delete_sweep</span></div>
+        <div class="reprocess-modal-title">Remove All Imported Drives?</div>
         <div class="reprocess-modal-msg">
-          This removes every imported Tessie drive from your drive data. A backup (.bak) is written first so you can revert.
+          This removes every imported drive from your drive data. A backup (.bak) is written first so you can revert.
         </div>
         <div class="reprocess-modal-actions">
-          <button id="btn-remove-tessie-confirm" class="btn-danger btn-update-full">Remove Tessie</button>
+          <button id="btn-remove-tessie-confirm" class="btn-danger btn-update-full">Remove Imported Drives</button>
           <button id="btn-remove-tessie-cancel" class="update-skip-btn">Cancel</button>
         </div>
       </div>
@@ -355,7 +436,7 @@
     <!-- ── Revert Confirm Modal ────────────────────────────────────── -->
     <div id="revert-overlay" class="hidden">
       <div class="reprocess-modal">
-        <div class="reprocess-modal-icon"><span class="material-icons">undo</span></div>
+        <div class="reprocess-modal-icon halo-amber"><span class="material-icons">undo</span></div>
         <div class="reprocess-modal-title">Revert to Backup?</div>
         <div class="reprocess-modal-msg">
           This restores drive data from the backup created before the last Check Drives. Any GPS repairs and bridge routes will be removed.
@@ -370,7 +451,7 @@
     <!-- ── Update Modal ───────────────────────────────────────────── -->
     <div id="update-overlay" class="hidden">
       <div id="update-modal">
-        <div class="update-modal-icon"><span class="material-icons">download</span></div>
+        <div class="update-modal-icon halo-accent"><span class="material-icons">download</span></div>
         <div class="update-modal-title">Update Available</div>
         <div id="update-modal-msg">A new version is available.</div>
         <div id="update-modal-changes" class="hidden"></div>
@@ -385,12 +466,14 @@
     <div id="changelog-overlay" class="hidden">
       <div id="changelog-modal">
         <div class="changelog-modal-header">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-            <line x1="16" y1="13" x2="8" y2="13"/>
-            <line x1="16" y1="17" x2="8" y2="17"/>
-          </svg>
+          <span class="changelog-modal-icon halo-accent">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+          </span>
           <h2 id="changelog-modal-title">What's New</h2>
         </div>
         <div class="changelog-modal-body">
