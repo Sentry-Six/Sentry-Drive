@@ -69,4 +69,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.AppImage dist/latest-linux.yml --clobber
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.AppImage dist/*.deb dist/latest-linux.yml --clobber

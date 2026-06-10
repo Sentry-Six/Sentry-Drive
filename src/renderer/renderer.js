@@ -422,6 +422,9 @@ function initFooter() {
     } else if (updateState === 'ready') {
       window.electronAPI.installUpdate();
     } else if (updateState === 'idle' || updateState === 'error') {
+      // Show "Checking…" immediately (not when main answers) so the click
+      // always visibly does something, and arm the no-answer watchdog.
+      beginUpdateCheckUI();
       window.electronAPI.checkForUpdate();
     }
   });
@@ -705,7 +708,42 @@ function renderChangelogEntry(entry) {
   `;
 }
 
-function onUpdateStatus({ status, version, percent, message }) {
+// User-initiated checks: remember when the check started so the result can be
+// held back until "Checking…" was visible long enough to register (a fast
+// server answers in ~200 ms — an imperceptible flicker), and arm a watchdog so
+// a hung network can't leave the button stuck on "Checking…" forever.
+let checkStartedMs = 0;
+let checkWatchdog = null;
+
+function beginUpdateCheckUI() {
+  checkStartedMs = Date.now();
+  clearTimeout(checkWatchdog);
+  checkWatchdog = setTimeout(() => {
+    checkWatchdog = null;
+    onUpdateStatus({ status: 'error', message: 'No response from the update server — try again later.' });
+  }, 20000);
+  onUpdateStatus({ status: 'checking' });
+}
+
+function onUpdateStatus(payload) {
+  const terminal = payload.status === 'available' || payload.status === 'up-to-date' || payload.status === 'error';
+  if (terminal && checkWatchdog) {
+    clearTimeout(checkWatchdog);
+    checkWatchdog = null;
+  }
+  // Hold a too-fast answer so the Checking… state is perceptible.
+  const elapsed = Date.now() - checkStartedMs;
+  const MIN_CHECKING_MS = 600;
+  if (terminal && checkStartedMs && elapsed < MIN_CHECKING_MS) {
+    checkStartedMs = 0;
+    setTimeout(() => applyUpdateStatus(payload), MIN_CHECKING_MS - elapsed);
+    return;
+  }
+  if (terminal) checkStartedMs = 0;
+  applyUpdateStatus(payload);
+}
+
+function applyUpdateStatus({ status, version, percent, message }) {
   const btn = document.getElementById('btn-check-update');
   const msg = document.getElementById('settings-update-msg');
   const footerBtn = document.getElementById('btn-footer-update');
@@ -739,8 +777,9 @@ function onUpdateStatus({ status, version, percent, message }) {
         populateUpdateModalChanges(version);
       }
 
-      // Show footer download button
+      // Show footer download button, flashing yellow until acted on
       footerBtn.classList.remove('hidden');
+      footerBtn.classList.add('update-attention');
       footerBtn.disabled = false;
       footerBtn.title = `Download v${version}`;
       footerBtn.querySelector('.material-icons').textContent = 'download';
@@ -764,6 +803,7 @@ function onUpdateStatus({ status, version, percent, message }) {
       msg.textContent = `Downloading update…`;
       msg.className = 'settings-update-msg update-available';
 
+      footerBtn.classList.remove('update-attention');
       footerBtn.disabled = true;
       footerBtn.title = `Downloading… ${percent}%`;
       break;
@@ -785,7 +825,7 @@ function onUpdateStatus({ status, version, percent, message }) {
       btn.textContent = 'Retry';
       btn.disabled = false;
       btn.className = 'btn-primary btn-update-full';
-      msg.textContent = 'Update check failed.';
+      msg.textContent = message ? `Update check failed: ${message}` : 'Update check failed.';
       msg.className = 'settings-update-msg update-error';
 
       footerBtn.classList.add('hidden');
@@ -1236,10 +1276,11 @@ function initTessieImport() {
 
   // Populate the dropdown with CONNECTED services (token saved in Integrations).
   async function populateServices() {
-    const opts = [];
-    for (const [key, s] of Object.entries(SERVICES)) {
-      try { const r = await s.getToken(); if (r && r.token) opts.push({ key, label: s.label }); } catch {}
-    }
+    const entries = Object.entries(SERVICES);
+    const tokens = await Promise.all(entries.map(([, s]) => s.getToken().catch(() => null)));
+    const opts = entries
+      .filter((_, i) => tokens[i] && tokens[i].token)
+      .map(([key, s]) => ({ key, label: s.label }));
     if (opts.length === 0) {
       serviceSelect.innerHTML = '<option value="">No connected services</option>';
       serviceSelect.disabled = true;
@@ -1269,11 +1310,11 @@ function initTessieImport() {
       selectedService = serviceSelect.value || 'tessie';
       applyServiceUI();
       try {
-        const r = await svc().getToken();
+        const r = await svc().getToken(); // local IPC — fast
         tokenInput.value = (r && r.token) || '';
-        if (tokenInput.value) await validateApiToken(true);
+        // Not awaited: cached vehicles render instantly; fresh ones stream in.
+        if (tokenInput.value) validateApiToken(true);
       } catch {}
-      await maybePreview();
     });
   }
 
@@ -1369,7 +1410,30 @@ function initTessieImport() {
   // Validate API token (load vehicles + save token)
   document.getElementById('tessie-api-validate').addEventListener('click', () => validateApiToken(false));
   tokenInput.addEventListener('change', () => validateApiToken(false));
-  [fromInput, toInput, vinSelect].forEach((el) => el.addEventListener('change', () => maybePreview()));
+  // Debounced: rapid date clicks / vehicle flips coalesce into one API preview.
+  let previewDebounce = null;
+  const schedulePreview = () => {
+    clearTimeout(previewDebounce);
+    previewDebounce = setTimeout(() => maybePreview(), 350);
+  };
+  [fromInput, toInput, vinSelect].forEach((el) => el.addEventListener('change', schedulePreview));
+
+  // Clicking a date field opens the native calendar picker (typing still
+  // works — keyboard edits update the segments as before).
+  [fromInput, toInput].forEach((el) => {
+    el.addEventListener('click', () => {
+      if (typeof el.showPicker === 'function') {
+        try { el.showPicker(); } catch { /* non-gesture or unsupported — typing still works */ }
+      }
+    });
+  });
+
+  // Vehicles per service, cached for the session: switching services renders
+  // the dropdown instantly from cache while a background refresh runs. The
+  // sequence counter discards stale responses when the user switches faster
+  // than the network answers.
+  const vehicleCache = {};
+  let validateSeq = 0;
 
   async function validateApiToken(silent) {
     const token = tokenInput.value.trim();
@@ -1377,10 +1441,39 @@ function initTessieImport() {
       if (!silent) alert(`Connect ${svc().label} in Settings → Integrations first.`);
       return;
     }
+    const service = selectedService;
     const idField = svc().idField;
+    const seq = ++validateSeq;
+
+    const fill = (vehicles) => {
+      const prev = vinSelect.value;
+      vinSelect.innerHTML = vehicles
+        .map((v) => `<option value="${escapeHtml(v[idField] ?? v.vin ?? '')}">${escapeHtml(v.displayName || v.vin || v[idField])}</option>`)
+        .join('');
+      vinSelect.disabled = false;
+      if ([...vinSelect.options].some((o) => o.value === prev)) vinSelect.value = prev;
+    };
+
+    const cached = vehicleCache[service];
+    if (cached && cached.length) {
+      // Instant path — then quietly refresh the cache.
+      fill(cached);
+      refreshConfirmReady();
+      maybePreview();
+      svc().validate(token).then((result) => {
+        if (seq !== validateSeq || selectedService !== service) return;
+        if (result.success && result.vehicles && result.vehicles.length) {
+          vehicleCache[service] = result.vehicles;
+          fill(result.vehicles);
+        }
+      }).catch(() => {});
+      return;
+    }
+
     vinSelect.disabled = true;
     vinSelect.innerHTML = '<option>Loading vehicles…</option>';
     const result = await svc().validate(token);
+    if (seq !== validateSeq || selectedService !== service) return; // superseded
     if (!result.success) {
       vinSelect.innerHTML = '<option>Validation failed</option>';
       if (!silent) alert(`Token validation failed:\n${result.error}`);
@@ -1390,10 +1483,8 @@ function initTessieImport() {
       vinSelect.innerHTML = '<option>No vehicles on account</option>';
       return;
     }
-    vinSelect.innerHTML = result.vehicles
-      .map((v) => `<option value="${escapeHtml(v[idField] ?? v.vin ?? '')}">${escapeHtml(v.displayName || v.vin || v[idField])}</option>`)
-      .join('');
-    vinSelect.disabled = false;
+    vehicleCache[service] = result.vehicles;
+    fill(result.vehicles);
     await maybePreview();
   }
 
@@ -1405,9 +1496,15 @@ function initTessieImport() {
     }
   }
 
+  // Stale-response guard: each call claims a sequence number; by the time a
+  // network preview answers, a newer change may have started another preview
+  // (or switched service) — the old result is dropped instead of rendered.
+  let previewSeq = 0;
+
   async function maybePreview() {
     if (!loadedFilePath) return;
     refreshConfirmReady();
+    const seq = ++previewSeq;
 
     if (tessieImportMode === 'api') {
       if (!tokenInput.value.trim() || !vinSelect.value || vinSelect.disabled) return;
@@ -1422,6 +1519,7 @@ function initTessieImport() {
         fromSec, toSec,
         driveDataPath: loadedFilePath,
       });
+      if (seq !== previewSeq) return; // superseded by a newer change
       if (!result.success) {
         previewEl.innerHTML = `<span style="color:#f87171">Preview failed: ${escapeHtml(result.error)}</span>`;
         return;
@@ -1437,6 +1535,7 @@ function initTessieImport() {
         drivesCsvPath: tessieDrivesPath,
         statesCsvPath: tessieStatesPath,
       });
+      if (seq !== previewSeq) return; // superseded by a newer change
       if (!result.success) {
         previewEl.innerHTML = `<span style="color:#f87171">Preview failed: ${escapeHtml(result.error)}</span>`;
         return;

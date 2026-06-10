@@ -216,7 +216,19 @@ ipcMain.handle('revert-to-stable', () => {
   return autoUpdater.checkForUpdates().catch(() => {});
 });
 
-ipcMain.handle('check-for-update', () => autoUpdater.checkForUpdates().catch(() => {}));
+ipcMain.handle('check-for-update', () => {
+  // Unpacked dev runs: electron-updater silently skips the check without
+  // emitting any event, which left the button looking dead. Answer explicitly.
+  if (!app.isPackaged) {
+    sendUpdateStatus('error', { message: 'Update checks only work in the installed app.' });
+    return;
+  }
+  return autoUpdater.checkForUpdates().catch((err) => {
+    // autoUpdater normally emits 'error' itself — this is the safety net so
+    // the renderer always gets an answer (its UI handles duplicates fine).
+    sendUpdateStatus('error', { message: err?.message });
+  });
+});
 
 ipcMain.handle('download-update', () => autoUpdater.downloadUpdate().catch(() => {}));
 

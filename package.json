@@ -49,8 +49,10 @@
     },
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "deb"
       ],
+      "maintainer": "JeffFromTheIRS <155955500+JeffFromTheIRS@users.noreply.github.com>",
       "category": "Utility",
       "artifactName": "Sentry-Drive-${version}.${ext}",
       "icon": "assets/app-icon/sentrydrive.png"
