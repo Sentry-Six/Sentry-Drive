@@ -45,7 +45,8 @@ function scheduleSave() {
   }, 2000);
 }
 
-// Pick the most "pin-like" short label from a Nominatim reverse result.
+// Pick the most "pin-like" short label from a Nominatim reverse result:
+// POI/business name → "1234 Street" → street → neighbourhood/city.
 function shortLabel(j) {
   if (!j) return null;
   const a = j.address || {};
@@ -60,12 +61,22 @@ function shortLabel(j) {
   return null;
 }
 
-// Resolves { ok: true, label } when Nominatim answered (label may be null —
-// genuinely nothing at that spot), or { ok: false } on network error /
-// timeout / non-2xx so the caller knows not to cache the miss.
-function requestNominatim(lat, lng) {
+// City-granularity label for the zoom-10 fallback lookup.
+function cityLabel(j) {
+  if (!j) return null;
+  const a = j.address || {};
+  const place = a.city || a.town || a.village || a.municipality
+    || a.hamlet || a.county;
+  if (place) return place;
+  if (j.display_name) return j.display_name.split(',')[0].trim();
+  return null;
+}
+
+// Resolves { ok: true, json } when Nominatim answered, or { ok: false } on
+// network error / timeout / non-2xx so the caller knows not to cache the miss.
+function requestNominatim(lat, lng, zoom) {
   return new Promise((resolve) => {
-    const path = `/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
+    const path = `/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=${zoom}&addressdetails=1`;
     const req = https.get(
       { host: HOST, path, headers: { 'User-Agent': UA, Accept: 'application/json' }, timeout: 12000 },
       (res) => {
@@ -73,7 +84,7 @@ function requestNominatim(lat, lng) {
         res.on('data', (c) => (data += c));
         res.on('end', () => {
           if (res.statusCode >= 200 && res.statusCode < 300) {
-            try { resolve({ ok: true, label: shortLabel(JSON.parse(data)) }); }
+            try { resolve({ ok: true, json: JSON.parse(data) }); }
             catch { resolve({ ok: false }); }
           } else {
             resolve({ ok: false });
@@ -91,20 +102,23 @@ function requestNominatim(lat, lng) {
 // per-call delays computed against a shared timestamp would let the whole
 // burst fire simultaneously and trip Nominatim's rate ban.
 let queueTail = Promise.resolve();
-function fetchNominatim(lat, lng) {
+function fetchNominatim(lat, lng, zoom) {
   const run = queueTail.then(async () => {
     const wait = RATE_MS - (Date.now() - lastFetchMs);
     if (wait > 0) await new Promise((r) => setTimeout(r, wait));
     lastFetchMs = Date.now();
-    return requestNominatim(lat, lng);
+    return requestNominatim(lat, lng, zoom);
   });
   queueTail = run.catch(() => {});
   return run;
 }
 
-// Returns a place label (string) or null. Answered lookups are cached
-// (including "nothing here" nulls) and concurrent lookups for the same spot
-// are coalesced; failures are not cached so they retry on a later call.
+// Returns a place label (string) or null. Looks up at street zoom first
+// (address → street → city, see shortLabel); when that finds nothing at all
+// (unmapped spot, "Unable to geocode"), retries at city zoom so the card
+// shows the city rather than raw coordinates. Answered lookups are cached
+// (including "nothing anywhere" nulls) and concurrent lookups for the same
+// spot are coalesced; network failures are not cached so they retry later.
 async function reverseGeocode(lat, lng) {
   if (!cache) cache = {};
   if (typeof lat !== 'number' || typeof lng !== 'number' || !isFinite(lat) || !isFinite(lng)) return null;
@@ -112,13 +126,20 @@ async function reverseGeocode(lat, lng) {
   if (Object.prototype.hasOwnProperty.call(cache, key)) return cache[key];
   if (inflight.has(key)) return inflight.get(key);
 
-  const p = fetchNominatim(lat, lng).then((res) => {
+  const p = (async () => {
+    const street = await fetchNominatim(lat, lng, 18);
+    if (!street.ok) { inflight.delete(key); return null; }
+    let label = shortLabel(street.json);
+    if (!label) {
+      const city = await fetchNominatim(lat, lng, 10);
+      if (!city.ok) { inflight.delete(key); return null; }
+      label = cityLabel(city.json);
+    }
     inflight.delete(key);
-    if (!res.ok) return null;
-    cache[key] = res.label;
+    cache[key] = label;
     scheduleSave();
-    return res.label;
-  });
+    return label;
+  })();
   inflight.set(key, p);
   return p;
 }

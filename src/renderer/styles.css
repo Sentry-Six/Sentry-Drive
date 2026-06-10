@@ -993,9 +993,13 @@ html, body {
 
 .map-stats-summary {
   display: flex;
-  gap: 48px;
+  /* Spacing breathes with the viewport so stat values never have to break
+     mid-text on narrow windows ("32H 34M" used to stack); if it still can't
+     fit, whole stat blocks wrap as units. */
+  flex-wrap: wrap;
+  gap: 12px clamp(16px, 4vw, 48px);
   align-items: center;
-  padding: 18px 56px;
+  padding: 18px clamp(24px, 4.5vw, 56px) 18px clamp(20px, 4vw, 56px);
   position: relative;
 }
 
@@ -1195,6 +1199,7 @@ html, body {
   font-weight: 700;
   color: var(--text);
   line-height: 1.1;
+  white-space: nowrap;
 }
 
 .map-stat-lbl {

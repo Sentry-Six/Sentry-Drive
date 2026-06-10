@@ -380,7 +380,8 @@ function initFooter() {
   if (teslascopeGetTokenLink) {
     teslascopeGetTokenLink.addEventListener('click', (e) => {
       e.preventDefault();
-      if (window.electronAPI) window.electronAPI.openExternal('https://teslascope.com/account');
+      // API keys live under Account → Security.
+      if (window.electronAPI) window.electronAPI.openExternal('https://teslascope.com/account/security');
     });
   }
 

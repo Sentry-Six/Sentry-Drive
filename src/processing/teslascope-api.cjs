@@ -28,18 +28,23 @@ function dbg(...args) {
   if (DEBUG) console.error('[teslascope-api]', ...args);
 }
 
-function httpGet(path, token, timeoutMs = 15000) {
-  const options = {
-    host: API_HOST,
-    path,
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      'User-Agent': 'Sentry-Drive',
-    },
-    timeout: timeoutMs,
-  };
+// Teslascope accepts two credential styles:
+//   • personal access tokens → "Authorization: Bearer <token>" (current),
+//   • legacy API keys → "?api_key=<key>" query param (deprecated but still
+//     issued from the account page, and they do NOT work as Bearer tokens).
+// Users paste whichever they have, so on 401/403 the other style is retried
+// once and the working style is remembered for the rest of the session.
+let authMode = 'bearer';
+
+function requestOnce(path, token, mode, timeoutMs) {
+  const headers = { Accept: 'application/json', 'User-Agent': 'Sentry-Drive' };
+  let fullPath = path;
+  if (mode === 'bearer') {
+    headers.Authorization = `Bearer ${token}`;
+  } else {
+    fullPath += `${path.includes('?') ? '&' : '?'}api_key=${encodeURIComponent(token)}`;
+  }
+  const options = { host: API_HOST, path: fullPath, method: 'GET', headers, timeout: timeoutMs };
   return new Promise((resolve, reject) => {
     const req = https.get(options, (res) => {
       let data = '';
@@ -49,7 +54,9 @@ function httpGet(path, token, timeoutMs = 15000) {
           try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
           catch (e) { reject(new Error(`Parse error: ${e.message}`)); }
         } else if (res.statusCode === 401 || res.statusCode === 403) {
-          reject(new Error(`Unauthorized (HTTP ${res.statusCode}) — check your token`));
+          const err = new Error(`Unauthorized (HTTP ${res.statusCode})`);
+          err.unauthorized = true;
+          reject(err);
         } else if (res.statusCode === 429) {
           reject(new Error('Rate-limited by Teslascope (HTTP 429) — slow down or try later'));
         } else {
@@ -60,6 +67,26 @@ function httpGet(path, token, timeoutMs = 15000) {
     req.on('error', reject);
     req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
   });
+}
+
+async function httpGet(path, token, timeoutMs = 15000) {
+  const modes = authMode === 'legacy' ? ['legacy', 'bearer'] : ['bearer', 'legacy'];
+  let lastErr;
+  for (const mode of modes) {
+    try {
+      const res = await requestOnce(path, token, mode, timeoutMs);
+      authMode = mode;
+      dbg('auth mode in use:', mode);
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (!e.unauthorized) throw e; // network/HTTP errors: don't retry as auth
+    }
+  }
+  throw new Error(
+    `${lastErr.message} — check the key (Teslascope → Account → Security). ` +
+    `If you're using a personal access token, it needs the "account" and "vehicles" scopes`
+  );
 }
 
 /** Rate-limited request pacing so a bulk import doesn't hammer the API. */
