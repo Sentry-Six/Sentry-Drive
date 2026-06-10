@@ -224,3 +224,63 @@ test('May 17 regression: event clips do not create a phantom parked drive', () =
     assert.equal(f.startsWith('RecentClips/'), true);
   }
 });
+
+// ─── BLE location-name rollup (Rust roll_up_telemetry, grouper.rs:2785) ───────
+// First non-null locationNameStart / last non-null locationNameEnd across the
+// drive's clips, verbatim. Clips without telemetry contribute nothing; drives
+// with no telemetry at all omit the fields entirely.
+
+test('locationName rollup: first non-null start, last non-null end (Rust roll_up_telemetry)', () => {
+  const routes = [
+    // First clip: BLE sample landed only late in the window → no start name.
+    { ...testRoute('RecentClips/2026-05-17_10-00-00-front.mp4', [[37.0, -122.0]]),
+      locationNameEnd: '100 First St' },
+    // Middle clip: both names present → provides the drive's start name.
+    { ...testRoute('RecentClips/2026-05-17_10-01-00-front.mp4', [[37.001, -122.0]]),
+      locationNameStart: '100 First St', locationNameEnd: '250 Mid Ave' },
+    // Last clip: no telemetry window at all → end name stays from prior clip.
+    testRoute('RecentClips/2026-05-17_10-02-00-front.mp4', [[37.002, -122.0]]),
+  ];
+  const drives = drivesOf(routes);
+  assert.equal(drives.length, 1);
+  assert.equal(drives[0].locationNameStart, '100 First St');
+  assert.equal(drives[0].locationNameEnd, '250 Mid Ave');
+});
+
+test('locationName rollup: omitted entirely when no clip has telemetry', () => {
+  const drives = drivesOf([
+    testRoute('RecentClips/2026-05-17_10-00-00-front.mp4', [[37.0, -122.0]]),
+    testRoute('RecentClips/2026-05-17_10-01-00-front.mp4', [[37.001, -122.0]]),
+  ]);
+  assert.equal(drives.length, 1);
+  assert.equal('locationNameStart' in drives[0], false);
+  assert.equal('locationNameEnd' in drives[0], false);
+});
+
+// ─── Geocode endpoint snapping (Drive-leading; geocoding only, not stats) ─────
+// Median of the stationary cluster at each end; raw terminal fix when the car
+// was already rolling (cluster < 3 points).
+
+test('geocode endpoints: stationary-median start, raw terminal fix when rolling', () => {
+  const pts = [
+    // Parked cluster: 5 jittered fixes within ~5 m (median lat = 37.000009).
+    [37.000000, -122.0],
+    [37.000018, -122.0],
+    [36.999991, -122.0],
+    [37.000009, -122.0],
+    [37.000036, -122.0],
+    // Rolling away — each step ~33 m breaks the 15 m cluster radius.
+    [37.000300, -122.0],
+    [37.000600, -122.0],
+    [37.000900, -122.0],
+  ];
+  const drives = drivesOf([testRoute('RecentClips/2026-05-17_10-00-00-front.mp4', pts)]);
+  assert.equal(drives.length, 1);
+  const d = drives[0];
+  // Start: median of the 5-point parked cluster — not the raw first fix.
+  assert.equal(d.geocodeStartPoint[0], 37.000009);
+  assert.equal(d.geocodeStartPoint[1], -122.0);
+  // End: still rolling at the last fix → cluster of 1 → anchor wins.
+  assert.equal(d.geocodeEndPoint[0], 37.000900);
+  assert.equal(d.geocodeEndPoint[1], -122.0);
+});

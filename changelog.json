@@ -1,6 +1,21 @@
 {
   "versions": [
     {
+      "version": "1.2.1",
+      "date": "2026-06-09",
+      "title": "Location Accuracy & Faster Loading",
+      "changes": [
+        { "type": "fix", "description": "Fixed \"Failed to load drives: Identifier 'isEventFolderPath' has already been declared\" — a bad merge in the 1.2.0 release duplicated a function, breaking drive loading entirely." },
+        { "type": "improvement", "description": "Loading drive-data.json is dramatically faster — files that fit in memory now use the native JSON parser (~16× faster; a 130 MB file loads in about a second). The streaming parser is kept automatically for very large files." },
+        { "type": "fix", "description": "Saving tags and importing drives no longer fails on very large drive-data.json files (over ~512 MB) — all file operations now share the same size-aware reader." },
+        { "type": "fix", "description": "The replay arrow now reliably faces the direction of travel. It ignores GPS jitter while stopped (no more random swings in parking lots), uses the car's recorded speed to keep tracking direction down to about 1 mph, and holds its last confident heading while parked." },
+        { "type": "improvement", "description": "Scrubbing the replay timeline now always orients the arrow to the direction of travel at that point — even when scrubbing into a stop, it shows the nearest confident heading." },
+        { "type": "improvement", "description": "Drive locations now use your car's own reported address when available — Sentry USB's BLE telemetry records Tesla's reverse-geocoded address during the drive, and Sentry Drive now reads it directly. Exact, offline, and no internet lookup needed." },
+        { "type": "improvement", "description": "For drives without a car-reported address, the location lookup is much more accurate: the app now averages the parked GPS fixes at each end of a drive instead of geocoding a single noisy fix." },
+        { "type": "improvement", "description": "Nearby-but-distinct addresses no longer share one cached location label (the geocode cache is now house-level precise). Previously resolved locations will quietly re-resolve once in the background." }
+      ]
+    },
+    {
       "version": "1.2.0",
       "date": "2026-06-07",
       "title": "Settings Redesign & Multi-Service Drive Import",

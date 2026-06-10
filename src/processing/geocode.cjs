@@ -6,15 +6,19 @@
 //   • persist a disk cache so we geocode each unique spot only once, and
 //   • sidestep the renderer CSP entirely.
 //
-// Coordinates are rounded to ~11 m for the cache key so the many drives that
-// share an endpoint (home, work, the usual coffee stop) collapse to one lookup.
+// Coordinates are rounded to ~1 m for the cache key: drives that end at the
+// same spot still collapse to one lookup, but two genuinely different
+// doorsteps a few metres apart no longer share a cached (wrong) address —
+// the old 4-decimal key (~11 m) was wide enough to merge adjacent houses.
+// Bumping the precision orphans old 4-decimal cache entries (harmless; they
+// just re-resolve once at the new precision).
 
 const https = require('https');
 const fs = require('fs');
 
 const HOST = 'nominatim.openstreetmap.org';
 const RATE_MS = 1100;          // ≤ 1 req/s per Nominatim policy (+ margin)
-const KEY_DECIMALS = 4;        // ~11 m grouping
+const KEY_DECIMALS = 5;        // ~1.1 m grouping — house-level distinct
 const UA = 'Sentry-Drive/1.0 (https://github.com/JeffFromTheIRS/Sentry-Drive)';
 
 let cache = null;              // { "lat,lng": label|null }

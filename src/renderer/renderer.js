@@ -31,7 +31,7 @@ const REPLAY_BASE_MS = 100; // base interval per point at 1x
 // Drive-calc constants come from the shared single-source module, exposed by
 // the preload bridge (see src/shared/drive-calc.cjs). Using them here keeps the
 // renderer's display conversions identical to the processing pipeline.
-const { MI_TO_KM, M_PER_MILE, MPS_TO_MPH } = window.driveCalc;
+const { MI_TO_KM, M_PER_MILE, MPS_TO_MPH, geodesicM } = window.driveCalc;
 
 // Units
 const UNIT_SYSTEM = {
@@ -1911,7 +1911,7 @@ function renderSelectedDriveStats(drive) {
 
   const slices = [];
   if (fsdDistM > 0)    slices.push({ color: '#22cc55',                    pct: (fsdDistM / totalDistM) * 100 });
-  if (apDistM > 0)     slices.push({ color: 'var(--blue-light, #60a5fa)', pct: (apDistM / totalDistM) * 100 });
+  if (apDistM > 0)     slices.push({ color: 'var(--ap-blue, #3e6ae1)', pct: (apDistM / totalDistM) * 100 });
   if (taccDistM > 0)   slices.push({ color: '#f59e0b',                    pct: (taccDistM / totalDistM) * 100 });
   if (manualDistM > 0) slices.push({ color: 'rgba(148, 163, 184, 0.55)',  pct: (manualDistM / totalDistM) * 100 });
 
@@ -2094,7 +2094,7 @@ function renderDriveStats(drives, meta) {
   // Build the donut chart: cumulative conic-gradient stops using exact percentages.
   const slices = [];
   if (fsdDistM > 0)    slices.push({ color: '#22cc55',                    pct: (fsdDistM / totalDistM) * 100 });
-  if (apDistM > 0)     slices.push({ color: 'var(--blue-light, #60a5fa)', pct: (apDistM / totalDistM) * 100 });
+  if (apDistM > 0)     slices.push({ color: 'var(--ap-blue, #3e6ae1)', pct: (apDistM / totalDistM) * 100 });
   if (taccDistM > 0)   slices.push({ color: '#f59e0b',                    pct: (taccDistM / totalDistM) * 100 });
   if (manualDistM > 0) slices.push({ color: 'rgba(148, 163, 184, 0.55)',  pct: (manualDistM / totalDistM) * 100 });
 
@@ -2355,6 +2355,14 @@ function buildDriveItem(drive) {
 }
 
 function endpointCoord(drive, which) {
+  // Prefer the grouper's stationary-median snapped endpoint — computed from
+  // the full-resolution filtered points (before they're stripped for IPC).
+  // A single raw fix is the noisiest sample of the drive; the snapped point
+  // averages the parked cluster at that end.
+  const snapped = which === 'origin' ? drive.geocodeStartPoint : drive.geocodeEndPoint;
+  if (Array.isArray(snapped) && typeof snapped[0] === 'number' && typeof snapped[1] === 'number') {
+    return { lat: snapped[0], lng: snapped[1] };
+  }
   // List drives only carry the downsampled overviewPoints (full points stay in
   // the main process); the downsample preserves the exact first/last point.
   const pts = Array.isArray(drive.points) && drive.points.length ? drive.points : drive.overviewPoints;
@@ -2380,6 +2388,16 @@ function applyDriveLocations(item, drive) {
   const resolve = (role) => {
     const cacheKey = role === 'origin' ? '_startName' : '_endName';
     if (drive[cacheKey]) { setEndpointLabel(item, role, drive[cacheKey]); return; }
+    // Prefer the car's own label (Tesla-reverse-geocoded over BLE, rolled up
+    // by the grouper exactly as Sentry USB Rusty does) — more accurate than
+    // geocoding the noisy dashcam SEI endpoint, and zero network calls.
+    // Nominatim below remains the fallback for pre-BLE / imported drives.
+    const bleName = role === 'origin' ? drive.locationNameStart : drive.locationNameEnd;
+    if (bleName) {
+      drive[cacheKey] = bleName;
+      setEndpointLabel(item, role, bleName);
+      return;
+    }
     const c = endpointCoord(drive, role);
     if (!c || !api || !api.reverseGeocode) return;
     api.reverseGeocode(c).then((res) => {
@@ -2882,13 +2900,20 @@ function updateReplayPosition(idx, snap = false) {
     const gearNext = idx + 1 < gears?.length ? gears?.[idx + 1] : gearNow;
     const gearTransition = (gearNow !== gearPrev) || (gearNow !== gearNext);
 
-    if (!gearTransition) {
-      // Scrubbing: window=1 for immediate bearing, no transition.
-      // Playback: window=7 circular mean to damp GPS jitter.
-      let bearing = smoothBearing(pts, idx, snap ? 1 : 7, gears);
+    // Playback: bearing at idx, or null when the car isn't actually moving
+    // there (stationary/jitter window) — hold the current heading rather
+    // than rotate to noise. Scrubbing: always orient — if the scrubbed
+    // instant is parked, search outward for the nearest confident heading
+    // (flip-for-reverse handled inside, relative to the found sample).
+    let bearing;
+    if (snap) {
+      bearing = findBearingNear(pts, idx, 7, gears);
+    } else {
+      bearing = gearTransition ? null : smoothBearing(pts, idx, 7, gears);
+      if (bearing != null && gearNow === 2) bearing = (bearing + 180) % 360; // reverse → flip to front
+    }
 
-      if (gearNow === 2) bearing = (bearing + 180) % 360; // reverse → flip to front
-
+    if (bearing != null) {
       if (snap) {
         // Snap directly — reset accumulated winding so subsequent playback
         // starts from the correct angle with no leftover drift.
@@ -3071,35 +3096,133 @@ function computeInitBearing(pts, gearStates) {
   }
   if (startIdx < 0) return 0;
   let bearing = smoothBearing(pts, startIdx, 7, gearStates);
+  if (bearing == null) return 0;
   if (gearStates?.[startIdx] === 2) bearing = (bearing + 180) % 360;
   return bearing;
 }
 
+// Bearing trust gates. A pair of GPS fixes only proves a heading when the car
+// was really rolling through it:
+//   • MIN_BEARING_PAIR_M — single-fix jitter floor (stationary pairs give
+//     atan2(0,0) = "north"; near-stationary ones give random directions).
+//   • MIN_BEARING_SPEED_MPS — pt[3] is the car's own (CAN/SEI) speed where
+//     available, immune to GPS multipath. Parking rows reflect signal and can
+//     wander fixes 2-5 m between samples while the car sits still — far above
+//     any displacement floor — but the car reports ~0 speed the whole time.
+//   • Net-vs-gross displacement — real travel nets out (window start→end
+//     distance ≈ sum of steps); stationary multipath wanders metres gross
+//     but nets near zero.
+const MIN_BEARING_PAIR_M = 1.5;
+const MIN_BEARING_SPEED_MPS = 0.5;
+// How far (in samples ≈ seconds) scrubbing searches around the thumb for a
+// confident heading when the scrubbed instant itself is parked.
+const SCRUB_SEARCH_RADIUS = 30;
+
+// Nearest confident heading to idx — used when scrubbing so the arrow always
+// orients to the local direction of travel. Searches outward with a slight
+// forward bias (the upcoming heading on ties); null only deep inside a long
+// parked stretch, in which case the caller keeps the current rotation.
+function findBearingNear(pts, idx, window, gearStates) {
+  for (let off = 0; off <= SCRUB_SEARCH_RADIUS; off++) {
+    for (const j of off === 0 ? [idx] : [idx + off, idx - off]) {
+      if (j < 0 || j >= pts.length) continue;
+      const b = smoothBearing(pts, j, window, gearStates);
+      if (b != null) {
+        // Reverse flip relative to the sample the heading came from.
+        return gearStates?.[j] === 2 ? (b + 180) % 360 : b;
+      }
+    }
+  }
+  return null;
+}
+
 function smoothBearing(pts, idx, window, gearStates) {
-  // Average bearing over nearby point pairs to prevent jitter.
+  // Displacement-weighted circular mean over nearby point pairs.
   // Skip pairs that cross a gear-state boundary (reverse ↔ drive), since
   // raw travel bearing flips 180° there and the circular mean collapses.
+  // Returns null when the window doesn't show real movement — the caller
+  // holds the arrow's previous heading instead of rotating it to noise.
   const start = Math.max(0, idx - Math.floor(window / 2));
   const end = Math.min(pts.length - 1, idx + Math.ceil(window / 2));
+  if (end <= start) return null;
   const gear = gearStates ? gearStates[idx] : null;
 
-  const collect = (filterByGear) => {
-    let sinSum = 0, cosSum = 0, count = 0;
+  // Structural gate — THE moving/parked decision.
+  //
+  // The car's own recorded speed (pt[3], CAN/SEI when present) is checked
+  // first: if any sample in the window shows real speed, the car IS moving —
+  // skip the GPS-statistics tests below, which under-trigger at low speed
+  // where jitter rivals the movement (that under-trigger froze the arrow
+  // below a walking pace). Speed can only EXPAND updates here, never veto:
+  // zero-filled speed channels (clips without SEI speed) fall through to the
+  // GPS tests instead of stranding the heading.
+  let speedSaysMoving = false;
+  for (let i = start; i <= end; i++) {
+    const v = pts[i][3];
+    if (Number.isFinite(v) && v >= MIN_BEARING_SPEED_MPS) { speedSaysMoving = true; break; }
+  }
+
+  const net = geodesicM(pts[start][0], pts[start][1], pts[end][0], pts[end][1]);
+  if (speedSaysMoving) {
+    // Still require the jitter floor of net movement — below it any bearing
+    // is numerically meaningless even if the wheels are turning.
+    if (net < MIN_BEARING_PAIR_M) return null;
+  } else {
+    // No speed evidence — decide from GPS statistics alone:
+    //   1. Net displacement ≥ ~0.4 m per 1 Hz sample (slow-walk pace).
+    //   2. Coherence (net ÷ gross): real travel moves one way, so the
+    //      straight-line distance ≈ the summed steps (≈1.0; ~0.85 through a
+    //      90° turn). Stationary multipath wanders back and forth — metres
+    //      gross, little net — and can fluke past a net threshold alone,
+    //      but not past both. (A U-turn apex can also dip below 0.5 —
+    //      holding for those few frames is correct anyway: it's mid-spin.)
+    const minNet = Math.max(MIN_BEARING_PAIR_M, (end - start) * 0.4);
+    if (net < minNet) return null;
+    let gross = 0;
+    for (let i = start; i < end; i++) {
+      gross += geodesicM(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
+    }
+    if (gross > 0 && net / gross < 0.5) return null;
+  }
+  // Past this point a bearing is ALWAYS returned: the filters below only
+  // pick which pairs to trust, they can no longer veto the update (an
+  // over-eager veto strands the arrow on a stale heading for whole legs).
+
+  // requireSpeed: prefer pairs where the car's recorded speed (pt[3], CAN/SEI
+  // when available) confirms motion — but fail open below if that channel is
+  // zero-filled (clips without SEI speed) or missing.
+  const collect = (filterByGear, requireSpeed) => {
+    let sinSum = 0, cosSum = 0, weight = 0;
     for (let i = start; i < end; i++) {
       if (filterByGear && (gearStates[i] !== gear || gearStates[i + 1] !== gear)) continue;
+      const d = geodesicM(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
+      if (d < MIN_BEARING_PAIR_M) continue;
+      if (requireSpeed) {
+        const v0 = pts[i][3];
+        const v1 = pts[i + 1][3];
+        if (!Number.isFinite(v0) || !Number.isFinite(v1) || Math.max(v0, v1) < MIN_BEARING_SPEED_MPS) continue;
+      }
       const b = calcBearing(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
       const rad = (b * Math.PI) / 180;
-      sinSum += Math.sin(rad);
-      cosSum += Math.cos(rad);
-      count++;
+      // Weight by displacement so long, confident segments dominate over
+      // short ones that barely cleared the jitter floor.
+      sinSum += Math.sin(rad) * d;
+      cosSum += Math.cos(rad) * d;
+      weight += d;
     }
-    return { sinSum, cosSum, count };
+    return { sinSum, cosSum, weight };
   };
 
-  let { sinSum, cosSum, count } = gearStates ? collect(true) : collect(false);
-  if (count === 0 && gearStates) ({ sinSum, cosSum, count } = collect(false));
-  if (count === 0) return 0;
-  return ((Math.atan2(sinSum / count, cosSum / count) * 180) / Math.PI + 360) % 360;
+  // Trust tiers, most to least picky. Whichever yields pairs first wins.
+  let r = gearStates ? collect(true, true) : collect(false, true);
+  if (r.weight === 0 && gearStates) r = collect(true, false);
+  if (r.weight === 0) r = collect(false, false);
+  if (r.weight > 0) {
+    return ((Math.atan2(r.sinSum, r.cosSum) * 180) / Math.PI + 360) % 360;
+  }
+  // Every individual pair was under the jitter floor yet the window clearly
+  // travelled (e.g. steady creep ~1 m/s) — use the net vector itself.
+  return calcBearing(pts[start][0], pts[start][1], pts[end][0], pts[end][1]);
 }
 
 function updateReplayData(idx) {

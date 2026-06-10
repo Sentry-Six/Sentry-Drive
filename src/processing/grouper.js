@@ -523,6 +523,33 @@ function buildDriveStats(clips, idx) {
   const r2 = round2;
   const pct = (part) => totalDistanceM > 0 ? Math.round((part / totalDistanceM) * 1000) / 10 : 0;
 
+  // Geocoding-quality endpoints — Drive-leading enhancement (no Rust
+  // counterpart; used ONLY for reverse-geocode labels, never for the locked
+  // distance/speed stats). A single raw GPS fix carries 3–8 m of noise and
+  // the first fix of a drive is usually the worst one. Where the car sat
+  // still at either end, the component-wise median of that parked cluster
+  // estimates the true spot ~√N better and rejects single-fix outliers.
+  const geocodeStartPoint = snapGeocodeEndpoint(allPoints, false);
+  const geocodeEndPoint = snapGeocodeEndpoint(allPoints, true);
+
+  // v10 BLE location names — mirrors Rust roll_up_telemetry (grouper.rs:2785):
+  // first non-null locationNameStart / last non-null locationNameEnd across the
+  // drive's clips (time-ordered), deduped by parent file so a clip split into
+  // sub-segments isn't read twice. Stored verbatim — Tesla's reverse-geocoder
+  // picked the label (street address, business name, etc.); no post-processing.
+  // Absent on pre-BLE data, non-telemetry Pis, and imported drives.
+  let locationNameStart = null;
+  let locationNameEnd = null;
+  const seenTelemetryFiles = new Set();
+  for (const clip of clips) {
+    if (seenTelemetryFiles.has(clip.file)) continue;
+    seenTelemetryFiles.add(clip.file);
+    if (locationNameStart == null && clip.locationNameStart != null) {
+      locationNameStart = clip.locationNameStart;
+    }
+    if (clip.locationNameEnd != null) locationNameEnd = clip.locationNameEnd;
+  }
+
   return {
     id: idx,
     date: firstClip.date,
@@ -566,7 +593,42 @@ function buildDriveStats(clips, idx) {
     source: firstClip.source ?? "sei",
     ...(firstClip.externalSignature ? { externalSignature: firstClip.externalSignature } : {}),
     ...(firstClip.tessieAutopilotPercent != null ? { tessieAutopilotPercent: firstClip.tessieAutopilotPercent } : {}),
+    ...(locationNameStart != null ? { locationNameStart } : {}),
+    ...(locationNameEnd != null ? { locationNameEnd } : {}),
+    ...(geocodeStartPoint ? { geocodeStartPoint } : {}),
+    ...(geocodeEndPoint ? { geocodeEndPoint } : {}),
   };
+}
+
+/**
+ * Geocoding endpoint for one end of a drive: the component-wise median of the
+ * stationary cluster at that end (points within RADIUS_M of the terminal fix,
+ * walking inward, capped at ~30 s of samples). Falls back to the terminal fix
+ * itself when the car was already rolling (cluster < 3 points) — averaging
+ * moving points would drag the location along the path. Displacement-based on
+ * purpose: works identically with or without SEI speed data.
+ */
+function snapGeocodeEndpoint(pts, fromEnd) {
+  const n = pts.length;
+  if (n === 0) return null;
+  const anchor = fromEnd ? pts[n - 1] : pts[0];
+  const MAX_CLUSTER = 30; // ~30 s at the 1 Hz dashcam sample rate
+  const RADIUS_M = 15;    // within GPS noise of the anchor = "still parked"
+  const lats = [];
+  const lngs = [];
+  for (let k = 0; k < Math.min(MAX_CLUSTER, n); k++) {
+    const p = fromEnd ? pts[n - 1 - k] : pts[k];
+    if (geodesicM(anchor.lat, anchor.lng, p.lat, p.lng) > RADIUS_M) break;
+    lats.push(p.lat);
+    lngs.push(p.lng);
+  }
+  if (lats.length < 3) return [anchor.lat, anchor.lng];
+  lats.sort((a, b) => a - b);
+  lngs.sort((a, b) => a - b);
+  const med = (arr) => (arr.length % 2
+    ? arr[(arr.length - 1) / 2]
+    : (arr[arr.length / 2 - 1] + arr[arr.length / 2]) / 2);
+  return [med(lats), med(lngs)];
 }
 
 /**

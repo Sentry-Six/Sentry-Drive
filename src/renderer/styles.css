@@ -29,6 +29,7 @@
   --drive-sel:   rgba(59, 130, 246, 0.1);
   --blue:        #3b82f6;
   --blue-light:  #60a5fa;
+  --ap-blue:     #3e6ae1;   /* Tesla Blue — Autopilot in the FSD analytics */
   --fsd-blue:    #3b82f6;
   --fsd-white:   rgba(180, 210, 240, 0.75);
   --success:     #34d399;
@@ -255,7 +256,7 @@ html, body {
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.15s, background 0.15s;
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s, box-shadow 0.15s;
   outline: none;
   align-self: flex-start;
   display: inline-flex;
@@ -282,28 +283,63 @@ html, body {
   font-size: 13px;
 }
 
+/* Liquid Glass buttons: specular top rim + soft depth, matching --card-bg
+   surfaces. Primary keeps the solid blue identity under a glass highlight;
+   secondary/danger are frosted tiles that pick up color on hover. */
 .btn-primary {
-  background: var(--blue);
+  background: linear-gradient(150deg, rgba(96, 165, 250, 0.3), rgba(59, 130, 246, 0.14) 55%, rgba(96, 165, 250, 0.2));
   color: #fff;
+  border: 1px solid rgba(125, 170, 255, 0.38);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.05),
+    0 6px 18px -6px rgba(59, 130, 246, 0.4);
 }
-.btn-primary:hover:not(:disabled) { background: #2563eb; }
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(150deg, rgba(96, 165, 250, 0.42), rgba(59, 130, 246, 0.22) 55%, rgba(96, 165, 250, 0.3));
+  border-color: rgba(125, 170, 255, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.05),
+    0 8px 22px -6px rgba(59, 130, 246, 0.55);
+}
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-secondary {
-  background: rgba(59, 130, 246, 0.14);
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.04) 55%, rgba(255, 255, 255, 0.07));
   color: var(--blue-light);
+  border: 1px solid var(--glass-border);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.28);
 }
-.btn-secondary:hover:not(:disabled) { background: rgba(59, 130, 246, 0.22); }
+.btn-secondary:hover:not(:disabled) {
+  background: linear-gradient(150deg, rgba(96, 165, 250, 0.18), rgba(59, 130, 246, 0.07) 55%, rgba(96, 165, 250, 0.11));
+  border-color: rgba(96, 165, 250, 0.38);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.04),
+    0 4px 14px rgba(59, 130, 246, 0.2);
+}
 
 .btn-danger {
-  background: var(--input-bg);
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02) 55%, rgba(255, 255, 255, 0.045));
   color: var(--text-muted);
-  border: 1px solid var(--border-light);
+  border: 1px solid var(--glass-border);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.03),
+    0 4px 12px rgba(0, 0, 0, 0.25);
 }
 .btn-danger:hover:not(:disabled) {
-  background: rgba(248, 113, 113, 0.08);
+  background: linear-gradient(150deg, rgba(248, 113, 113, 0.17), rgba(248, 113, 113, 0.06) 55%, rgba(248, 113, 113, 0.11));
   color: var(--danger);
-  border-color: var(--danger);
+  border-color: rgba(248, 113, 113, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.03),
+    0 4px 14px rgba(248, 113, 113, 0.18);
 }
 .btn-danger:disabled { opacity: 0.35; cursor: not-allowed; }
 
@@ -1106,7 +1142,7 @@ html, body {
   background: currentColor;
 }
 .map-stats-row-label.mode-fsd    { color: #22cc55; }
-.map-stats-row-label.mode-ap     { color: var(--blue-light); }
+.map-stats-row-label.mode-ap     { color: var(--ap-blue); }
 .map-stats-row-label.mode-tacc   { color: #f59e0b; }
 .map-stats-row-label.mode-manual { color: var(--text-muted); }
 

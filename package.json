@@ -1,13 +1,13 @@
 {
   "name": "sentry-drive",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "module",
   "description": "Standalone Tesla dashcam drives processor - replicates Sentry USB drives processing",
   "main": "src/main/electron-main.cjs",
   "scripts": {
     "start": "electron .",
     "process": "node src/processing/process.js",
-    "test": "node --test src/shared/drive-calc.test.js src/processing/grouper.test.js",
+    "test": "node --test src/shared/drive-calc.test.js src/processing/grouper.test.js src/main/drive-data-reader.test.js",
     "prebuild": "npm test",
     "build": "electron-builder --win",
     "publish": "npm test && electron-builder --win --publish always"

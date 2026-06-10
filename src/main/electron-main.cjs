@@ -5,9 +5,6 @@ const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
-const { chain } = require('stream-chain');
-const parser = require('stream-json/parser.js');
-const Assembler = require('stream-json/assembler.js');
 const { geodesicM, GEAR_PARK, CLIP_DURATION_MS, DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
 
 // Give V8 more old-space headroom so the main process can parse large
@@ -19,106 +16,13 @@ let mainWindow;
 let activeChild = null;
 let driveDetailCache = null;
 
-// ─── Streaming drive-data.json reader ───────────────────────────────────────
-// JSON.parse on a 900MB+ file OOMs the main process: it requires the source
-// JS string (V8 caps strings at ~1GB) plus the parsed tree (~3-5x the source
-// size) in heap simultaneously. This streams the file once, capturing each
-// top-level field with the minimum memory needed:
-//
-//   • routes      — built one element at a time with a sub-Assembler
-//   • driveTags   — assembled in full (usually small)
-//   • processedFiles — counted only; the actual file paths aren't needed
-//                     downstream, just the count for the UI footer
-//
-// Three-pass parsing (one stream per field) works but takes 3x longer because
-// each pass re-tokenizes the whole file. Single-pass parses the 939MB user
-// file in ~80s vs ~360s for three passes.
-
-function readDriveDataStreaming(filePath, onProgress) {
-  return new Promise((resolve, reject) => {
-    let processedFileCount = 0;
-    const routes = [];
-    let driveTags = {};
-
-    // depth: 1 = inside top-level object; 2 = inside a top-level field's
-    // value (array or object); 3 = inside a route element.
-    let depth = 0;
-    let currentTopKey = null;
-    let asm = null;             // sub-assembler for current route or driveTags
-    let asmExitDepth = -1;      // depth at which asm completes
-
-    // Track raw bytes read so we can drive a progress bar in the renderer.
-    // Throttled to ~10 updates/sec to keep IPC traffic reasonable.
-    const totalBytes = onProgress ? fs.statSync(filePath).size : 0;
-    let bytesRead = 0;
-    let lastEmit = 0;
-
-    const readStream = fs.createReadStream(filePath);
-    if (onProgress) {
-      readStream.on('data', (chunk) => {
-        bytesRead += chunk.length;
-        const now = Date.now();
-        if (now - lastEmit >= 100) {
-          lastEmit = now;
-          onProgress(bytesRead, totalBytes);
-        }
-      });
-    }
-
-    const pipeline = chain([
-      readStream,
-      parser({ packKeys: true, packStrings: true, packNumbers: true }),
-    ]);
-
-    pipeline.on('data', (token) => {
-      const name = token.name;
-
-      if (asm) {
-        asm.consume(token);
-        if (name === 'startObject' || name === 'startArray') depth++;
-        else if (name === 'endObject' || name === 'endArray') {
-          depth--;
-          if (depth === asmExitDepth) {
-            if (currentTopKey === 'routes') routes.push(asm.current);
-            else if (currentTopKey === 'driveTags') driveTags = asm.current;
-            asm = null;
-          }
-        }
-        return;
-      }
-
-      if (name === 'startObject' || name === 'startArray') {
-        const before = depth;
-        depth++;
-        // Start assembling a route element (object at depth 3, inside routes array).
-        if (before === 2 && name === 'startObject' && currentTopKey === 'routes') {
-          asm = new Assembler();
-          asmExitDepth = before;
-          asm.consume(token);
-        }
-        // Start assembling the driveTags object (object at depth 2, value of driveTags key).
-        else if (before === 1 && name === 'startObject' && currentTopKey === 'driveTags') {
-          asm = new Assembler();
-          asmExitDepth = before;
-          asm.consume(token);
-        }
-      } else if (name === 'endObject' || name === 'endArray') {
-        depth--;
-        if (depth === 1) currentTopKey = null;
-      } else if (name === 'keyValue' && depth === 1) {
-        currentTopKey = token.value;
-      } else if (name === 'stringValue' && depth === 2 && currentTopKey === 'processedFiles') {
-        processedFileCount++;
-      }
-    });
-
-    pipeline.on('end', () => {
-      if (onProgress && totalBytes > 0) onProgress(totalBytes, totalBytes);
-      resolve({ processedFileCount, routes, driveTags });
-    });
-    pipeline.on('error', reject);
-  });
-}
+// ─── drive-data.json reading ─────────────────────────────────────────────────
+// All reads go through src/main/drive-data-reader.cjs: native JSON.parse for
+// files that fit under V8's string cap (~16x faster than token streaming),
+// stream-json above it. Every handler that used to JSON.parse(readFileSync())
+// here would crash with ERR_STRING_TOO_LONG on >512 MiB files — the shared
+// reader fixes that everywhere at once.
+const { readDriveData } = require('./drive-data-reader.cjs');
 
 function downsampleForIPC(pts, maxPts) {
   if (!pts || pts.length === 0) return [];
@@ -287,8 +191,7 @@ ipcMain.handle('set-allow-prerelease', (_e, allow) => {
 
 ipcMain.handle('remove-drive', async (_e, { filePath, driveStartTime }) => {
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const data = JSON.parse(raw);
+    const data = await readDriveData(filePath, { wantProcessedFiles: true });
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives } = groupIntoDrives(data.routes ?? []);
     const target = drives.find((d) => d.startTime === driveStartTime);
@@ -359,11 +262,8 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
       mainWindow?.webContents.send('load-progress', { phase, current, total });
     };
 
-    // Stream-parse the file in a single pass — JSON.parse on a 900MB+ file
-    // OOMs the main process even with --max-old-space-size=8192 because peak
-    // memory (source string + parsed tree) hits 3-5x the file size.
-    const parsed = await readDriveDataStreaming(filePath, (current, total) => {
-      sendProgress('reading', current, total);
+    const parsed = await readDriveData(filePath, {
+      onProgress: (current, total) => sendProgress('reading', current, total),
     });
     const totalRoutes = parsed.routes.length;
     const processedFileCount = parsed.processedFileCount;
@@ -635,10 +535,9 @@ async function decodeRoutesByteFields(routes) {
 
 // ─── Drive Tags ──────────────────────────────────────────────────────────────
 
-ipcMain.handle('get-drive-tags', (_e, filePath) => {
+ipcMain.handle('get-drive-tags', async (_e, filePath) => {
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const data = JSON.parse(raw);
+    const data = await readDriveData(filePath);
     return { success: true, driveTags: data.driveTags ?? {} };
   } catch (err) {
     return { success: false, error: err.message };
@@ -647,8 +546,7 @@ ipcMain.handle('get-drive-tags', (_e, filePath) => {
 
 ipcMain.handle('set-drive-tags', (_e, { filePath, driveKey, tags }) => withDriveDataLock(async () => {
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const data = JSON.parse(raw);
+    const data = await readDriveData(filePath, { wantProcessedFiles: true });
     if (!data.driveTags) data.driveTags = {};
 
     if (tags.length === 0) {
@@ -665,10 +563,9 @@ ipcMain.handle('set-drive-tags', (_e, { filePath, driveKey, tags }) => withDrive
   }
 }));
 
-ipcMain.handle('get-all-tag-names', (_e, filePath) => {
+ipcMain.handle('get-all-tag-names', async (_e, filePath) => {
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const data = JSON.parse(raw);
+    const data = await readDriveData(filePath);
     const driveTags = data.driveTags ?? {};
     const set = new Set();
     for (const tags of Object.values(driveTags)) {
@@ -738,9 +635,8 @@ function sendRepairProgress(phase, current, total, etaSec) {
 ipcMain.handle('repair-gps', async (_e, { filePath, useRouting }) => {
   try {
     sendRepairProgress('Reading…', 0, 1);
-    const raw = fs.readFileSync(filePath, 'utf-8');
     fs.copyFileSync(filePath, filePath + '.bak');
-    const data = JSON.parse(raw);
+    const data = await readDriveData(filePath, { wantProcessedFiles: true });
     let routes = await decodeRoutesByteFields(data.routes ?? []);
     let bridgedGaps = 0;
     let routedGaps = 0;
@@ -910,8 +806,7 @@ ipcMain.handle('tessie-preview', async (_e, { driveDataPath, drivesCsvPath, stat
     let existingRanges = [];
     const existingSignatures = new Set();
     if (fs.existsSync(driveDataPath)) {
-      const raw = fs.readFileSync(driveDataPath, 'utf-8');
-      const data = JSON.parse(raw);
+      const data = await readDriveData(driveDataPath);
       const { groupIntoDrives } = await import('../processing/grouper.js');
       const { drives } = groupIntoDrives(data.routes ?? []);
       existingRanges = buildExistingDriveRanges(drives);
@@ -965,7 +860,7 @@ ipcMain.handle('tessie-import', async (_e, { driveDataPath, drivesCsvPath, state
     let data;
     if (fs.existsSync(driveDataPath)) {
       fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
-      data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+      data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
     } else {
       data = { routes: [], processedFiles: [], driveTags: {} };
     }
@@ -1126,8 +1021,7 @@ ipcMain.handle('tessie-api-preview', async (_e, { token, vin, fromSec, toSec, dr
     let existingRanges = [];
     const existingSignatures = new Set();
     if (driveDataPath && fs.existsSync(driveDataPath)) {
-      const raw = fs.readFileSync(driveDataPath, 'utf-8');
-      const data = JSON.parse(raw);
+      const data = await readDriveData(driveDataPath);
       const { groupIntoDrives } = await import('../processing/grouper.js');
       const { drives: existing } = groupIntoDrives(data.routes ?? []);
       existingRanges = buildExistingDriveRanges(existing);
@@ -1170,7 +1064,7 @@ ipcMain.handle('tessie-api-import', async (_e, { token, vin, fromSec, toSec, dri
     let data;
     if (fs.existsSync(driveDataPath)) {
       fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
-      data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+      data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
     } else {
       data = { routes: [], processedFiles: [], driveTags: {} };
     }
@@ -1326,7 +1220,7 @@ ipcMain.handle('teslascope-api-preview', async (_e, { token, publicId, fromSec, 
     let existingRanges = [];
     const existingSignatures = new Set();
     if (driveDataPath && fs.existsSync(driveDataPath)) {
-      const data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+      const data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
       const { groupIntoDrives } = await import('../processing/grouper.js');
       const { drives: existing } = groupIntoDrives(data.routes ?? []);
       existingRanges = buildExistingDriveRanges(existing);
@@ -1361,7 +1255,7 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
     let data;
     if (fs.existsSync(driveDataPath)) {
       fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
-      data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+      data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
     } else {
       data = { routes: [], processedFiles: [], driveTags: {} };
     }
@@ -1438,7 +1332,7 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
 ipcMain.handle('tessie-remove-hidden', async (_e, { driveDataPath }) => {
   try {
     if (!fs.existsSync(driveDataPath)) return { success: false, error: 'File not found' };
-    const data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+    const data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
 
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives } = groupIntoDrives(data.routes ?? []);
@@ -1486,7 +1380,7 @@ ipcMain.handle('tessie-remove-all', async (_e, { driveDataPath }) => {
   try {
     if (!fs.existsSync(driveDataPath)) return { success: false, error: 'File not found' };
     fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
-    const data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+    const data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
 
     const tessieFiles = new Set(
       (data.routes ?? [])
@@ -1512,7 +1406,7 @@ ipcMain.handle('tessie-remove-all', async (_e, { driveDataPath }) => {
 ipcMain.handle('teslascope-remove-hidden', async (_e, { driveDataPath }) => {
   try {
     if (!fs.existsSync(driveDataPath)) return { success: false, error: 'File not found' };
-    const data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+    const data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
 
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives } = groupIntoDrives(data.routes ?? []);
@@ -1559,7 +1453,7 @@ ipcMain.handle('teslascope-remove-all', async (_e, { driveDataPath }) => {
   try {
     if (!fs.existsSync(driveDataPath)) return { success: false, error: 'File not found' };
     fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
-    const data = JSON.parse(fs.readFileSync(driveDataPath, 'utf-8'));
+    const data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
 
     const tsFiles = new Set(
       (data.routes ?? [])
