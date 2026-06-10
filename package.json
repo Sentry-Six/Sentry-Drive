@@ -47,6 +47,14 @@
       "artifactName": "Sentry-Drive-${version}-${arch}.${ext}",
       "icon": "assets/app-icon/sentrydrive.icns"
     },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "artifactName": "Sentry-Drive-${version}.${ext}",
+      "icon": "assets/app-icon/sentrydrive.png"
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,

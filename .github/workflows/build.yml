@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -46,6 +46,10 @@ jobs:
         if: runner.os == 'macOS'
         run: npx electron-builder --mac --publish never
 
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: npx electron-builder --linux --publish never
+
       - name: Upload assets (Windows)
         if: runner.os == 'Windows'
         env:
@@ -59,3 +63,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: gh release upload "${{ github.event.release.tag_name }}" dist/*.dmg dist/latest-mac.yml --clobber
+
+      - name: Upload assets (Linux)
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.AppImage dist/latest-linux.yml --clobber
