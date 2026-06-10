@@ -1,14 +1,23 @@
-// worker.js - Worker thread for parallel GPS extraction
+// worker.js - Worker thread for parallel GPS extraction.
+//
+// Pull model: the coordinator sends one file at a time and we ask for the
+// next by posting our result. This keeps all workers busy until the very
+// last file — the old pre-chunked split left finished workers idle while
+// the unluckiest one ground through its remaining chunk alone.
 import { parentPort, workerData } from "node:worker_threads";
 import { extractGPSFromFile } from "./extract.js";
 
-const { files, workerId } = workerData;
+const { workerId } = workerData;
 
-let count = 0;
+parentPort.on("message", async (msg) => {
+  if (msg.type === "end") {
+    parentPort.postMessage({ type: "done", workerId });
+    parentPort.close();
+    return;
+  }
+  if (msg.type !== "file") return;
 
-for (const f of files) {
-  count++;
-
+  const f = msg.file;
   let result;
   try {
     const data = await extractGPSFromFile(f.fullPath);
@@ -48,10 +57,11 @@ for (const f of files) {
     result = { relativePath: f.relativePath, hasGPS: false, error: err.message };
   }
 
-  parentPort.postMessage({ type: "result", workerId, result, count, total: files.length });
-}
+  parentPort.postMessage({ type: "result", workerId, result });
+});
 
-parentPort.postMessage({ type: "done", workerId });
+// Announce readiness — the coordinator answers with the first file.
+parentPort.postMessage({ type: "ready", workerId });
 
 function computeGearRuns(gears) {
   if (gears.length === 0) return [];

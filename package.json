@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "process": "node src/processing/process.js",
-    "test": "node --test src/shared/drive-calc.test.js src/processing/grouper.test.js src/main/drive-data-reader.test.js",
+    "test": "node --test src/shared/drive-calc.test.js src/processing/grouper.test.js src/main/drive-data-reader.test.js src/renderer/replay-bearing.test.js",
     "prebuild": "npm test",
     "build": "electron-builder --win",
     "publish": "npm test && electron-builder --win --publish always"

@@ -189,7 +189,7 @@ ipcMain.handle('set-allow-prerelease', (_e, allow) => {
   autoUpdater.allowPrerelease = allow;
 });
 
-ipcMain.handle('remove-drive', async (_e, { filePath, driveStartTime }) => {
+ipcMain.handle('remove-drive', (_e, { filePath, driveStartTime }) => withDriveDataLock(async () => {
   try {
     const data = await readDriveData(filePath, { wantProcessedFiles: true });
     const { groupIntoDrives } = await import('../processing/grouper.js');
@@ -208,7 +208,7 @@ ipcMain.handle('remove-drive', async (_e, { filePath, driveStartTime }) => {
   } catch (err) {
     return { success: false, error: err.message };
   }
-});
+}));
 
 ipcMain.handle('revert-to-stable', () => {
   autoUpdater.allowPrerelease = false;
@@ -445,21 +445,47 @@ function withDriveDataLock(fn) {
   return result;
 }
 
-// Rename with a few retries — on Windows a transient EPERM/EBUSY can occur if a
-// reader briefly holds the destination file open.
-function renameWithRetry(from, to, attempts = 5) {
+// Rename with retries — on Windows EPERM/EBUSY occurs while a reader holds the
+// destination open. A streaming read of a large drive-data.json can hold it
+// for several seconds, so back off exponentially (≈11s total) rather than
+// giving up after a few fixed 40ms beats and failing the write.
+function renameWithRetry(from, to, attempts = 12) {
   return new Promise((resolve, reject) => {
     const tryOnce = (n) => {
       try { fs.renameSync(from, to); resolve(); }
       catch (err) {
         if (n > 0 && (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES')) {
-          setTimeout(() => tryOnce(n - 1), 40);
+          setTimeout(() => tryOnce(n - 1), Math.min(1500, 40 * 2 ** (attempts - n)));
         } else {
           reject(err);
         }
       }
     };
     tryOnce(attempts);
+  });
+}
+
+// Merge freshly imported clips into drive-data.json under the write lock.
+// The API imports fetch for minutes; merging against a re-read of the file
+// (rather than the snapshot taken before the fetch) keeps writes made in the
+// meantime — tag edits, drive removals — from being clobbered.
+function saveImportedClips(filePath, clips) {
+  return withDriveDataLock(async () => {
+    let data;
+    if (fs.existsSync(filePath)) {
+      fs.copyFileSync(filePath, filePath + '.bak'); // pre-import restore point
+      data = await readDriveData(filePath, { wantProcessedFiles: true });
+    } else {
+      data = { routes: [], processedFiles: [], driveTags: {} };
+    }
+    if (!Array.isArray(data.routes)) data.routes = [];
+    if (!Array.isArray(data.processedFiles)) data.processedFiles = [];
+    for (const clip of clips) {
+      data.routes.push(clip);
+      data.processedFiles.push(clip.file);
+    }
+    data.routes = await routesToWireFormat(data.routes);
+    await writeDriveDataJSON(filePath, data);
   });
 }
 
@@ -632,7 +658,7 @@ function sendRepairProgress(phase, current, total, etaSec) {
   mainWindow?.webContents.send('repair-progress', { phase, current, total, etaSec });
 }
 
-ipcMain.handle('repair-gps', async (_e, { filePath, useRouting }) => {
+ipcMain.handle('repair-gps', (_e, { filePath, useRouting }) => withDriveDataLock(async () => {
   try {
     sendRepairProgress('Reading…', 0, 1);
     fs.copyFileSync(filePath, filePath + '.bak');
@@ -776,7 +802,7 @@ ipcMain.handle('repair-gps', async (_e, { filePath, useRouting }) => {
   } catch (err) {
     return { success: false, error: err.message };
   }
-});
+}));
 
 // ─── Tessie Import ───────────────────────────────────────────────────────────
 // Two-phase flow so the UI can preview counts before committing to the full
@@ -843,7 +869,7 @@ ipcMain.handle('tessie-import-cancel', () => {
   return { success: true };
 });
 
-ipcMain.handle('tessie-import', async (_e, { driveDataPath, drivesCsvPath, statesCsvPath, useRouting }) => {
+ipcMain.handle('tessie-import', (_e, { driveDataPath, drivesCsvPath, statesCsvPath, useRouting }) => withDriveDataLock(async () => {
   tessieImportCancel = false;
   try {
     const tessieMod = require('../processing/tessie-import.cjs');
@@ -929,7 +955,7 @@ ipcMain.handle('tessie-import', async (_e, { driveDataPath, drivesCsvPath, state
   } finally {
     tessieImportCancel = false;
   }
-});
+}));
 
 // ─── Tessie API Import ───────────────────────────────────────────────────────
 // Uses api.tessie.com to fetch dense per-drive polylines (with per-point
@@ -1060,16 +1086,16 @@ ipcMain.handle('tessie-api-import', async (_e, { token, vin, fromSec, toSec, dri
     sendTessieProgress({ phase: 'Fetching drives list…', current: 0, total: 1 });
     const drivesList = await fetchDrives(token, vin, { from: fromSec, to: toSec });
 
-    // Load or init drive data
+    // Snapshot for overlap/duplicate decisions only — the authoritative merge
+    // re-reads the file under the drive-data lock at save time (the fetch loop
+    // below can run for minutes while tags or removals land in between).
     let data;
     if (fs.existsSync(driveDataPath)) {
-      fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
-      data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
+      data = await readDriveData(driveDataPath);
     } else {
       data = { routes: [], processedFiles: [], driveTags: {} };
     }
     if (!Array.isArray(data.routes)) data.routes = [];
-    if (!Array.isArray(data.processedFiles)) data.processedFiles = [];
 
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives: existingDrives } = groupIntoDrives(data.routes);
@@ -1095,6 +1121,7 @@ ipcMain.handle('tessie-api-import', async (_e, { token, vin, fromSec, toSec, dri
     sendTessieProgress({ phase: 'Fetching paths…', current: 0, total: candidates.length });
 
     const throttler = new Throttler(1000);
+    const newClips = [];
     let imported = 0;
     let canceled = false;
     const skipReasons = {};
@@ -1131,16 +1158,12 @@ ipcMain.handle('tessie-api-import', async (_e, { token, vin, fromSec, toSec, dri
         skipReasons[result.reason || 'unknown'] = (skipReasons[result.reason || 'unknown'] || 0) + 1;
         continue;
       }
-      for (const clip of result.clips) {
-        data.routes.push(clip);
-        data.processedFiles.push(clip.file);
-      }
+      newClips.push(...result.clips);
       imported++;
     }
 
     sendTessieProgress({ phase: 'Saving…', current: candidates.length, total: candidates.length });
-    data.routes = await routesToWireFormat(data.routes);
-    await writeDriveDataJSON(driveDataPath, data);
+    if (newClips.length > 0) await saveImportedClips(driveDataPath, newClips);
 
     return { success: true, imported, canceled, totalCandidates: candidates.length, skipReasons };
   } catch (err) {
@@ -1252,15 +1275,16 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
     sendTeslascopeProgress({ phase: 'Fetching drives list…', current: 0, total: 1 });
     const drivesList = await fetchDrives(token, publicId, { from: fromSec, to: toSec });
 
+    // Snapshot for overlap/duplicate decisions only — the authoritative merge
+    // re-reads the file under the drive-data lock at save time (see the
+    // Tessie API import above).
     let data;
     if (fs.existsSync(driveDataPath)) {
-      fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
-      data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
+      data = await readDriveData(driveDataPath);
     } else {
       data = { routes: [], processedFiles: [], driveTags: {} };
     }
     if (!Array.isArray(data.routes)) data.routes = [];
-    if (!Array.isArray(data.processedFiles)) data.processedFiles = [];
 
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives: existingDrives } = groupIntoDrives(data.routes);
@@ -1281,6 +1305,7 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
 
     sendTeslascopeProgress({ phase: 'Fetching paths…', current: 0, total: candidates.length });
     const throttler = new Throttler(1000);
+    const newClips = [];
     let imported = 0, canceled = false;
     const skipReasons = {};
     const startMs = Date.now();
@@ -1308,16 +1333,12 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
         skipReasons[result.reason || 'unknown'] = (skipReasons[result.reason || 'unknown'] || 0) + 1;
         continue;
       }
-      for (const clip of result.clips) {
-        data.routes.push(clip);
-        data.processedFiles.push(clip.file);
-      }
+      newClips.push(...result.clips);
       imported++;
     }
 
     sendTeslascopeProgress({ phase: 'Saving…', current: candidates.length, total: candidates.length });
-    data.routes = await routesToWireFormat(data.routes);
-    await writeDriveDataJSON(driveDataPath, data);
+    if (newClips.length > 0) await saveImportedClips(driveDataPath, newClips);
     return { success: true, imported, canceled, totalCandidates: candidates.length, skipReasons };
   } catch (err) {
     return { success: false, error: err.message };
@@ -1329,7 +1350,7 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
 // Remove only the Tessie clips whose grouped drive is hidden by SEI overlap.
 // Useful for cleaning up legacy imports that landed on the wrong side of an
 // overlap-check edge case before this was tightened.
-ipcMain.handle('tessie-remove-hidden', async (_e, { driveDataPath }) => {
+ipcMain.handle('tessie-remove-hidden', (_e, { driveDataPath }) => withDriveDataLock(async () => {
   try {
     if (!fs.existsSync(driveDataPath)) return { success: false, error: 'File not found' };
     const data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
@@ -1374,9 +1395,9 @@ ipcMain.handle('tessie-remove-hidden', async (_e, { driveDataPath }) => {
   } catch (err) {
     return { success: false, error: err.message };
   }
-});
+}));
 
-ipcMain.handle('tessie-remove-all', async (_e, { driveDataPath }) => {
+ipcMain.handle('tessie-remove-all', (_e, { driveDataPath }) => withDriveDataLock(async () => {
   try {
     if (!fs.existsSync(driveDataPath)) return { success: false, error: 'File not found' };
     fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
@@ -1401,9 +1422,9 @@ ipcMain.handle('tessie-remove-all', async (_e, { driveDataPath }) => {
   } catch (err) {
     return { success: false, error: err.message };
   }
-});
+}));
 
-ipcMain.handle('teslascope-remove-hidden', async (_e, { driveDataPath }) => {
+ipcMain.handle('teslascope-remove-hidden', (_e, { driveDataPath }) => withDriveDataLock(async () => {
   try {
     if (!fs.existsSync(driveDataPath)) return { success: false, error: 'File not found' };
     const data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
@@ -1447,9 +1468,9 @@ ipcMain.handle('teslascope-remove-hidden', async (_e, { driveDataPath }) => {
   } catch (err) {
     return { success: false, error: err.message };
   }
-});
+}));
 
-ipcMain.handle('teslascope-remove-all', async (_e, { driveDataPath }) => {
+ipcMain.handle('teslascope-remove-all', (_e, { driveDataPath }) => withDriveDataLock(async () => {
   try {
     if (!fs.existsSync(driveDataPath)) return { success: false, error: 'File not found' };
     fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
@@ -1474,4 +1495,4 @@ ipcMain.handle('teslascope-remove-all', async (_e, { driveDataPath }) => {
   } catch (err) {
     return { success: false, error: err.message };
   }
-});
+}));

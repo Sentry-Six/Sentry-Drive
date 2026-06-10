@@ -4,7 +4,7 @@
 // Uses worker threads for parallel extraction across all CPU cores
 
 import { Worker } from "node:worker_threads";
-import { readdir, writeFile, readFile } from "node:fs/promises";
+import { readdir, writeFile, readFile, rename, unlink } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -106,31 +106,42 @@ async function collectDateEntries(dir, dateEntries, rootFiles, depth) {
   }
 }
 
-function chunkArray(arr, n) {
-  const chunks = Array.from({ length: n }, () => []);
-  for (let i = 0; i < arr.length; i++) {
-    chunks[i % n].push(arr[i]);
+// Shared-queue worker pool: every worker pulls the next file when it finishes
+// its current one, so all workers stay busy until the queue is empty. The old
+// up-front round-robin split left finished workers idle while the slowest
+// chunk's worker ground through its tail alone.
+function runWorkerPool(files, numWorkers, onResult) {
+  let nextIdx = 0;
+  const promises = [];
+  for (let w = 0; w < numWorkers; w++) {
+    promises.push(new Promise((resolve, reject) => {
+      const worker = new Worker(path.join(__dirname, "worker.js"), {
+        workerData: { workerId: w },
+      });
+      const sendNext = () => {
+        if (nextIdx < files.length) {
+          worker.postMessage({ type: "file", file: files[nextIdx++] });
+        } else {
+          worker.postMessage({ type: "end" });
+        }
+      };
+      worker.on("message", (msg) => {
+        if (msg.type === "ready") {
+          sendNext();
+        } else if (msg.type === "result") {
+          onResult(msg);
+          sendNext();
+        } else if (msg.type === "done") {
+          resolve();
+        }
+      });
+      worker.on("error", reject);
+      worker.on("exit", (code) => {
+        if (code !== 0) reject(new Error(`Worker ${w} exited with code ${code}`));
+      });
+    }));
   }
-  return chunks.filter((c) => c.length > 0);
-}
-
-function runWorker(files, workerId, onResult) {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(path.join(__dirname, "worker.js"), {
-      workerData: { files, workerId },
-    });
-    worker.on("message", (msg) => {
-      if (msg.type === "result") {
-        onResult(msg);
-      } else if (msg.type === "done") {
-        resolve();
-      }
-    });
-    worker.on("error", reject);
-    worker.on("exit", (code) => {
-      if (code !== 0) reject(new Error(`Worker ${workerId} exited with code ${code}`));
-    });
-  });
+  return Promise.all(promises);
 }
 
 async function main() {
@@ -187,18 +198,23 @@ async function main() {
     return;
   }
 
-  // Split files across workers
-  const chunks = chunkArray(newFiles, NUM_WORKERS);
-  console.log(`\nProcessing ${newFiles.length} files across ${chunks.length} workers...\n`);
+  const poolSize = Math.max(1, Math.min(NUM_WORKERS, newFiles.length));
+  console.log(`\nProcessing ${newFiles.length} files across ${poolSize} workers (shared queue)...\n`);
 
   // Shared state for incremental result collection
   let filesWithGPS = 0;
   let totalPoints = 0;
   let errors = 0;
   let totalDone = 0;
-  let sinceLastCheckpoint = 0;
 
-  const CHECKPOINT_INTERVAL = 100;
+  // Time-based checkpoints. The old every-100-files policy rewrote the whole
+  // (growing) dataset more and more often relative to runtime — O(N²) total
+  // checkpoint I/O that could rival the extraction itself on big libraries.
+  // One write per minute keeps crash-loss bounded at ~60s of work regardless
+  // of library size. `checkpointBusy` guarantees writes never overlap.
+  const CHECKPOINT_MS = 60_000;
+  let lastCheckpointMs = Date.now();
+  let checkpointBusy = false;
 
   const processedFiles = [...(existingData.processedFiles || [])];
   const routeMap = new Map();
@@ -212,9 +228,8 @@ async function main() {
   const driveTags = existingData.driveTags || {};
 
   // Called by each worker for every file result
-  const onResult = ({ result, count, total }) => {
+  const onResult = ({ result }) => {
     totalDone++;
-    sinceLastCheckpoint++;
 
     processedFiles.push(result.relativePath);
 
@@ -244,19 +259,23 @@ async function main() {
     const rate = totalDone > 0 ? (totalDone / ((Date.now() - startTime) / 1000)).toFixed(0) : 0;
     process.stdout.write(`\r  Progress: ${totalDone}/${newFiles.length} (${pct}%) | ${rate} files/sec | ${elapsed}s elapsed`);
 
-    // Checkpoint periodically
-    if (sinceLastCheckpoint >= CHECKPOINT_INTERVAL) {
-      sinceLastCheckpoint = 0;
+    // Checkpoint periodically (time-based, never overlapping)
+    if (!checkpointBusy && Date.now() - lastCheckpointMs >= CHECKPOINT_MS) {
+      checkpointBusy = true;
       const routes = Array.from(routeMap.values());
+      const doneAt = totalDone;
       streamWriteJSON(OUTPUT_PATH, processedFiles, routes, driveTags)
-        .then(() => console.log(`\n  Checkpoint saved (${totalDone} files)`))
-        .catch(() => {});
+        .then(() => console.log(`\n  Checkpoint saved (${doneAt} files)`))
+        .catch(() => {})
+        .finally(() => {
+          lastCheckpointMs = Date.now();
+          checkpointBusy = false;
+        });
     }
   };
 
-  // Run workers in parallel
-  const workerPromises = chunks.map((chunk, idx) => runWorker(chunk, idx, onResult));
-  await Promise.all(workerPromises);
+  // Run the shared-queue pool
+  await runWorkerPool(newFiles, poolSize, onResult);
 
   const routes = Array.from(routeMap.values());
 
@@ -328,27 +347,69 @@ function routeForDisk(r) {
   };
 }
 
-function streamWriteJSON(filePath, processedFiles, routes, driveTags) {
-  return new Promise((resolve, reject) => {
-    const ws = createWriteStream(filePath);
-    ws.on('error', reject);
+// Atomic + backpressure-aware: write to a temp file and rename over the
+// target, so a crash mid-checkpoint can't leave a truncated drive-data.json
+// and concurrent readers never see a half-written file. Honoring `drain`
+// keeps memory flat instead of buffering the whole serialized dataset.
+async function streamWriteJSON(filePath, processedFiles, routes, driveTags) {
+  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  await new Promise((resolve, reject) => {
+    const ws = createWriteStream(tmpPath);
+    let settled = false;
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      try { ws.destroy(); } catch {}
+      unlink(tmpPath).catch(() => {}).then(() => reject(err));
+    };
+    ws.on('error', fail);
 
-    ws.write('{"processedFiles":');
-    ws.write(JSON.stringify(processedFiles));
+    const write = (chunk) => {
+      if (!ws.write(chunk)) return new Promise((r) => ws.once('drain', r));
+      return null;
+    };
 
-    ws.write(',"routes":[');
-    for (let i = 0; i < routes.length; i++) {
-      if (i > 0) ws.write(',');
-      ws.write(JSON.stringify(routeForDisk(routes[i])));
-    }
-    ws.write(']');
+    (async () => {
+      try {
+        await write('{"processedFiles":');
+        await write(JSON.stringify(processedFiles));
 
-    ws.write(',"driveTags":');
-    ws.write(JSON.stringify(driveTags));
+        await write(',"routes":[');
+        for (let i = 0; i < routes.length; i++) {
+          await write((i > 0 ? ',' : '') + JSON.stringify(routeForDisk(routes[i])));
+        }
+        await write(']');
 
-    ws.write('}');
-    ws.end(() => resolve());
+        await write(',"driveTags":');
+        await write(JSON.stringify(driveTags));
+
+        await write('}');
+        ws.end(() => {
+          if (!settled) { settled = true; resolve(); }
+        });
+      } catch (err) {
+        fail(err);
+      }
+    })();
   });
+
+  // Windows throws transient EPERM/EBUSY while a reader holds the destination
+  // open — and the viewer's streaming read of a large drive-data.json can hold
+  // it for several seconds. Back off exponentially (≈11s total) so a slow
+  // reader doesn't fail the checkpoint.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(tmpPath, filePath);
+      return;
+    } catch (err) {
+      const transient = err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES';
+      if (!transient || attempt >= 12) {
+        await unlink(tmpPath).catch(() => {});
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, Math.min(1500, 50 * 2 ** attempt)));
+    }
+  }
 }
 
 main().catch((err) => {

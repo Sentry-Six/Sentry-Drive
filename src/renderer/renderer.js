@@ -87,6 +87,13 @@ function initMap() {
     zoomControl: true,
   });
 
+  // NOTE: all vector layers must share the ONE default canvas renderer
+  // (preferCanvas above). A dedicated pane would give the selected drive its
+  // own full-viewport <canvas> stacked over the overview lines' canvas, and
+  // Leaflet canvases only deliver events to their own layers — the empty top
+  // canvas swallowed every click meant for the lines underneath. Stacking is
+  // handled by paint order instead (selected layers draw after the overview;
+  // re-added overview lines call bringToBack()).
   const baseLayers = {
     'Dark': L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
@@ -2512,7 +2519,12 @@ function applyOtherDrivesVisibility() {
     if (hideOtherDrives) {
       if (map.hasLayer(layer)) map.removeLayer(layer);
     } else {
-      if (!map.hasLayer(layer)) layer.addTo(map);
+      if (!map.hasLayer(layer)) {
+        // Re-adding appends to the shared canvas's paint order — push the
+        // gray context lines back under the selected drive.
+        layer.addTo(map);
+        if (layer.bringToBack) layer.bringToBack();
+      }
       if (layer.setStyle) {
         layer.setStyle({ color: '#555566', opacity: 1, dashArray: null });
       }
@@ -2790,10 +2802,13 @@ function initReplay(drive) {
   document.getElementById('replay-play-icon').textContent = 'play_arrow';
   document.getElementById('btn-replay-speed').textContent = '1x';
 
-  // Set start/end times
+  // Set start/end times (some clips carry no per-point timestamp — show
+  // a placeholder instead of "Invalid Date", matching the slider label).
   if (drive.points.length > 0) {
-    document.getElementById('replay-time-start').textContent = formatReplayTime(drive.points[0][2]);
-    document.getElementById('replay-time-end').textContent = formatReplayTime(drive.points[drive.points.length - 1][2]);
+    const t0 = drive.points[0][2];
+    const t1 = drive.points[drive.points.length - 1][2];
+    document.getElementById('replay-time-start').textContent = t0 !== undefined ? formatReplayTime(t0) : '--:--';
+    document.getElementById('replay-time-end').textContent = t1 !== undefined ? formatReplayTime(t1) : '--:--';
   }
 
   updateReplayData(0);
@@ -2823,30 +2838,31 @@ function toggleReplay() {
   }
 }
 
+function replayTick() {
+  if (!replayDrive) { stopReplay(); return; }
+  const next = replayIdx + 1;
+  if (next >= replayDrive.points.length) {
+    stopReplay();
+    return;
+  }
+  replayIdx = next;
+  updateReplayPosition(next);
+}
+
 function startReplay() {
   if (!replayDrive) return;
 
-  // If at end, restart from beginning
+  // If at end, restart from beginning. Snap so the marker and arrow reset
+  // to the departure position/heading instead of holding the final one.
   if (replayIdx >= replayDrive.points.length - 1) {
     replayIdx = 0;
-    updateReplayPosition(0);
+    updateReplayPosition(0, true);
   }
 
   replayPlaying = true;
   document.getElementById('replay-play-icon').textContent = 'pause';
 
-  replayInterval = setInterval(() => {
-    if (!replayDrive) { stopReplay(); return; }
-
-    const next = replayIdx + 1;
-    if (next >= replayDrive.points.length) {
-      stopReplay();
-      return;
-    }
-
-    replayIdx = next;
-    updateReplayPosition(next);
-  }, REPLAY_BASE_MS / replaySpeed);
+  replayInterval = setInterval(replayTick, REPLAY_BASE_MS / replaySpeed);
 }
 
 function stopReplay() {
@@ -2863,13 +2879,7 @@ function cycleReplaySpeed() {
   // Restart interval at new speed if playing
   if (replayPlaying) {
     clearInterval(replayInterval);
-    replayInterval = setInterval(() => {
-      if (!replayDrive) { stopReplay(); return; }
-      const next = replayIdx + 1;
-      if (next >= replayDrive.points.length) { stopReplay(); return; }
-      replayIdx = next;
-      updateReplayPosition(next);
-    }, REPLAY_BASE_MS / replaySpeed);
+    replayInterval = setInterval(replayTick, REPLAY_BASE_MS / replaySpeed);
   }
 }
 
@@ -2902,9 +2912,9 @@ function updateReplayPosition(idx, snap = false) {
 
     // Playback: bearing at idx, or null when the car isn't actually moving
     // there (stationary/jitter window) — hold the current heading rather
-    // than rotate to noise. Scrubbing: always orient — if the scrubbed
-    // instant is parked, search outward for the nearest confident heading
-    // (flip-for-reverse handled inside, relative to the found sample).
+    // than rotate to noise. Scrubbing: always orient — a stopped instant
+    // inherits the heading the car entered the stop with (its physical
+    // facing; flip-for-reverse handled inside, relative to the found sample).
     let bearing;
     if (snap) {
       bearing = findBearingNear(pts, idx, 7, gears);
@@ -3081,24 +3091,16 @@ async function applyMarkerColor(color) {
   if (arrowEl && markerType === 'model3') arrowEl.src = model3ColoredUrl;
 }
 
+// First confident heading of the drive — where the replay marker points
+// before playback starts. Delegates to findBearingNear at index 0: a parked
+// start looks ahead to the departure heading through the same trust gates as
+// scrubbing (the old hand-rolled walk keyed on a single ~10 cm pair, which
+// GPS multipath can fake while parked), and the reverse flip follows the
+// samples that supplied the heading (backing out of a spot points the nose
+// away from the travel direction).
 function computeInitBearing(pts, gearStates) {
   if (!pts || pts.length < 2) return 0;
-  // Walk forward until we find the first pair of points with meaningful
-  // motion (≳10 cm). GPS jitter on parked samples is well under this.
-  const MIN_DELTA = 1e-6;
-  let startIdx = -1;
-  for (let i = 0; i + 1 < pts.length; i++) {
-    if (Math.abs(pts[i + 1][0] - pts[i][0]) > MIN_DELTA ||
-        Math.abs(pts[i + 1][1] - pts[i][1]) > MIN_DELTA) {
-      startIdx = i;
-      break;
-    }
-  }
-  if (startIdx < 0) return 0;
-  let bearing = smoothBearing(pts, startIdx, 7, gearStates);
-  if (bearing == null) return 0;
-  if (gearStates?.[startIdx] === 2) bearing = (bearing + 180) % 360;
-  return bearing;
+  return findBearingNear(pts, 0, 7, gearStates) ?? 0;
 }
 
 // Bearing trust gates. A pair of GPS fixes only proves a heading when the car
@@ -3114,24 +3116,45 @@ function computeInitBearing(pts, gearStates) {
 //     but nets near zero.
 const MIN_BEARING_PAIR_M = 1.5;
 const MIN_BEARING_SPEED_MPS = 0.5;
-// How far (in samples ≈ seconds) scrubbing searches around the thumb for a
-// confident heading when the scrubbed instant itself is parked.
-const SCRUB_SEARCH_RADIUS = 30;
-
-// Nearest confident heading to idx — used when scrubbing so the arrow always
-// orients to the local direction of travel. Searches outward with a slight
-// forward bias (the upcoming heading on ties); null only deep inside a long
-// parked stretch, in which case the caller keeps the current rotation.
+// Cap (samples each side) for widening the bearing window when the car's
+// speed proves motion but the default window hasn't covered the jitter
+// floor yet — ±3.2 s at SEI's ~10 Hz cadence. See smoothBearing.
+const MAX_BEARING_HALF_SPAN = 32;
+// Heading of the car as it sits at idx — used when scrubbing so the arrow
+// matches the direction of travel at the thumb. A moving sample answers
+// directly. A stopped one inherits the last confident heading BEFORE the
+// stop: the car hasn't moved since, so that's its physical facing (the
+// reverse flip comes from the sample the heading was found at, so a car
+// that backed in correctly faces away from its travel). Searching forward
+// here instead would show the post-stop heading early — at a light before
+// a turn the arrow pointed where the car was about to go, not where it
+// faced. Only a scrub before the car's first movement looks ahead. Null
+// when the whole drive has no confident heading; the caller keeps the
+// current rotation.
 function findBearingNear(pts, idx, window, gearStates) {
-  for (let off = 0; off <= SCRUB_SEARCH_RADIUS; off++) {
-    for (const j of off === 0 ? [idx] : [idx + off, idx - off]) {
-      if (j < 0 || j >= pts.length) continue;
-      const b = smoothBearing(pts, j, window, gearStates);
-      if (b != null) {
-        // Reverse flip relative to the sample the heading came from.
-        return gearStates?.[j] === 2 ? (b + 180) % 360 : b;
-      }
-    }
+  // smoothBearing clamps its window to j's own gear run, so a non-null
+  // heading is always derived from samples sharing gearStates[j] — making
+  // it safe to key the reverse flip off j directly. (A parked sample can no
+  // longer "borrow" movement from an adjacent leg in a different gear; it
+  // returns null and the walk below moves into the leg itself.)
+  const headingAt = (j) => {
+    const b = smoothBearing(pts, j, window, gearStates);
+    if (b == null) return null;
+    return gearStates?.[j] === 2 ? (b + 180) % 360 : b;
+  };
+  const direct = headingAt(idx);
+  if (direct != null) return direct;
+  // Stride keeps successive smoothBearing windows overlapping, so even a
+  // short movement burst between strides still lands inside some window.
+  const stride = Math.max(1, Math.floor(window / 2));
+  for (let j = Math.max(0, idx - stride); ; j = Math.max(0, j - stride)) {
+    const b = headingAt(j);
+    if (b != null) return b;
+    if (j === 0) break;
+  }
+  for (let j = idx + stride; j < pts.length; j += stride) {
+    const b = headingAt(j);
+    if (b != null) return b;
   }
   return null;
 }
@@ -3142,10 +3165,22 @@ function smoothBearing(pts, idx, window, gearStates) {
   // raw travel bearing flips 180° there and the circular mean collapses.
   // Returns null when the window doesn't show real movement — the caller
   // holds the arrow's previous heading instead of rotating it to noise.
-  const start = Math.max(0, idx - Math.floor(window / 2));
-  const end = Math.min(pts.length - 1, idx + Math.ceil(window / 2));
-  if (end <= start) return null;
+  // Hard bounds for the window and its expansion below: the clip edges AND
+  // the contiguous same-gear run around idx. Travel direction inverts at a
+  // D↔R shift, so any mean or chord across that boundary points somewhere
+  // the car never faced — the net-vector fallback used to do exactly that
+  // during back-in maneuvers, then flip the poisoned chord for reverse.
+  let lo = Math.max(0, idx - MAX_BEARING_HALF_SPAN);
+  let hi = Math.min(pts.length - 1, idx + MAX_BEARING_HALF_SPAN);
   const gear = gearStates ? gearStates[idx] : null;
+  if (gearStates) {
+    let rs = idx; while (rs > lo && gearStates[rs - 1] === gear) rs--;
+    let re = idx; while (re < hi && gearStates[re + 1] === gear) re++;
+    lo = rs; hi = re;
+  }
+  let start = Math.max(lo, idx - Math.floor(window / 2));
+  let end = Math.min(hi, idx + Math.ceil(window / 2));
+  if (end <= start) return null;
 
   // Structural gate — THE moving/parked decision.
   //
@@ -3156,16 +3191,30 @@ function smoothBearing(pts, idx, window, gearStates) {
   // below a walking pace). Speed can only EXPAND updates here, never veto:
   // zero-filled speed channels (clips without SEI speed) fall through to the
   // GPS tests instead of stranding the heading.
+  // Speed is signed (negative in reverse) — magnitude is what proves motion.
   let speedSaysMoving = false;
   for (let i = start; i <= end; i++) {
     const v = pts[i][3];
-    if (Number.isFinite(v) && v >= MIN_BEARING_SPEED_MPS) { speedSaysMoving = true; break; }
+    if (Number.isFinite(v) && Math.abs(v) >= MIN_BEARING_SPEED_MPS) { speedSaysMoving = true; break; }
   }
 
-  const net = geodesicM(pts[start][0], pts[start][1], pts[end][0], pts[end][1]);
+  let net = geodesicM(pts[start][0], pts[start][1], pts[end][0], pts[end][1]);
   if (speedSaysMoving) {
-    // Still require the jitter floor of net movement — below it any bearing
-    // is numerically meaningless even if the wheels are turning.
+    // The window is sample-count based, but cadence differs by source: SEI
+    // points arrive ~10/s, so the default window spans only ~±0.35 s and
+    // its net displacement falls under the jitter floor below ~5 mph even
+    // though the car is genuinely rolling — which froze the arrow through
+    // exactly the parking-speed turns where heading changes most. When the
+    // car's own speed proves motion, widen the window until the travel
+    // clears the floor; only if it still can't (GPS pinned / sub-walking
+    // creep) is a bearing truly meaningless — hold the current heading.
+    let half = Math.ceil(window / 2);
+    while (net < MIN_BEARING_PAIR_M && (start > lo || end < hi)) {
+      half *= 2;
+      start = Math.max(lo, idx - half);
+      end = Math.min(hi, idx + half);
+      net = geodesicM(pts[start][0], pts[start][1], pts[end][0], pts[end][1]);
+    }
     if (net < MIN_BEARING_PAIR_M) return null;
   } else {
     // No speed evidence — decide from GPS statistics alone:
@@ -3200,7 +3249,8 @@ function smoothBearing(pts, idx, window, gearStates) {
       if (requireSpeed) {
         const v0 = pts[i][3];
         const v1 = pts[i + 1][3];
-        if (!Number.isFinite(v0) || !Number.isFinite(v1) || Math.max(v0, v1) < MIN_BEARING_SPEED_MPS) continue;
+        // abs: reverse records negative speed but is just as much motion.
+        if (!Number.isFinite(v0) || !Number.isFinite(v1) || Math.max(Math.abs(v0), Math.abs(v1)) < MIN_BEARING_SPEED_MPS) continue;
       }
       const b = calcBearing(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
       const rad = (b * Math.PI) / 180;
@@ -3230,9 +3280,24 @@ function updateReplayData(idx) {
   const drive = replayDrive;
   const pt = drive.points[idx];
 
-  // Speed (pt[3] is m/s)
-  const mph = pt[3] * MPS_TO_MPH;
-  document.getElementById('replay-speed-val').textContent = `${speedVal(mph)} ${speedShort()}`;
+  // Speed (pt[3] is m/s, signed — negative in reverse; missing on clips
+  // without a speed channel). Show the magnitude: the gear readout carries R.
+  document.getElementById('replay-speed-val').textContent =
+    Number.isFinite(pt[3]) ? `${speedVal(Math.abs(pt[3]) * MPS_TO_MPH)} ${speedShort()}` : '--';
+
+  // Gear (P/D/R/N, colored like the rest of the replay data)
+  const gearSpan = document.getElementById('replay-gear-span');
+  const gearEl = document.getElementById('replay-gear-val');
+  if (gearSpan && gearEl) {
+    const gear = drive.gearStates?.[idx];
+    if (GEAR_LABELS[gear] !== undefined) {
+      gearSpan.style.display = '';
+      gearEl.textContent = GEAR_LABELS[gear];
+      gearEl.className = GEAR_CLASSES[gear];
+    } else {
+      gearSpan.style.display = 'none';
+    }
+  }
 
   // FSD
   const fsdEl = document.getElementById('replay-fsd-val');

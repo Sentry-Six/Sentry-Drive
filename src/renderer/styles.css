@@ -29,7 +29,8 @@
   --drive-sel:   rgba(59, 130, 246, 0.1);
   --blue:        #3b82f6;
   --blue-light:  #60a5fa;
-  --ap-blue:     #3e6ae1;   /* Tesla Blue — Autopilot in the FSD analytics */
+  --ap-blue:       #3e6ae1; /* Tesla Blue — Autopilot in the FSD analytics */
+  --ap-blue-light: #8aa4f0; /* same hue, lifted for small text on dark glass */
   --fsd-blue:    #3b82f6;
   --fsd-white:   rgba(180, 210, 240, 0.75);
   --success:     #34d399;
@@ -1142,7 +1143,7 @@ html, body {
   background: currentColor;
 }
 .map-stats-row-label.mode-fsd    { color: #22cc55; }
-.map-stats-row-label.mode-ap     { color: var(--ap-blue); }
+.map-stats-row-label.mode-ap     { color: var(--ap-blue-light); }
 .map-stats-row-label.mode-tacc   { color: #f59e0b; }
 .map-stats-row-label.mode-manual { color: var(--text-muted); }
 
@@ -2335,7 +2336,7 @@ html, body {
   flex-shrink: 0;
   margin-top: 1px;
   min-width: 108px;
-  justify-content: flex-start;
+  justify-content: center;
 }
 
 .changelog-item-type-icon {
