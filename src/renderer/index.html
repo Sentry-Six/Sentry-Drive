@@ -148,6 +148,7 @@
           <button class="settings-tab-btn active" data-stab="general" type="button" role="tab">General</button>
           <button class="settings-tab-btn" data-stab="mapui" type="button" role="tab">Map UI</button>
           <button class="settings-tab-btn" data-stab="integrations" type="button" role="tab">Integrations</button>
+          <button class="settings-tab-btn" data-stab="support" type="button" role="tab">Support</button>
         </div>
         <div class="settings-body">
           <div class="settings-pane active" id="stab-general">
@@ -209,6 +210,10 @@
                   <span class="settings-checkbox-label">Show FSD markers</span>
                   <input type="checkbox" id="chk-show-fsd-markers" class="settings-checkbox" />
                 </label>
+                <label class="settings-checkbox-row" title="City and neighborhood names on the map">
+                  <span class="settings-checkbox-label">Show map labels</span>
+                  <input type="checkbox" id="chk-show-map-labels" class="settings-checkbox" />
+                </label>
               </div>
             </div>
             <div class="settings-section">
@@ -242,7 +247,7 @@
                 <span id="tessie-conn-status" class="integration-status pill-idle">Not connected</span>
               </div>
               <div class="settings-section-body">
-                <div class="integration-desc">Import drive routes and per-point FSD state from your Tessie account — matches Tessie's site exactly.</div>
+                <div class="integration-desc">Import drive routes and per-point FSD state from your Tessie account.</div>
                 <div id="tessie-connect-form" class="integration-connect">
                   <div class="input-row">
                     <input id="tessie-token-input" type="password" class="text-input" placeholder="Paste Tessie access token…" autocomplete="off" spellcheck="false" />
@@ -267,7 +272,7 @@
                 <span id="teslascope-conn-status" class="integration-status pill-idle">Not connected</span>
               </div>
               <div class="settings-section-body">
-                <div class="integration-desc">Sync drives from your Teslascope account.</div>
+                <div class="integration-desc">Import drive routes and per-point FSD state from your Teslascope account.</div>
                 <div id="teslascope-connect-form" class="integration-connect">
                   <div class="input-row">
                     <input id="teslascope-token-input" type="password" class="text-input" placeholder="Paste Teslascope API token…" autocomplete="off" spellcheck="false" />
@@ -282,6 +287,20 @@
                     <span id="teslascope-token-mask" class="integration-token-mask">••••</span>
                     <button id="btn-teslascope-disconnect" class="integration-disconnect">Disconnect</button>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="settings-pane" id="stab-support">
+            <div class="settings-section">
+              <div class="settings-section-header">
+                <span class="settings-section-icon halo-accent"><span class="material-icons">support_agent</span></span>
+                <span class="settings-section-title">Support</span>
+              </div>
+              <div class="settings-section-body">
+                <div class="settings-row" title="Errors and app events from this session">
+                  <span class="settings-row-label">Logs</span>
+                  <button id="btn-download-logs" class="btn-primary" type="button">Save</button>
                 </div>
               </div>
             </div>
@@ -424,7 +443,11 @@
         <div class="reprocess-modal-icon halo-red"><span class="material-icons">delete_sweep</span></div>
         <div class="reprocess-modal-title">Remove All Imported Drives?</div>
         <div class="reprocess-modal-msg">
-          This removes every imported drive from your drive data. A backup (.bak) is written first so you can revert.
+          This removes every imported drive from the selected services. A backup (.bak) is written first so you can revert.
+        </div>
+        <div class="remove-source-rows">
+          <label class="remove-source-row"><input type="checkbox" id="remove-src-tessie" checked /><span>Tessie</span></label>
+          <label class="remove-source-row"><input type="checkbox" id="remove-src-teslascope" checked /><span>Teslascope</span></label>
         </div>
         <div class="reprocess-modal-actions">
           <button id="btn-remove-tessie-confirm" class="btn-danger btn-update-full">Remove Imported Drives</button>

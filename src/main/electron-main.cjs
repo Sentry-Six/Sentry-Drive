@@ -24,6 +24,59 @@ let driveDetailCache = null;
 // reader fixes that everywhere at once.
 const { readDriveData } = require('./drive-data-reader.cjs');
 
+// ─── Logging ─────────────────────────────────────────────────────────────────
+// Terminal echo + in-memory buffer; exported from Settings → Support → Logs.
+const logger = require('./logger.cjs');
+logger.setAppInfo({ version: app.getVersion() });
+logger.info('main', 'app starting');
+// Teslascope API diagnostics flow into this log (Settings → Support → Logs).
+require('../processing/teslascope-api.cjs').setLogger(logger);
+
+// Log instead of crash: a background hiccup (e.g. a failed async callback)
+// shouldn't take down the viewer. The error is preserved in the log export.
+process.on('uncaughtException', (err) => logger.error('main', 'Uncaught exception:', err));
+process.on('unhandledRejection', (reason) => logger.error('main', 'Unhandled rejection:', reason));
+
+// Renderer-side errors/warnings arrive here (see the forwarder in renderer.js).
+ipcMain.on('app-log', (_e, { level, scope, text } = {}) => {
+  const lv = level === 'error' || level === 'warn' ? level : 'info';
+  logger[lv](typeof scope === 'string' && scope ? scope : 'renderer', String(text ?? ''));
+});
+
+// The logs save dialog remembers its own folder (persisted in userData),
+// independent of the app-wide "last used directory" — which is usually the
+// TeslaCam clips folder and a poor default for a log export. First use
+// defaults to the system Downloads folder.
+const LOGS_PREFS_FILE = () => path.join(app.getPath('userData'), 'support-prefs.json');
+
+function loadLogsDir() {
+  try {
+    const { logsDir } = JSON.parse(fs.readFileSync(LOGS_PREFS_FILE(), 'utf-8'));
+    if (logsDir && fs.existsSync(logsDir)) return logsDir;
+  } catch { /* first use / unreadable — fall through */ }
+  return app.getPath('downloads');
+}
+
+function saveLogsDir(dir) {
+  try { fs.writeFileSync(LOGS_PREFS_FILE(), JSON.stringify({ logsDir: dir })); } catch {}
+}
+
+ipcMain.handle('download-logs', async () => {
+  try {
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: path.join(loadLogsDir(), `sentry-drive-logs-${stamp}.txt`),
+      filters: [{ name: 'Text', extensions: ['txt'] }],
+    });
+    if (canceled || !filePath) return { success: false, canceled: true };
+    fs.writeFileSync(filePath, logger.getLogText());
+    saveLogsDir(path.dirname(filePath));
+    return { success: true, filePath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 function downsampleForIPC(pts, maxPts) {
   if (!pts || pts.length === 0) return [];
   if (pts.length <= maxPts) return pts.map((p) => [p[0], p[1]]);
@@ -81,7 +134,10 @@ autoUpdater.on('update-available', (info) => sendUpdateStatus('available', { ver
 autoUpdater.on('update-not-available', () => sendUpdateStatus('up-to-date'));
 autoUpdater.on('download-progress', (progress) => sendUpdateStatus('downloading', { percent: Math.round(progress.percent) }));
 autoUpdater.on('update-downloaded', () => sendUpdateStatus('ready'));
-autoUpdater.on('error', (err) => sendUpdateStatus('error', { message: err.message }));
+autoUpdater.on('error', (err) => {
+  logger.error('updater', err?.message ?? err);
+  sendUpdateStatus('error', { message: err.message });
+});
 
 function createWindow() {
   const state = loadWindowState();
@@ -390,8 +446,13 @@ ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     });
   } catch (err) {
+    logger.error('processing', 'spawn failed:', err.message);
     return { success: false, error: `spawn failed: ${err.message}` };
   }
+
+  logger.info('processing', 'child started:', args.join(' '));
+  activeChild.stderr?.on('data', (chunk) => logger.error('processing', String(chunk).trim()));
+  activeChild.on('exit', (code) => logger.info('processing', `child exited with code ${code}`));
 
   activeChild.stdout.on('data', (chunk) => {
     mainWindow?.webContents.send('processing-output', { type: 'stdout', text: chunk.toString() });
@@ -482,6 +543,7 @@ function renameWithRetry(from, to, attempts = 12) {
 // (rather than the snapshot taken before the fetch) keeps writes made in the
 // meantime — tag edits, drive removals — from being clobbered.
 function saveImportedClips(filePath, clips) {
+  logger.info('import', `saving ${clips.length} imported clip(s) → ${filePath}`);
   return withDriveDataLock(async () => {
     let data;
     if (fs.existsSync(filePath)) {
@@ -887,6 +949,7 @@ ipcMain.handle('tessie-import', (_e, { driveDataPath, drivesCsvPath, statesCsvPa
     const tessieMod = require('../processing/tessie-import.cjs');
     const { parseDrivesCSV, parseDrivingStatesCSV, buildExistingDriveRanges, hasOverlap, buildExternalSignature, buildClipsForDrive, calibrateDriveTime } = tessieMod;
 
+    logger.info('import', `tessie csv import: ${path.basename(drivesCsvPath)} + ${path.basename(statesCsvPath)}`);
     sendTessieProgress({ phase: 'Reading CSVs…', current: 0, total: 1 });
     const drivesText = fs.readFileSync(drivesCsvPath, 'utf-8');
     const statesText = fs.readFileSync(statesCsvPath, 'utf-8');
@@ -1053,6 +1116,7 @@ ipcMain.handle('tessie-api-preview', async (_e, { token, vin, fromSec, toSec, dr
     const { fetchDrives } = require('../processing/tessie-api.cjs');
     const { buildExistingDriveRanges, hasOverlap, buildExternalSignature } = require('../processing/tessie-import.cjs');
 
+    logger.info('import', `tessie preview: vehicle …${String(vin).slice(-6)}, window ${fromSec}→${toSec}`);
     const drives = await fetchDrives(token, vin, { from: fromSec, to: toSec });
 
     // Build existing-drive index from current drive-data.json
@@ -1083,8 +1147,10 @@ ipcMain.handle('tessie-api-preview', async (_e, { token, vin, fromSec, toSec, dr
       toImport++;
     }
 
+    logger.info('import', `tessie preview result: ${drives.length} drives, ${toImport} to import, ${overlapSkipped} overlap-skipped, ${duplicateSkipped} duplicates`);
     return { success: true, totalDrives: drives.length, toImport, overlapSkipped, duplicateSkipped };
   } catch (err) {
+    logger.error('import', 'tessie preview failed:', err);
     return { success: false, error: err.message };
   }
 });
@@ -1095,6 +1161,7 @@ ipcMain.handle('tessie-api-import', async (_e, { token, vin, fromSec, toSec, dri
     const { fetchDrives, fetchPath, Throttler } = require('../processing/tessie-api.cjs');
     const { buildExistingDriveRanges, hasOverlap, buildExternalSignature, buildClipsForApiDrive } = require('../processing/tessie-import.cjs');
 
+    logger.info('import', `tessie import: vehicle …${String(vin).slice(-6)}, window ${fromSec}→${toSec}`);
     sendTessieProgress({ phase: 'Fetching drives list…', current: 0, total: 1 });
     const drivesList = await fetchDrives(token, vin, { from: fromSec, to: toSec });
 
@@ -1177,8 +1244,10 @@ ipcMain.handle('tessie-api-import', async (_e, { token, vin, fromSec, toSec, dri
     sendTessieProgress({ phase: 'Saving…', current: candidates.length, total: candidates.length });
     if (newClips.length > 0) await saveImportedClips(driveDataPath, newClips);
 
+    logger.info('import', `tessie import done: ${imported}/${candidates.length} imported${canceled ? ' (canceled)' : ''}, skips: ${JSON.stringify(skipReasons)}`);
     return { success: true, imported, canceled, totalCandidates: candidates.length, skipReasons };
   } catch (err) {
+    logger.error('import', 'tessie import failed:', err);
     return { success: false, error: err.message };
   } finally {
     tessieApiCancel = false;
@@ -1234,7 +1303,7 @@ ipcMain.handle('teslascope-api-validate', async (_e, { token }) => {
       vehicles: vehicles.map((v) => ({
         publicId: v.publicId,
         vin: v.vin || '',
-        displayName: v.name || v.vin || 'Vehicle',
+        displayName: v.displayName || v.name || v.vin || 'Vehicle',
       })).filter((v) => v.publicId != null),
     };
   } catch (err) {
@@ -1250,6 +1319,7 @@ ipcMain.handle('teslascope-api-preview', async (_e, { token, publicId, fromSec, 
     const { fetchDrives, normalizeDrive } = require('../processing/teslascope-api.cjs');
     const { buildExistingDriveRanges, hasOverlap, buildExternalSignature } = require('../processing/tessie-import.cjs');
 
+    logger.info('import', `teslascope preview: vehicle …${String(publicId).slice(-6)}, window ${fromSec}→${toSec}`);
     const drives = await fetchDrives(token, publicId, { from: fromSec, to: toSec });
 
     let existingRanges = [];
@@ -1264,16 +1334,28 @@ ipcMain.handle('teslascope-api-preview', async (_e, { token, publicId, fromSec, 
       }
     }
 
-    let toImport = 0, overlapSkipped = 0, duplicateSkipped = 0;
+    let toImport = 0, overlapSkipped = 0, duplicateSkipped = 0, badTimestamps = 0;
     for (const d of drives) {
       const n = normalizeDrive(d);
+      // Unrecognized timestamp fields ⇒ NaN startedAt. Without this guard the
+      // import "succeeds" but produces unparseable clip filenames the grouper
+      // silently drops — drives vanish without a trace.
+      if (!Number.isFinite(n.startedAt) || !Number.isFinite(n.endedAt)) {
+        if (badTimestamps === 0) {
+          logger.warn('import', 'teslascope drive has unrecognized timestamp fields; raw keys:', Object.keys(d || {}).join(', '));
+        }
+        badTimestamps++;
+        continue;
+      }
       const key = { startedAt: n.startedAt, endedAt: n.endedAt, startingOdometer: n.startingOdometer };
       if (existingSignatures.has(buildExternalSignature(key, 'teslascope'))) { duplicateSkipped++; continue; }
       if (hasOverlap(key, existingRanges)) { overlapSkipped++; continue; }
       toImport++;
     }
+    logger.info('import', `teslascope preview result: ${drives.length} drives, ${toImport} to import, ${overlapSkipped} overlap-skipped, ${duplicateSkipped} duplicates, ${badTimestamps} bad-timestamps`);
     return { success: true, totalDrives: drives.length, toImport, overlapSkipped, duplicateSkipped };
   } catch (err) {
+    logger.error('import', 'teslascope preview failed:', err);
     return { success: false, error: err.message };
   }
 });
@@ -1284,6 +1366,7 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
     const { fetchDrives, fetchDrivePath, normalizeDrive, Throttler } = require('../processing/teslascope-api.cjs');
     const { buildExistingDriveRanges, hasOverlap, buildExternalSignature, buildClipsForApiDrive } = require('../processing/tessie-import.cjs');
 
+    logger.info('import', `teslascope import: vehicle …${String(publicId).slice(-6)}, window ${fromSec}→${toSec}`);
     sendTeslascopeProgress({ phase: 'Fetching drives list…', current: 0, total: 1 });
     const drivesList = await fetchDrives(token, publicId, { from: fromSec, to: toSec });
 
@@ -1307,8 +1390,12 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
     }
 
     const candidates = [];
+    let badTimestamps = 0;
     for (const d of drivesList) {
       const n = normalizeDrive(d);
+      // See the preview handler: NaN timestamps would otherwise become
+      // unparseable clip filenames that the grouper silently drops.
+      if (!Number.isFinite(n.startedAt) || !Number.isFinite(n.endedAt)) { badTimestamps++; continue; }
       const key = { startedAt: n.startedAt, endedAt: n.endedAt, startingOdometer: n.startingOdometer };
       if (existingSignatures.has(buildExternalSignature(key, 'teslascope'))) continue;
       if (hasOverlap(key, existingRanges)) continue;
@@ -1320,6 +1407,7 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
     const newClips = [];
     let imported = 0, canceled = false;
     const skipReasons = {};
+    if (badTimestamps > 0) skipReasons['bad-timestamps'] = badTimestamps;
     const startMs = Date.now();
 
     for (let i = 0; i < candidates.length; i++) {
@@ -1351,8 +1439,10 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
 
     sendTeslascopeProgress({ phase: 'Saving…', current: candidates.length, total: candidates.length });
     if (newClips.length > 0) await saveImportedClips(driveDataPath, newClips);
+    logger.info('import', `teslascope import done: ${imported}/${candidates.length} imported${canceled ? ' (canceled)' : ''}, skips: ${JSON.stringify(skipReasons)}`);
     return { success: true, imported, canceled, totalCandidates: candidates.length, skipReasons };
   } catch (err) {
+    logger.error('import', 'teslascope import failed:', err);
     return { success: false, error: err.message };
   } finally {
     teslascopeApiCancel = false;
@@ -1420,8 +1510,13 @@ ipcMain.handle('tessie-remove-all', (_e, { driveDataPath }) => withDriveDataLock
         .filter((r) => r.source === 'tessie')
         .map((r) => (r.file || '').replace(/\\/g, '/'))
     );
-    const removed = tessieFiles.size;
-    if (removed === 0) return { success: true, removed: 0 };
+    if (tessieFiles.size === 0) return { success: true, removed: 0 };
+
+    // Report what the user sees: grouped drives, not the per-minute
+    // synthetic clips they expand to ("Removed 339 drives" for 25).
+    const { groupIntoDrives } = await import('../processing/grouper.js');
+    const { drives: grouped } = groupIntoDrives(data.routes ?? []);
+    const removed = grouped.filter((d) => d.source === 'tessie').length;
 
     data.routes = (data.routes ?? []).filter((r) => r.source !== 'tessie');
     data.processedFiles = (data.processedFiles ?? []).filter(
@@ -1493,8 +1588,12 @@ ipcMain.handle('teslascope-remove-all', (_e, { driveDataPath }) => withDriveData
         .filter((r) => r.source === 'teslascope')
         .map((r) => (r.file || '').replace(/\\/g, '/'))
     );
-    const removed = tsFiles.size;
-    if (removed === 0) return { success: true, removed: 0 };
+    if (tsFiles.size === 0) return { success: true, removed: 0 };
+
+    // Grouped drive count, not clip count (see tessie-remove-all).
+    const { groupIntoDrives } = await import('../processing/grouper.js');
+    const { drives: grouped } = groupIntoDrives(data.routes ?? []);
+    const removed = grouped.filter((d) => d.source === 'teslascope').length;
 
     data.routes = (data.routes ?? []).filter((r) => r.source !== 'teslascope');
     data.processedFiles = (data.processedFiles ?? []).filter(

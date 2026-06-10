@@ -18,6 +18,8 @@ let activeTagFilter = '';  // currently active tag filter (empty = show all)
 let hideOtherDrives = false;
 let showFsdMarkers = true;
 let fsdEventLayers = [];
+let showMapLabels = true;               // city/neighborhood labels on base maps
+let applyMapLabelsSetting = () => {};   // bound to the real layers at map init
 
 // Replay state
 let replayMarker = null;
@@ -32,6 +34,35 @@ const REPLAY_BASE_MS = 100; // base interval per point at 1x
 // the preload bridge (see src/shared/drive-calc.cjs). Using them here keeps the
 // renderer's display conversions identical to the processing pipeline.
 const { MI_TO_KM, M_PER_MILE, MPS_TO_MPH, geodesicM } = window.driveCalc;
+
+// ─── Error forwarding ────────────────────────────────────────────────────────
+// Renderer errors, unhandled rejections, and console.error/warn all flow to
+// the main-process log (terminal under `npm start`; exportable from
+// Settings → Support → Logs). Defensive throughout — logging must never break
+// the app it's logging.
+(() => {
+  const send = (level, scope, text) => {
+    try { window.electronAPI?.appLog({ level, scope, text }); } catch { /* never throw from logging */ }
+  };
+  const fmt = (v) => {
+    if (typeof v === 'string') return v;
+    if (v instanceof Error) return v.stack || v.message;
+    try { return JSON.stringify(v); } catch { return String(v); }
+  };
+  window.addEventListener('error', (e) => {
+    send('error', 'renderer', `${e.message} (${e.filename ?? '?'}:${e.lineno ?? '?'})`);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    send('error', 'renderer', `Unhandled rejection: ${fmt(e.reason)}`);
+  });
+  for (const level of ['error', 'warn']) {
+    const orig = console[level].bind(console);
+    console[level] = (...args) => {
+      orig(...args);
+      send(level, 'renderer.console', args.map(fmt).join(' '));
+    };
+  }
+})();
 
 // Units
 const UNIT_SYSTEM = {
@@ -81,10 +112,13 @@ document.addEventListener('DOMContentLoaded', () => {
 // ─── Map ──────────────────────────────────────────────────────────────────────
 function initMap() {
   map = L.map('map', {
-    center: [39.5, -98.35],
+    center: [50.0, 10.0], // central Europe until drive data loads
     zoom: 4,
     preferCanvas: true,
     zoomControl: true,
+    // Shared canvas renderer with a wider hit area: the 2-3px overview
+    // lines are tedious to click dead-on, so accept clicks within 8px.
+    renderer: L.canvas({ tolerance: 8 }),
   });
 
   // NOTE: all vector layers must share the ONE default canvas renderer
@@ -94,29 +128,49 @@ function initMap() {
   // canvas swallowed every click meant for the lines underneath. Stacking is
   // handled by paint order instead (selected layers draw after the overview;
   // re-added overview lines call bringToBack()).
+  // All base maps come from Google's tile endpoint, restyled via the legacy
+  // apistyle parameter. Both Light and Dark strip every label except the
+  // administrative ones (cities, neighborhoods): all labels off, then
+  // s.t:1 (administrative) labels back on — or every label when the
+  // "Show city & neighborhood labels" setting is off. Dark additionally
+  // applies Google's own night-mode palette (#242f3e base / #17263c water /
+  // #38414e roads / muted tan labels) — verified live at ~49 avg tile
+  // brightness vs ~214 for the standard roadmap.
+  showMapLabels = localStorage.getItem('showMapLabels') !== 'false';
+  const GMAPS_NIGHT_RULES = 's.e%3Ag%7Cp.c%3A%23242f3e,s.e%3Al.t.f%7Cp.c%3A%23746855,s.e%3Al.t.s%7Cp.c%3A%23242f3e,s.t%3A6%7Cs.e%3Ag%7Cp.c%3A%2317263c,s.t%3A3%7Cs.e%3Ag%7Cp.c%3A%2338414e';
+  const gmapsLabelRules = () => (showMapLabels
+    ? 's.e%3Al%7Cp.v%3Aoff,s.t%3A1%7Cs.e%3Al%7Cp.v%3Aon'
+    : 's.e%3Al%7Cp.v%3Aoff');
+  const gmapsUrls = () => ({
+    'Dark': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${GMAPS_NIGHT_RULES},${gmapsLabelRules()}`,
+    'Light': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${gmapsLabelRules()}`,
+    // Hybrid (lyrs=y) instead of bare satellite (lyrs=s): same imagery plus
+    // the label overlay, filtered like Light/Dark, with the hybrid road
+    // overlay (s.t:3) hidden.
+    'Satellite': `https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&apistyle=${gmapsLabelRules()},s.t%3A3%7Cp.v%3Aoff`,
+  });
+  const initialUrls = gmapsUrls();
+  // Key order = display order in the layer control: Light, Dark, Satellite.
   const baseLayers = {
-    'Dark': L.tileLayer(
-      'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-      {
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> ' +
-          'contributors &copy; <a href="https://carto.com/attributions" target="_blank">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 19,
-      }
-    ),
-    'Google Maps': L.tileLayer(
-      'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
-      { attribution: '&copy; Google', maxZoom: 20 }
-    ),
-    'Satellite': L.tileLayer(
-      'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
-      { attribution: '&copy; Google', maxZoom: 20 }
-    ),
+    'Light': L.tileLayer(initialUrls['Light'], { attribution: '&copy; Google', maxZoom: 20 }),
+    'Dark': L.tileLayer(initialUrls['Dark'], { attribution: '&copy; Google', maxZoom: 20 }),
+    'Satellite': L.tileLayer(initialUrls['Satellite'], { attribution: '&copy; Google', maxZoom: 20 }),
+  };
+  // Re-point all layers at label-on/off URLs when the setting changes; the
+  // active layer redraws immediately, the others pick it up when selected.
+  applyMapLabelsSetting = () => {
+    const urls = gmapsUrls();
+    for (const [name, layer] of Object.entries(baseLayers)) layer.setUrl(urls[name]);
   };
 
-  const savedLayer = localStorage.getItem('mapLayer');
-  const initialLayer = baseLayers[savedLayer] ? savedLayer : 'Dark';
+  // Migrate layer choices saved under the old names.
+  const LAYER_RENAMES = { 'Google Maps': 'Light', 'Google Dark': 'Dark' };
+  let savedLayer = localStorage.getItem('mapLayer');
+  if (LAYER_RENAMES[savedLayer]) {
+    savedLayer = LAYER_RENAMES[savedLayer];
+    localStorage.setItem('mapLayer', savedLayer);
+  }
+  const initialLayer = baseLayers[savedLayer] ? savedLayer : 'Light';
   baseLayers[initialLayer].addTo(map);
 
   L.control.layers(baseLayers, null, { position: 'topright' }).addTo(map);
@@ -557,6 +611,38 @@ function initFooter() {
     showFsdMarkers = fsdMarkersChk.checked;
     localStorage.setItem('showFsdMarkers', String(showFsdMarkers));
     applyFsdMarkerVisibility();
+  });
+
+  // Support → Logs: save the main-process log buffer as a .txt via save dialog.
+  const logsBtn = document.getElementById('btn-download-logs');
+  if (logsBtn) {
+    logsBtn.addEventListener('click', async () => {
+      try {
+        if (typeof window.electronAPI?.downloadLogs !== 'function') {
+          alert('Log export requires a full app restart to activate.');
+          return;
+        }
+        const r = await window.electronAPI.downloadLogs();
+        if (r && r.success) {
+          logsBtn.textContent = 'Saved ✓';
+          setTimeout(() => { logsBtn.textContent = 'Save'; }, 2000);
+        } else if (r && !r.canceled) {
+          alert(`Couldn't save logs: ${r.error ?? 'unknown error'}`);
+        }
+      } catch (err) {
+        // e.g. the main process predates the download-logs handler
+        alert(`Couldn't save logs: ${err.message}`);
+      }
+    });
+  }
+
+  const mapLabelsChk = document.getElementById('chk-show-map-labels');
+  showMapLabels = localStorage.getItem('showMapLabels') !== 'false';
+  mapLabelsChk.checked = showMapLabels;
+  mapLabelsChk.addEventListener('change', () => {
+    showMapLabels = mapLabelsChk.checked;
+    localStorage.setItem('showMapLabels', String(showMapLabels));
+    applyMapLabelsSetting();
   });
 
   // Auto-load drive data setting (default: true, preserve existing behavior for existing users)
@@ -1680,10 +1766,22 @@ function initTessieImport() {
     }
   });
 
-  // Remove Tessie handlers
+  // Remove imported drives handlers
   const removeOverlay = document.getElementById('remove-tessie-overlay');
+  const srcTessie = document.getElementById('remove-src-tessie');
+  const srcTeslascope = document.getElementById('remove-src-teslascope');
+  const removeConfirmBtn = document.getElementById('btn-remove-tessie-confirm');
+  const syncRemoveConfirm = () => {
+    removeConfirmBtn.disabled = !srcTessie.checked && !srcTeslascope.checked;
+  };
+  srcTessie.addEventListener('change', syncRemoveConfirm);
+  srcTeslascope.addEventListener('change', syncRemoveConfirm);
   document.getElementById('btn-remove-tessie').addEventListener('click', () => {
     if (!loadedFilePath) return;
+    // Destructive modal always opens in a predictable state: both selected.
+    srcTessie.checked = true;
+    srcTeslascope.checked = true;
+    syncRemoveConfirm();
     removeOverlay.classList.remove('hidden');
   });
   document.getElementById('btn-remove-tessie-cancel').addEventListener('click', () => {
@@ -1692,18 +1790,45 @@ function initTessieImport() {
   removeOverlay.addEventListener('click', (e) => {
     if (e.target === removeOverlay) removeOverlay.classList.add('hidden');
   });
-  document.getElementById('btn-remove-tessie-confirm').addEventListener('click', async () => {
+  removeConfirmBtn.addEventListener('click', async () => {
+    const wantTessie = srcTessie.checked;
+    const wantTeslascope = srcTeslascope.checked;
     removeOverlay.classList.add('hidden');
-    if (!loadedFilePath) return;
+    if (!loadedFilePath || (!wantTessie && !wantTeslascope)) return;
     const beforeCount = drives.length;
-    const result = await window.electronAPI.tessieRemoveAll({ driveDataPath: loadedFilePath });
-    if (!result.success) {
-      alert(`Failed to remove imported drives:\n${result.error}`);
+
+    let removed = 0;
+    const failures = [];
+    if (wantTessie) {
+      const r = await window.electronAPI.tessieRemoveAll({ driveDataPath: loadedFilePath });
+      if (r.success) removed += r.removed ?? 0;
+      else failures.push(`Tessie: ${r.error}`);
+    }
+    if (wantTeslascope) {
+      const r = await window.electronAPI.teslascopeRemoveAll({ driveDataPath: loadedFilePath });
+      if (r.success) removed += r.removed ?? 0;
+      else failures.push(`Teslascope: ${r.error}`);
+    }
+    if (failures.length === (wantTessie ? 1 : 0) + (wantTeslascope ? 1 : 0)) {
+      alert(`Failed to remove imported drives:\n${failures.join('\n')}`);
       return;
     }
+
     await reloadDrivesAfterWrite();
     const afterCount = drives.length;
-    alert(`Removed ${fmt(result.removed)} Tessie drive(s).\n\nDrive count: ${fmt(beforeCount)} → ${fmt(afterCount)} (${fmt(afterCount - beforeCount)})`);
+    const sourceLabel = wantTessie && wantTeslascope ? 'imported' : (wantTessie ? 'Tessie' : 'Teslascope');
+    const lines = [
+      `Removed ${fmt(removed)} ${sourceLabel} drive(s).`,
+      '',
+      `Drive count: ${fmt(beforeCount)} → ${fmt(afterCount)} (${fmt(afterCount - beforeCount)})`,
+    ];
+    // The visible delta is smaller when some removed drives were already
+    // hidden behind overlapping dashcam (SEI) drives.
+    if (removed > beforeCount - afterCount) {
+      lines.push('', `${fmt(removed - (beforeCount - afterCount))} of them were hidden behind dashcam drives and not shown in the list.`);
+    }
+    for (const f of failures) lines.push('', `Cleanup failed — ${f}`);
+    alert(lines.join('\n'));
   });
 }
 
@@ -1728,11 +1853,15 @@ async function reloadDrivesAfterWrite() {
   }
 }
 
+// Imported (non-dashcam) drives — Tessie, Teslascope, and future services.
+const isImportedSource = (s) => !!s && s !== 'sei';
+const SOURCE_LABELS = { tessie: 'Tessie', teslascope: 'Teslascope' };
+
 function updateTessieButtonStates() {
   const hasFile = !!loadedFilePath;
-  const hasTessie = drives.some((d) => d.source === 'tessie');
+  const hasImported = drives.some((d) => isImportedSource(d.source));
   document.getElementById('btn-import-tessie').disabled = !hasFile;
-  document.getElementById('btn-remove-tessie').disabled = !hasFile || !hasTessie;
+  document.getElementById('btn-remove-tessie').disabled = !hasFile || !hasImported;
 }
 
 function escapeHtml(s) {
@@ -1974,7 +2103,7 @@ function wireDriveTagInteractions(root, drive) {
 }
 
 function renderSelectedDriveStats(drive) {
-  const isTessie = drive.source === 'tessie';
+  const isTessie = isImportedSource(drive.source); // any imported service
   const totalMi = drive.distanceMi ?? 0;
   const totalMs = drive.durationMs ?? 0;
   const totalHrs = Math.floor(totalMs / 3_600_000);
@@ -2357,8 +2486,9 @@ function buildDriveItem(drive) {
     `<span class="tag-pill tag-removable" data-tag="${t}">${t}<button class="tag-remove" data-tag="${t}">&times;</button></span>`
   ).join('');
 
-  const sourceChip = drive.source === 'tessie'
-    ? '<span class="drive-source-chip">Tessie</span>'
+  const sourceLabel = SOURCE_LABELS[drive.source];
+  const sourceChip = sourceLabel
+    ? `<span class="drive-source-chip">${sourceLabel}</span>`
     : '';
 
   // Place name if already resolved, else GPS coords as a fallback until
@@ -2649,7 +2779,7 @@ function deselectDrive() {
   for (const layer of overviewLayers) {
     if (!map.hasLayer(layer)) layer.addTo(map);
     if (layer.setStyle) {
-      const isTessie = layer._source === 'tessie';
+      const isTessie = isImportedSource(layer._source);
       layer.setStyle({
         color: isTessie ? '#a855f7' : '#3b82f6',
         opacity: isTessie ? 0.6 : 0.5,
@@ -2694,7 +2824,7 @@ function renderOverviewOnMap() {
     const lls = drive.overviewPoints;
     allLatLngs.push(...lls);
 
-    const isTessie = drive.source === 'tessie';
+    const isTessie = isImportedSource(drive.source);
     if (isTessie) anyTessie = true;
 
     const styleOpts = {
@@ -2756,7 +2886,7 @@ function drawSelectedDrive(drive) {
   if (!pts || pts.length < 2) return;
 
   const fsd = drive.fsdStates;
-  const isTessie = drive.source === 'tessie';
+  const isTessie = isImportedSource(drive.source);
   // Tessie API drives have per-point autopilot from the /path endpoint, so
   // we segment them too — just with a dashed line so the lower-fidelity
   // source stays visually distinct from native SEI.

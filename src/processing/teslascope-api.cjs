@@ -22,10 +22,28 @@ const https = require('https');
 
 const API_HOST = 'teslascope.com';
 const DEFAULT_RATE_MS = 1000; // self-throttle; documented limits unknown
-const DEBUG = !!process.env.TESLASCOPE_DEBUG;
 
+// Diagnostics. The field mapping here is best-effort against an undocumented
+// schema, so key milestones (and truncated raw responses) are always logged —
+// through the injected app logger when running in the main process (exported
+// via Settings → Support → Logs), else to stderr when TESLASCOPE_DEBUG=1.
+let appLogger = null;
+function setLogger(l) { appLogger = l; }
 function dbg(...args) {
-  if (DEBUG) console.error('[teslascope-api]', ...args);
+  if (appLogger) appLogger.info('teslascope', ...args);
+  else if (process.env.TESLASCOPE_DEBUG) console.error('[teslascope-api]', ...args);
+}
+
+// Teslascope wraps payloads in envelopes (e.g. { response: {...} }); descend
+// through the common single-wrapper keys so the pickers see the real body.
+function unwrapEnvelope(body) {
+  let b = body;
+  for (let i = 0; i < 3 && b && typeof b === 'object' && !Array.isArray(b); i++) {
+    const inner = b.response ?? b.result ?? b.payload;
+    if (inner == null) break;
+    b = inner;
+  }
+  return b;
 }
 
 // Teslascope accepts two credential styles:
@@ -51,7 +69,7 @@ function requestOnce(path, token, mode, timeoutMs) {
       res.on('data', (c) => (data += c));
       res.on('end', () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
-          try { resolve({ status: res.statusCode, body: JSON.parse(data) }); }
+          try { resolve({ status: res.statusCode, body: unwrapEnvelope(JSON.parse(data)) }); }
           catch (e) { reject(new Error(`Parse error: ${e.message}`)); }
         } else if (res.statusCode === 401 || res.statusCode === 403) {
           const err = new Error(`Unauthorized (HTTP ${res.statusCode})`);
@@ -164,11 +182,14 @@ async function fetchVehicles(token) {
     ({ body } = await httpGet('/api/vehicles', token));
   }
   dbg('account/vehicles raw:', JSON.stringify(body).slice(0, 1200));
-  const list = pickArray(pick(body, ['vehicles', 'results', 'data']) ?? body, ['vehicles', 'results', 'data']);
+  const list = pickArray(pick(body, ['vehicles', 'results', 'data', 'response']) ?? body, ['vehicles', 'results', 'data', 'response']);
   const vehicles = (Array.isArray(list) ? list : []).map((v) => ({
     publicId: pick(v, ['public_id', 'publicId', 'id', 'uuid']),
     vin: pick(v, ['vin', 'VIN']),
-    name: pick(v, ['name', 'display_name', 'vehicle_name', 'nickname']) || pick(v, ['vin']) || 'Vehicle',
+    // The renderer's vehicle dropdown reads `displayName` (same contract as
+    // the Tessie validate path) — returning `name` left it falling back to
+    // the VIN/ID instead of the car's nickname.
+    displayName: pick(v, ['name', 'display_name', 'vehicle_name', 'nickname']) || pick(v, ['vin']) || 'Vehicle',
   })).filter((v) => v.publicId != null);
   return vehicles;
 }
@@ -178,14 +199,46 @@ async function fetchVehicles(token) {
  * Returns the raw drive objects (caller normalizes).
  */
 async function fetchDrives(token, publicId, { from, to } = {}) {
+  const listFrom = (body) => pickArray(body, ['drives', 'results', 'data', 'response']);
+  // Date params are sent as local YYYY-MM-DD (the most common REST style and
+  // possibly what Teslascope expects) rather than Unix seconds. Both are
+  // unverified guesses — the 0-result fallback below covers either being
+  // wrong. A generous limit guards against a low server-side default page
+  // size without risking truncation a small cap would introduce.
+  const toDateStr = (sec) => {
+    const d = new Date(sec * 1000);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
   const params = new URLSearchParams();
-  if (from != null) params.set('from', String(from));
-  if (to != null) params.set('to', String(to));
+  if (from != null) params.set('from', toDateStr(from));
+  if (to != null) params.set('to', toDateStr(to));
+  params.set('limit', '500');
   const qs = params.toString();
-  const path = `/api/vehicle/${encodeURIComponent(publicId)}/drives${qs ? `?${qs}` : ''}`;
-  const { body } = await httpGet(path, token);
-  const drives = pickArray(body, ['drives', 'results', 'data']);
-  dbg('drives count:', drives.length, 'first raw:', JSON.stringify(drives[0] ?? null).slice(0, 1200));
+  const base = `/api/vehicle/${encodeURIComponent(publicId)}/drives`;
+
+  let { body } = await httpGet(`${base}${qs ? `?${qs}` : ''}`, token);
+  let drives = listFrom(body);
+  dbg('drives raw (windowed):', JSON.stringify(body).slice(0, 1200));
+  dbg('drives count (windowed):', drives.length);
+
+  // The from/to parameter names are guesses against an undocumented API — if
+  // a windowed query returns nothing, fetch unfiltered and apply the window
+  // client-side off each drive's start timestamp instead.
+  if (drives.length === 0 && qs) {
+    ({ body } = await httpGet(base, token));
+    const all = listFrom(body);
+    dbg('drives raw (unfiltered):', JSON.stringify(body).slice(0, 1200));
+    const fromMs = from != null ? from * 1000 : -Infinity;
+    const toFilterMs = to != null ? to * 1000 : Infinity;
+    drives = all.filter((d) => {
+      const t = toMs(pick(d, ['started_at', 'start_date', 'start_time', 'starting_time', 'start', 'startedAt']));
+      return !Number.isFinite(t) || (t >= fromMs && t <= toFilterMs);
+    });
+    dbg(`drives count: ${all.length} unfiltered → ${drives.length} in window`);
+  }
+
+  dbg('first raw drive:', JSON.stringify(drives[0] ?? null).slice(0, 1200));
   return drives;
 }
 
@@ -258,6 +311,7 @@ function normalizeDrive(raw, detail) {
 }
 
 module.exports = {
+  setLogger,
   Throttler,
   fetchVehicles,
   fetchDrives,

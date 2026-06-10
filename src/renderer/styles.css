@@ -1005,13 +1005,12 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 
 .map-stats-summary {
   display: flex;
-  /* Spacing breathes with the viewport so stat values never have to break
-     mid-text on narrow windows ("32H 34M" used to stack); if it still can't
-     fit, whole stat blocks wrap as units. */
-  flex-wrap: wrap;
-  gap: 12px clamp(16px, 4vw, 48px);
+  /* Always one line: the panel grows to fit its stats (it's centered with
+     max-width to the map edge), and spacing compresses with the viewport
+     before anything else gives. Values never break mid-text. */
+  gap: clamp(14px, 4vw, 48px);
   align-items: center;
-  padding: 18px clamp(24px, 4.5vw, 56px) 18px clamp(20px, 4vw, 56px);
+  padding: 18px clamp(24px, 4.5vw, 56px) 18px clamp(18px, 4vw, 56px);
   position: relative;
 }
 
@@ -1207,7 +1206,9 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 
 .map-stat-val {
-  font-size: 28px;
+  /* Shrinks a touch on very narrow windows so the one-line summary keeps
+     fitting after the gaps have bottomed out. */
+  font-size: clamp(19px, 4.4vw, 28px);
   font-weight: 700;
   color: var(--text);
   line-height: 1.1;
@@ -1964,6 +1965,31 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   gap: 8px;
   margin-top: 4px;
 }
+
+/* Source selection inside the Remove Imported Drives confirm modal */
+.remove-source-rows {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 6px;
+}
+.remove-source-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.remove-source-row:hover { background: rgba(255, 255, 255, 0.08); }
+.remove-source-row input { accent-color: var(--danger); cursor: pointer; margin: 0; }
 
 /* ── Update Modal ──────────────────────────────────────────────────────── */
 #update-overlay {

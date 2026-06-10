@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 const driveCalc = require('../shared/drive-calc.cjs');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  appLog: (entry) => ipcRenderer.send('app-log', entry),
+  downloadLogs: () => ipcRenderer.invoke('download-logs'),
   selectDirectory: (opts) => ipcRenderer.invoke('select-directory', opts),
   selectFile: (opts) => ipcRenderer.invoke('select-file', opts),
   findDriveData: (dir) => ipcRenderer.invoke('find-drive-data', dir),
