@@ -1,6 +1,16 @@
 {
   "versions": [
     {
+      "version": "1.2.2-beta.1",
+      "date": "2026-06-10",
+      "title": "Teslascope Fixes & Linux Support",
+      "changes": [
+        { "type": "fix", "description": "Connecting Teslascope now works with the API key from Account → Security — it was previously rejected with \"Unauthorized (HTTP 401)\". The \"Get an API token\" link also opens the correct page now." },
+        { "type": "feature", "description": "Linux support — releases now include a Linux AppImage with the same auto-update as Windows." },
+        { "type": "improvement", "description": "Drives that start or end in unmapped areas now show the nearest city as their location instead of raw GPS coordinates." }
+      ]
+    },
+    {
       "version": "1.2.1",
       "date": "2026-06-09",
       "title": "Location Accuracy & Faster Loading",
