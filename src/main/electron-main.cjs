@@ -28,9 +28,26 @@ const { readDriveData } = require('./drive-data-reader.cjs');
 // Terminal echo + in-memory buffer; exported from Settings → Support → Logs.
 const logger = require('./logger.cjs');
 logger.setAppInfo({ version: app.getVersion() });
+// Crash-surviving sink: appended live; last session rotates to
+// previous-session.log and is included in exports.
+logger.initFileSink(path.join(app.getPath('userData'), 'logs'));
 logger.info('main', 'app starting');
-// Teslascope API diagnostics flow into this log (Settings → Support → Logs).
+// API-client diagnostics flow into this log (Settings → Support → Logs).
 require('../processing/teslascope-api.cjs').setLogger(logger);
+require('../processing/tessie-api.cjs').setLogger?.(logger);
+
+app.on('before-quit', () => {
+  logger.info('main', 'app quitting');
+  logger.flushNow();
+});
+// The "app went blank / video died" class of crash — record the reason.
+app.on('render-process-gone', (_e, _wc, details) => {
+  logger.error('main', `renderer process gone: ${details.reason} (exit ${details.exitCode})`);
+});
+app.on('child-process-gone', (_e, details) => {
+  if (details.type === 'GPU' && details.reason === 'clean-exit') return; // routine
+  logger.warn('main', `${details.type} process gone: ${details.reason}`);
+});
 
 // Log instead of crash: a background hiccup (e.g. a failed async callback)
 // shouldn't take down the viewer. The error is preserved in the log export.

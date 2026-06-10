@@ -87,6 +87,8 @@ function requestOnce(path, token, mode, timeoutMs) {
   });
 }
 
+let lastLoggedAuthMode = null;
+
 async function httpGet(path, token, timeoutMs = 15000) {
   const modes = authMode === 'legacy' ? ['legacy', 'bearer'] : ['bearer', 'legacy'];
   let lastErr;
@@ -94,7 +96,10 @@ async function httpGet(path, token, timeoutMs = 15000) {
     try {
       const res = await requestOnce(path, token, mode, timeoutMs);
       authMode = mode;
-      dbg('auth mode in use:', mode);
+      if (lastLoggedAuthMode !== mode) {
+        lastLoggedAuthMode = mode;
+        dbg('auth mode in use:', mode);
+      }
       return res;
     } catch (e) {
       lastErr = e;
@@ -245,7 +250,7 @@ async function fetchDrives(token, publicId, { from, to } = {}) {
     const fromMs = from != null ? from * 1000 : -Infinity;
     const toFilterMs = to != null ? to * 1000 : Infinity;
     drives = all.filter((d) => {
-      const t = toMs(pick(d, ['started_at', 'start_date', 'start_time', 'starting_time', 'start', 'startedAt']));
+      const t = toMs(pick(d, ['started_at', 'start_date', 'start_time', 'starting_time', 'start', 'startedAt', 'created_at']));
       return !Number.isFinite(t) || (t >= fromMs && t <= toFilterMs);
     });
     dbg(`drives count: ${all.length} unfiltered → ${drives.length} in window`);
@@ -294,12 +299,29 @@ function extractPoints(detail) {
  *     startingOdometer, startLat, startLng, endLat, endLng,
  *     points: [{ timestamp, latitude, longitude, speed, autopilot }] }
  */
+// Verified against the live API (drives list, 2026-06): a drive looks like
+//   { id, name, distance: "9.570000" (string miles), duration: 4161 (sec),
+//     latitude_start/longitude_start/latitude_end/longitude_end (strings),
+//     created_at: "2026-06-08T19:01:53.000000Z" (the drive's timestamp —
+//     there is NO explicit end field; end = created_at + duration),
+//     self_driving_miles_start/_end, self_driving_perc, battery_*, ... }
+// The earlier guessed names are kept as fallbacks for the (unseen) per-drive
+// detail endpoint, which may use a richer shape.
 function normalizeDrive(raw, detail) {
   const d = { ...(raw || {}), ...(detail || {}) };
-  const startedAt = toMs(pick(d, ['started_at', 'start_date', 'start_time', 'starting_time', 'start', 'startedAt']));
-  const endedAt = toMs(pick(d, ['ended_at', 'end_date', 'end_time', 'finishing_time', 'finished_at', 'end', 'endedAt']));
+  const startedAt = toMs(pick(d, ['started_at', 'start_date', 'start_time', 'starting_time', 'start', 'startedAt', 'created_at']));
+  let endedAt = toMs(pick(d, ['ended_at', 'end_date', 'end_time', 'finishing_time', 'finished_at', 'end', 'endedAt']));
+  const durationSec = num(pick(d, ['duration', 'duration_sec', 'duration_seconds']));
+  if (!Number.isFinite(endedAt) && Number.isFinite(startedAt) && Number.isFinite(durationSec)) {
+    endedAt = startedAt + durationSec * 1000;
+  }
   const distanceMi = num(pick(d, ['distance', 'distance_miles', 'distance_mi', 'miles', 'odometer_distance'])) ?? 0;
-  const apDistMi = num(pick(d, ['autopilot_distance', 'autopilot_distance_miles', 'fsd_distance', 'autopilotDistanceMi'])) ?? 0;
+  // Teslascope reports FSD usage as start/end mile counters; fall back to the
+  // delta when no direct autopilot-distance field exists.
+  const sdStart = num(pick(d, ['self_driving_miles_start']));
+  const sdEnd = num(pick(d, ['self_driving_miles_end']));
+  const apDistMi = num(pick(d, ['autopilot_distance', 'autopilot_distance_miles', 'fsd_distance', 'autopilotDistanceMi']))
+    ?? ((Number.isFinite(sdStart) && Number.isFinite(sdEnd) && sdEnd >= sdStart) ? sdEnd - sdStart : 0);
   const startingOdometer = num(pick(d, ['starting_odometer', 'start_odometer', 'odometer_start', 'startingOdometer']));
 
   return {
@@ -309,10 +331,10 @@ function normalizeDrive(raw, detail) {
     distanceMi,
     autopilotDistanceMi: apDistMi,
     startingOdometer: startingOdometer != null ? startingOdometer : undefined,
-    startLat: num(pick(d, ['starting_latitude', 'start_latitude', 'start_lat', 'from_latitude'])),
-    startLng: num(pick(d, ['starting_longitude', 'start_longitude', 'start_lng', 'from_longitude'])),
-    endLat: num(pick(d, ['ending_latitude', 'end_latitude', 'end_lat', 'to_latitude'])),
-    endLng: num(pick(d, ['ending_longitude', 'end_longitude', 'end_lng', 'to_longitude'])),
+    startLat: num(pick(d, ['latitude_start', 'starting_latitude', 'start_latitude', 'start_lat', 'from_latitude'])),
+    startLng: num(pick(d, ['longitude_start', 'starting_longitude', 'start_longitude', 'start_lng', 'from_longitude'])),
+    endLat: num(pick(d, ['latitude_end', 'ending_latitude', 'end_latitude', 'end_lat', 'to_latitude'])),
+    endLng: num(pick(d, ['longitude_end', 'ending_longitude', 'end_longitude', 'end_lng', 'to_longitude'])),
     // buildClipsForApiDrive maps autopilot via tessie-api's mapAutopilotString
     // (off-values are specific strings; 0 would read as "on"). Bridge our
     // boolean mapping to the 'Active'/'Off' strings it understands.

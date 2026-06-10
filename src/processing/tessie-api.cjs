@@ -71,9 +71,19 @@ class Throttler {
  * List vehicles on the user's account. Use this to confirm the token works
  * and pick the VIN for subsequent calls.
  */
+// Diagnostics — injected by the main process so milestones land in the app
+// log (Settings → Support → Logs), matching the Teslascope client.
+let appLogger = null;
+function setLogger(l) { appLogger = l; }
+function dbg(...args) {
+  if (appLogger) appLogger.info('tessie', ...args);
+}
+
 async function fetchVehicles(token) {
   const { body } = await httpGet('/vehicles', token);
-  return Array.isArray(body.results) ? body.results : [];
+  const vehicles = Array.isArray(body.results) ? body.results : [];
+  dbg('vehicles fetched:', vehicles.length);
+  return vehicles;
 }
 
 /**
@@ -87,7 +97,9 @@ async function fetchDrives(token, vin, { from, to, limit } = {}) {
   if (to != null) params.set('to', String(to));
   if (limit != null) params.set('limit', String(limit));
   const { body } = await httpGet(`/${encodeURIComponent(vin)}/drives?${params}`, token);
-  return Array.isArray(body.results) ? body.results : [];
+  const drives = Array.isArray(body.results) ? body.results : [];
+  dbg('drives fetched:', drives.length, '| first raw:', JSON.stringify(drives[0] ?? null).slice(0, 600));
+  return drives;
 }
 
 /**
@@ -139,6 +151,7 @@ function mapAutopilotString(s) {
 }
 
 module.exports = {
+  setLogger,
   Throttler,
   fetchVehicles,
   fetchDrives,
