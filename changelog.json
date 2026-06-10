@@ -1,6 +1,14 @@
 {
   "versions": [
     {
+      "version": "1.2.2-beta.3",
+      "date": "2026-06-10",
+      "title": "Teslascope Import Fix",
+      "changes": [
+        { "type": "fix", "description": "Teslascope import no longer fails with \"The limit may not be greater than 100\" — drives are now fetched 100 at a time through your full history." }
+      ]
+    },
+    {
       "version": "1.2.2-beta.2",
       "date": "2026-06-10",
       "title": "Location Accuracy, Faster Loading & Linux Support",

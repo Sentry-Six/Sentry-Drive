@@ -200,35 +200,48 @@ async function fetchVehicles(token) {
  */
 async function fetchDrives(token, publicId, { from, to } = {}) {
   const listFrom = (body) => pickArray(body, ['drives', 'results', 'data', 'response']);
-  // Date params are sent as local YYYY-MM-DD (the most common REST style and
-  // possibly what Teslascope expects) rather than Unix seconds. Both are
-  // unverified guesses — the 0-result fallback below covers either being
-  // wrong. A generous limit guards against a low server-side default page
-  // size without risking truncation a small cap would introduce.
+  // Date params are sent as local YYYY-MM-DD; the 0-result fallback below
+  // covers the param names/format being wrong.
   const toDateStr = (sec) => {
     const d = new Date(sec * 1000);
     const p = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   };
-  const params = new URLSearchParams();
-  if (from != null) params.set('from', toDateStr(from));
-  if (to != null) params.set('to', toDateStr(to));
-  params.set('limit', '500');
-  const qs = params.toString();
   const base = `/api/vehicle/${encodeURIComponent(publicId)}/drives`;
+  // Verified against the live API: limit > 100 → HTTP 422 "The limit may not
+  // be greater than 100." (Laravel-style validation), so page through with
+  // the maximum page size instead of relying on one big response.
+  const PAGE_LIMIT = 100;
+  const MAX_PAGES = 50; // safety stop: 5,000 drives per fetch
 
-  let { body } = await httpGet(`${base}${qs ? `?${qs}` : ''}`, token);
-  let drives = listFrom(body);
-  dbg('drives raw (windowed):', JSON.stringify(body).slice(0, 1200));
+  const fetchAll = async (withWindow) => {
+    const all = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const params = new URLSearchParams();
+      if (withWindow && from != null) params.set('from', toDateStr(from));
+      if (withWindow && to != null) params.set('to', toDateStr(to));
+      params.set('limit', String(PAGE_LIMIT));
+      if (page > 1) params.set('page', String(page));
+      const { body } = await httpGet(`${base}?${params.toString()}`, token);
+      const batch = listFrom(body);
+      if (page === 1) {
+        dbg(`drives raw (${withWindow ? 'windowed' : 'unfiltered'}, page 1):`, JSON.stringify(body).slice(0, 1200));
+      }
+      all.push(...batch);
+      if (batch.length < PAGE_LIMIT) break; // short page = last page
+      await new Promise((r) => setTimeout(r, 300)); // be polite between pages
+    }
+    return all;
+  };
+
+  let drives = await fetchAll(true);
   dbg('drives count (windowed):', drives.length);
 
   // The from/to parameter names are guesses against an undocumented API — if
   // a windowed query returns nothing, fetch unfiltered and apply the window
   // client-side off each drive's start timestamp instead.
-  if (drives.length === 0 && qs) {
-    ({ body } = await httpGet(base, token));
-    const all = listFrom(body);
-    dbg('drives raw (unfiltered):', JSON.stringify(body).slice(0, 1200));
+  if (drives.length === 0 && (from != null || to != null)) {
+    const all = await fetchAll(false);
     const fromMs = from != null ? from * 1000 : -Infinity;
     const toFilterMs = to != null ? to * 1000 : Infinity;
     drives = all.filter((d) => {
