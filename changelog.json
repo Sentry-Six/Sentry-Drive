@@ -1,7 +1,7 @@
 {
   "versions": [
     {
-      "version": "1.2.1-beta.2",
+      "version": "1.2.2-beta.2",
       "date": "2026-06-10",
       "title": "Location Accuracy, Faster Loading & Linux Support",
       "changes": [
