@@ -267,6 +267,10 @@ function splitClipAtParkGaps(clip) {
         speeds: segSpeeds,
         accelPositions: segAccel,
         timestamp: new Date(clip.timestamp.getTime() + offsetMs),
+        // Frame span of this sub-segment within its parent clip — lets
+        // buildDriveStats end the drive where driving actually stopped
+        // (mirrors Rust SubClipSummary start_frame/end_frame/total_frames).
+        subClipFrames: { startFrame: seg.startFrame, endFrame: seg.endFrame, totalFrames: totalRawFrames },
       },
       parked: false,
     });
@@ -313,7 +317,16 @@ function buildDriveStats(clips, idx) {
   const firstClip = clips[0];
   const lastClip = clips[clips.length - 1];
   const startTime = firstClip.timestamp;
-  const endTime = new Date(lastClip.timestamp.getTime() + CLIP_DURATION_MS);
+  // End time mirrors Rust build_summary_from_aggregates (grouper.rs:1992):
+  // when the drive's last clip is a park-split sub-segment, the drive ends
+  // where that segment's frames end — not a full minute after the clip
+  // started. Unsplit clips keep the +60 s convention (full frame span).
+  let lastSegmentLenMs = CLIP_DURATION_MS;
+  const lf = lastClip.subClipFrames;
+  if (lf && lf.totalFrames > 0) {
+    lastSegmentLenMs = Math.round(((lf.endFrame - lf.startFrame) * CLIP_DURATION_MS) / lf.totalFrames);
+  }
+  const endTime = new Date(lastClip.timestamp.getTime() + lastSegmentLenMs);
 
   // Merge all points with interpolated timestamps
   const allPoints = [];

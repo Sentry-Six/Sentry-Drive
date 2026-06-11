@@ -1,6 +1,6 @@
 /* ── Variables ──────────────────────────────────────────────────────────── */
 /* Palette aligned to the Sentry USB (Rust) UI scheme — dark slate surfaces,
-   glass cards, Inter type — with the accent kept on Sentry Drive's blue
+   glass cards, Noto Sans type — with the accent kept on Sentry Drive's blue
    (the USB build remaps its blue tokens to green; here we keep real blue). */
 :root {
   /* Surfaces — slate scale, darkest → raised */
@@ -56,8 +56,8 @@
   --radius:    14px;
   --radius-sm: 10px;
   --radius-lg: 20px;
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Consolas', 'Menlo', 'Monaco', monospace;
+  --font-sans: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Noto Sans Mono', 'Consolas', 'Menlo', 'Monaco', monospace;
 }
 
 /* Material Symbols (loaded from Google Fonts) reused under the existing

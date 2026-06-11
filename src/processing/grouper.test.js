@@ -284,3 +284,26 @@ test('geocode endpoints: stationary-median start, raw terminal fix when rolling'
   assert.equal(d.geocodeEndPoint[0], 37.000900);
   assert.equal(d.geocodeEndPoint[1], -122.0);
 });
+
+// ─── Drive end-time convention (Rust build_summary_from_aggregates:1992) ──────
+// A drive whose last clip is park-split ends where the driving segment's
+// frames end — NOT a full minute after the clip's start. Unsplit final clips
+// keep the +60 s convention. This was a real divergence: Drive's flat +60 s
+// inflated lifetime duration vs Sentry USB Rusty.
+
+test('drive ends at the last driving frame, not +60s, when the final clip is park-split', () => {
+  // 30 frames driving, 30 frames parked → drive covers the first 30s only.
+  const drives = drivesOf([
+    clipWithGearRuns('RecentClips/2026-05-17_10-00-00-front.mp4', [[GEAR_DRIVE, 30], [GEAR_PARK, 30]]),
+  ]);
+  assert.equal(drives.length, 1);
+  assert.equal(drives[0].durationMs, 30000);
+});
+
+test('drive with an unsplit final clip keeps the +60s convention', () => {
+  const drives = drivesOf([
+    testRoute('RecentClips/2026-05-17_10-00-00-front.mp4', linePoints(10)),
+  ]);
+  assert.equal(drives.length, 1);
+  assert.equal(drives[0].durationMs, 60000);
+});

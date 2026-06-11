@@ -3,19 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Leaflet + all fonts are bundled (assets/vendor/) — the app works fully
+       offline and makes no third-party requests at launch. The only remote
+       host left is Google's tile server, loaded as images. -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
-    script-src 'self' https://unpkg.com;
-    style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com;
-    font-src https://fonts.gstatic.com;
-    img-src 'self' data: blob: https://unpkg.com https://*.basemaps.cartocdn.com https://*.openstreetmap.org https://*.google.com;
+    script-src 'self';
+    style-src 'self' 'unsafe-inline';
+    font-src 'self';
+    img-src 'self' data: blob: https://*.google.com;
     worker-src blob:;
-    connect-src https://*.basemaps.cartocdn.com https://*.google.com https://unpkg.com;
+    connect-src 'self';
   " />
   <title>Sentry Drive</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0..1,0" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="../../assets/vendor/fonts/fonts.css" />
+  <link rel="stylesheet" href="../../assets/vendor/leaflet/leaflet.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -570,8 +572,8 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/@jaames/iro@5/dist/iro.min.js"></script>
+  <script src="../../assets/vendor/leaflet/leaflet.js"></script>
+  <script src="../../assets/vendor/iro.min.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

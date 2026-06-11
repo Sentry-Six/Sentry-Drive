@@ -137,7 +137,16 @@ function initMap() {
   // #38414e roads / muted tan labels) — verified live at ~49 avg tile
   // brightness vs ~214 for the standard roadmap.
   showMapLabels = localStorage.getItem('showMapLabels') !== 'false';
-  const GMAPS_NIGHT_RULES = 's.e%3Ag%7Cp.c%3A%23242f3e,s.e%3Al.t.f%7Cp.c%3A%23746855,s.e%3Al.t.s%7Cp.c%3A%23242f3e,s.t%3A6%7Cs.e%3Ag%7Cp.c%3A%2317263c,s.t%3A3%7Cs.e%3Ag%7Cp.c%3A%2338414e';
+  // Google night-mode palette (every color verified pixel-by-pixel on live
+  // tiles): base #242f3e, parks #263c3f (s.t:37), built-up/building lots
+  // #2b3645 (81), water #17263c (6), roads #38414e + stroke #212a37 (3),
+  // transit #2f3948 (4), all labels white with the dark base as halo (the
+  // muted-tan and warm-accent label colors were both tried and reverted).
+  // Highways (49) diverge from Google's tan on purpose: light grey #5f6b7c,
+  // clearly lighter than local roads — and the fill (g.f) is set explicitly
+  // because the high-zoom highway rendering ignores the generic g rule
+  // (verified at z15: without g.f the color vanished when zoomed in).
+  const GMAPS_NIGHT_RULES = 's.e%3Ag%7Cp.c%3A%23242f3e,s.e%3Al.t.f%7Cp.c%3A%23ffffff,s.e%3Al.t.s%7Cp.c%3A%23242f3e,s.t%3A37%7Cs.e%3Ag%7Cp.c%3A%23263c3f,s.t%3A81%7Cs.e%3Ag%7Cp.c%3A%232b3645,s.t%3A6%7Cs.e%3Ag%7Cp.c%3A%2317263c,s.t%3A3%7Cs.e%3Ag%7Cp.c%3A%2338414e,s.t%3A3%7Cs.e%3Ag.s%7Cp.c%3A%23212a37,s.t%3A49%7Cs.e%3Ag%7Cp.c%3A%235f6b7c,s.t%3A49%7Cs.e%3Ag.f%7Cp.c%3A%235f6b7c,s.t%3A49%7Cs.e%3Ag.s%7Cp.c%3A%232a3340,s.t%3A4%7Cs.e%3Ag%7Cp.c%3A%232f3948';
   const gmapsLabelRules = () => (showMapLabels
     ? 's.e%3Al%7Cp.v%3Aoff,s.t%3A1%7Cs.e%3Al%7Cp.v%3Aon'
     : 's.e%3Al%7Cp.v%3Aoff');
