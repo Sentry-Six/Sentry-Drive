@@ -2778,16 +2778,10 @@ async function selectDrive(drive) {
   }
   selectedDriveId = drive.id;
 
-  // Handle other drive lines based on setting
-  for (const layer of overviewLayers) {
-    if (layer._driveId === drive.id) {
-      map.removeLayer(layer);
-    } else if (hideOtherDrives) {
-      map.removeLayer(layer);
-    } else if (layer.setStyle) {
-      layer.setStyle({ color: '#555566', opacity: 1, dashArray: null });
-    }
-  }
+  // Context lines: the overview canvas dims everything to grey, hides the
+  // selected drive's own line, or clears entirely per hideOtherDrives —
+  // selectedDriveId is already set, so one redraw applies the right state.
+  if (overviewRoutesCanvas) overviewRoutesCanvas.redraw();
 
   document.getElementById('btn-back-overview').classList.remove('hidden');
   if (!drive.points) {
@@ -2820,22 +2814,8 @@ function applyFsdMarkerVisibility() {
 
 function applyOtherDrivesVisibility() {
   if (selectedDriveId === null) return;
-  for (const layer of overviewLayers) {
-    if (layer._driveId === selectedDriveId) continue;
-    if (hideOtherDrives) {
-      if (map.hasLayer(layer)) map.removeLayer(layer);
-    } else {
-      if (!map.hasLayer(layer)) {
-        // Re-adding appends to the shared canvas's paint order — push the
-        // gray context lines back under the selected drive.
-        layer.addTo(map);
-        if (layer.bringToBack) layer.bringToBack();
-      }
-      if (layer.setStyle) {
-        layer.setStyle({ color: '#555566', opacity: 1, dashArray: null });
-      }
-    }
-  }
+  // The overview canvas derives hidden/dim state from the globals.
+  if (overviewRoutesCanvas) overviewRoutesCanvas.redraw();
 }
 
 function deselectDrive() {
@@ -2851,18 +2831,9 @@ function deselectDrive() {
   // Restore the aggregate stats in the map overlay.
   if (drives.length > 0 && lastDrivesMeta) renderDriveStats(drives, lastDrivesMeta);
 
-  // Restore overview lines to original style (Tessie drives keep purple/dashed)
-  for (const layer of overviewLayers) {
-    if (!map.hasLayer(layer)) layer.addTo(map);
-    if (layer.setStyle) {
-      const isTessie = isImportedSource(layer._source);
-      layer.setStyle({
-        color: isTessie ? '#a855f7' : '#3b82f6',
-        opacity: isTessie ? 0.6 : 0.5,
-        dashArray: isTessie ? '6 4' : null,
-      });
-    }
-  }
+  // Restore overview lines to original style (imports keep purple/dashed) —
+  // selectedDriveId is null again, so the canvas redraw renders overview mode.
+  if (overviewRoutesCanvas) overviewRoutesCanvas.redraw();
 
   // Fit map to all drives
   const allLatLngs = [];
@@ -2909,6 +2880,117 @@ function smoothLatLngsForDisplay(latLngs, iterations = 2) {
   return pts;
 }
 
+// ─── Single-pass overview routes layer ───────────────────────────────────────
+// One custom canvas that strokes EVERY overview route in a single draw pass.
+// Per-drive L.polyline layers were the overview's bottleneck: profiling on a
+// ~5,400-drive history showed per-layer overhead (not point count) costing
+// ~1 FPS pans and a multi-second initial draw — merging into batched canvas
+// strokes removes the per-layer bookkeeping entirely. Display states mirror
+// the old per-layer styling: overview (blue solid / purple dashed imports),
+// dim-grey context under a selected drive, hidden when "Hide other drives"
+// is on. The canvas is pointer-events:none — selection goes through the
+// delegated map click handler, so no interactivity is lost.
+const OverviewRoutesLayer = L.Layer.extend({
+  onAdd(map) {
+    this._map = map;
+    const c = L.DomUtil.create('canvas', 'leaflet-zoom-animated');
+    this._canvas = c;
+    c.style.pointerEvents = 'none';
+    // First child of the overlay pane → beneath the default vector canvas
+    // that draws the selected drive, so selection renders on top.
+    const pane = map.getPane('overlayPane');
+    pane.insertBefore(c, pane.firstChild);
+    map.on('moveend zoomend viewreset resize', this._reset, this);
+    if (map.options.zoomAnimation) map.on('zoomanim', this._animateZoom, this);
+    this._reset();
+    return this;
+  },
+  onRemove(map) {
+    map.off('moveend zoomend viewreset resize', this._reset, this);
+    map.off('zoomanim', this._animateZoom, this);
+    if (this._canvas) L.DomUtil.remove(this._canvas);
+    this._canvas = null;
+    this._map = null;
+  },
+  // Standard custom-canvas zoom animation (same recipe as Leaflet.heat).
+  _animateZoom(e) {
+    const scale = this._map.getZoomScale(e.zoom);
+    const offset = this._map._latLngBoundsToNewLayerBounds(this._map.getBounds(), e.zoom, e.center).min;
+    L.DomUtil.setTransform(this._canvas, offset, scale);
+  },
+  _reset() {
+    if (!this._map || !this._canvas) return;
+    const topLeft = this._map.containerPointToLayerPoint([0, 0]);
+    L.DomUtil.setPosition(this._canvas, topLeft);
+    const size = this._map.getSize();
+    const dpr = window.devicePixelRatio || 1;
+    this._canvas.width = size.x * dpr;
+    this._canvas.height = size.y * dpr;
+    this._canvas.style.width = `${size.x}px`;
+    this._canvas.style.height = `${size.y}px`;
+    const ctx = this._canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.redraw();
+  },
+  redraw() {
+    if (!this._map || !this._canvas) return;
+    const map = this._map;
+    const ctx = this._canvas.getContext('2d');
+    const size = map.getSize();
+    ctx.clearRect(0, 0, size.x, size.y);
+
+    const data = overviewClickIndex;
+    if (!data.length) return;
+    const selected = selectedDriveId != null;
+    if (selected && hideOtherDrives) return; // context lines hidden entirely
+
+    // Skip drives fully outside the (padded) viewport.
+    const vb = map.getBounds().pad(0.05);
+    const weight = getWeight(2.5);
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.lineWidth = weight;
+
+    // One stroked path per style batch instead of one per drive.
+    const strokeBatch = (entries, color, alpha, dash) => {
+      if (!entries.length) return;
+      ctx.beginPath();
+      for (const entry of entries) {
+        const pts = entry.lls;
+        let p = map.latLngToContainerPoint(pts[0]);
+        ctx.moveTo(p.x, p.y);
+        for (let i = 1; i < pts.length; i++) {
+          p = map.latLngToContainerPoint(pts[i]);
+          ctx.lineTo(p.x, p.y);
+        }
+      }
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = alpha;
+      ctx.setLineDash(dash);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    };
+
+    const native = [];
+    const imported = [];
+    for (const entry of data) {
+      if (selected && entry.drive.id === selectedDriveId) continue; // own line: selection draws it
+      if (!vb.intersects(entry.bounds)) continue;
+      (entry.imported ? imported : native).push(entry);
+    }
+
+    if (selected) {
+      // Dim-grey context under the selected drive (old per-layer #555566).
+      strokeBatch(native.concat(imported), '#555566', 1, []);
+    } else {
+      strokeBatch(native, '#3b82f6', 0.5, []);
+      strokeBatch(imported, '#a855f7', 0.6, [6, 4]);
+    }
+  },
+});
+let overviewRoutesCanvas = null;
+
 function renderOverviewOnMap() {
   clearLayers(overviewLayers);
   clearLayers(selectedLayers);
@@ -2919,45 +3001,27 @@ function renderOverviewOnMap() {
 
   const allLatLngs = [];
 
-  // Draw one polyline per drive with downsampled points for performance.
-  // Tessie-imported drives use a dashed purple line so provenance is obvious
-  // without having to rely on color alone (accessibility).
+  // Build the route data for the single-pass canvas (and the click index —
+  // same array, same displayed geometry). Imported drives are sparse cloud
+  // breadcrumbs (15-60 s apart), smoothed so poll intervals don't render as
+  // hard corners; 1 iteration here vs the selected drive's 2.
   let anyTessie = false;
   for (const drive of drives) {
     if (!drive.overviewPoints || drive.overviewPoints.length < 2) continue;
-    const isTessie = isImportedSource(drive.source);
-    if (isTessie) anyTessie = true;
-
-    // Imported drives are sparse cloud breadcrumbs (15-60 s apart) — smooth
-    // the displayed line so poll intervals don't render as hard corners.
-    // 1 iteration here: the overview draws every drive at once, so point
-    // count is the panning bottleneck (the selected drive gets 2).
-    const lls = isTessie ? smoothLatLngsForDisplay(drive.overviewPoints, 1) : drive.overviewPoints;
+    const imported = isImportedSource(drive.source);
+    if (imported) anyTessie = true;
+    const lls = imported ? smoothLatLngsForDisplay(drive.overviewPoints, 1) : drive.overviewPoints;
     allLatLngs.push(...lls);
-
-    const styleOpts = {
-      color: isTessie ? '#a855f7' : '#3b82f6',
-      weight: getWeight(2.5),
-      opacity: isTessie ? 0.6 : 0.5,
-      // Higher simplification for the overview: thousands of lines draw at
-      // once, and at these zooms the detail is invisible anyway.
-      smoothFactor: 1.5,
-      // Non-interactive: with per-line interactivity, Leaflet hit-tests every
-      // line on EVERY mousemove (the big pan/hover lag with large histories).
-      // Clicks are handled by the single map-level nearest-line handler below.
-      interactive: false,
-    };
-    if (isTessie) styleOpts.dashArray = '6 4';
-
-    const line = L.polyline(lls, styleOpts).addTo(map);
-    line._baseWeight = 2.5;
-    line._driveId = drive.id;
-    line._source = drive.source ?? 'sei';
-    overviewLayers.push(line);
-    overviewClickIndex.push({ drive, lls, bounds: line.getBounds() });
+    overviewClickIndex.push({ drive, lls, imported, bounds: L.latLngBounds(lls) });
   }
 
-  // Toggle the Tessie legend entry based on whether any imported drives exist.
+  if (!overviewRoutesCanvas) {
+    overviewRoutesCanvas = new OverviewRoutesLayer();
+    overviewRoutesCanvas.addTo(map);
+  }
+  overviewRoutesCanvas.redraw();
+
+  // Toggle the imported legend entry based on whether any imported drives exist.
   const tessieLegend = document.querySelector('.legend-tessie');
   if (tessieLegend) tessieLegend.classList.toggle('hidden', !anyTessie);
 
