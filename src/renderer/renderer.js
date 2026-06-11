@@ -20,6 +20,7 @@ let showFsdMarkers = true;
 let fsdEventLayers = [];
 let showMapLabels = true;               // city/neighborhood labels on base maps
 let applyMapLabelsSetting = () => {};   // bound to the real layers at map init
+let overviewClickIndex = [];            // [{drive, lls, bounds}] for delegated click-to-select
 
 // Replay state
 let replayMarker = null;
@@ -214,6 +215,37 @@ function initMap() {
 
   map.on('zoomend', updateLineWeights);
 
+  // Single delegated click handler for drive selection. The overview lines
+  // are non-interactive (see renderOverviewOnMap), so Leaflet does zero
+  // per-mousemove hit-testing across thousands of layers — on click we run
+  // one bbox-prefiltered nearest-segment search instead.
+  map.on('click', (e) => {
+    if (overviewClickIndex.length === 0) return;
+    if (selectedDriveId != null && hideOtherDrives) return; // lines are hidden
+    const TOL_PX = 10;
+    const o = map.containerPointToLatLng(L.point(0, 0));
+    const t = map.containerPointToLatLng(L.point(TOL_PX, TOL_PX));
+    const padLat = Math.abs(o.lat - t.lat);
+    const padLng = Math.abs(o.lng - t.lng);
+    const click = map.latLngToContainerPoint(e.latlng);
+    let best = null;
+    let bestD2 = TOL_PX * TOL_PX;
+    for (const entry of overviewClickIndex) {
+      const b = entry.bounds;
+      if (e.latlng.lat < b.getSouth() - padLat || e.latlng.lat > b.getNorth() + padLat ||
+          e.latlng.lng < b.getWest() - padLng || e.latlng.lng > b.getEast() + padLng) continue;
+      const pts = entry.lls;
+      let prev = map.latLngToContainerPoint(pts[0]);
+      for (let i = 1; i < pts.length; i++) {
+        const cur = map.latLngToContainerPoint(pts[i]);
+        const d2 = distToSegmentSq(click, prev, cur);
+        if (d2 < bestD2) { bestD2 = d2; best = entry.drive; }
+        prev = cur;
+      }
+    }
+    if (best) selectDrive(best);
+  });
+
   document.getElementById('btn-back-overview').addEventListener('click', (e) => {
     e.stopPropagation();
     deselectDrive();
@@ -223,6 +255,18 @@ function initMap() {
 function getWeight(base) {
   const zoom = map.getZoom();
   return Math.max(2, base * (zoom / 10));
+}
+
+// Squared distance (px²) from point p to segment a–b, all container points.
+function distToSegmentSq(p, a, b) {
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const len2 = abx * abx + aby * aby;
+  let t = len2 > 0 ? ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const dx = p.x - (a.x + t * abx);
+  const dy = p.y - (a.y + t * aby);
+  return dx * dx + dy * dy;
 }
 
 function updateLineWeights() {
@@ -2302,19 +2346,24 @@ async function populateUpdateModalChanges(version) {
 
 function renderDriveStats(drives, meta) {
   lastDrivesMeta = meta;
-  // Top-line counters (drives / miles / duration) include Tessie — those are
-  // ground truth from Tessie regardless of dashcam coverage.
+  // Top-line counters (drives / miles / duration) include imported drives —
+  // those are ground truth from the service regardless of dashcam coverage.
   // FSD analytics (FSD%, AP%, TACC%, disengagements, accel overrides) use
-  // SEI-only data because Tessie's per-point autopilot inference is fuzzier
-  // than the dashcam's SEI telemetry — mixing them would dilute the score.
-  const seiDrives = drives.filter((d) => d.source !== 'tessie');
+  // SEI-only data because imported services' per-point autopilot data is
+  // fuzzier than the dashcam's SEI telemetry (Teslascope's is often absent
+  // entirely) — mixing them would dilute the score.
+  const seiDrives = drives.filter((d) => !isImportedSource(d.source));
   const tessieCount = drives.length - seiDrives.length;
 
   const totalMi = drives.reduce((s, d) => s + d.distanceMi, 0);
   const totalMs = drives.reduce((s, d) => s + d.durationMs, 0);
-  const totalHrs = Math.floor(totalMs / 3_600_000);
+  // D H M — lifetime totals routinely exceed 24h, so days carry the size.
+  const totalDays = Math.floor(totalMs / 86_400_000);
+  const totalHrs = Math.floor((totalMs % 86_400_000) / 3_600_000);
   const totalMin = Math.floor((totalMs % 3_600_000) / 60_000);
-  const durStr = totalHrs > 0 ? `${totalHrs}H ${totalMin}M` : `${totalMin}M`;
+  const durStr = totalDays > 0
+    ? `${totalDays}D ${totalHrs}H ${totalMin}M`
+    : (totalHrs > 0 ? `${totalHrs}H ${totalMin}M` : `${totalMin}M`);
 
   // FSD analytics denominator: SEI-only distance.
   const seiDistM = seiDrives.reduce((s, d) => s + (d.distanceKm ?? d.distanceMi * MI_TO_KM) * 1000, 0);
@@ -2341,7 +2390,7 @@ function renderDriveStats(drives, meta) {
   let summary = `
     <div class="map-stat"><span class="map-stat-val">${fmt(drives.length)}</span><span class="map-stat-lbl">Drives</span></div>
     <div class="map-stat"><span class="map-stat-val">${fmt(distVal(totalMi, 0))}</span><span class="map-stat-lbl">${distLong()} Driven</span></div>
-    <div class="map-stat"><span class="map-stat-val">${durStr}</span><span class="map-stat-lbl">Driven</span></div>
+    <div class="map-stat"><span class="map-stat-val">${durStr}</span><span class="map-stat-lbl">Time Driving</span></div>
     <div class="map-stat"><span class="map-stat-val" style="color:${fsdScoreColor(fsdPct)}">${fsdPct}%</span><span class="map-stat-lbl">FSD Score</span></div>
   `;
   if (apPct > 0) summary += `<div class="map-stat"><span class="map-stat-val">${apPct}%</span><span class="map-stat-lbl">Autopilot</span></div>`;
@@ -2414,7 +2463,7 @@ function renderDriveStats(drives, meta) {
   }
 
   if (tessieCount > 0) {
-    details += `<div class="map-stats-tessie-note">${fmt(tessieCount)} of these are Tessie-imported drive${tessieCount === 1 ? '' : 's'} (counted in totals; FSD analytics are dashcam-only)</div>`;
+    details += `<div class="map-stats-tessie-note">${fmt(tessieCount)} of these are imported drive${tessieCount === 1 ? '' : 's'} (counted in totals; FSD analytics are dashcam-only)</div>`;
   }
 
   const panel = document.getElementById('map-stats');
@@ -2838,6 +2887,9 @@ function clearLayers(arr) {
 // corner-cutting rounds the DISPLAYED polyline only. Endpoints are preserved
 // exactly, and drive.points / distance math / the replay never see this —
 // rendering and stats are deliberately separate.
+// Iterations: the selected drive uses the default 2 (one line on screen —
+// full smoothness is free); the overview passes 1, since thousands of lines
+// at 4x points each is what made panning sluggish.
 function smoothLatLngsForDisplay(latLngs, iterations = 2) {
   if (!Array.isArray(latLngs) || latLngs.length < 3) return latLngs;
   let pts = latLngs;
@@ -2861,6 +2913,7 @@ function renderOverviewOnMap() {
   clearLayers(overviewLayers);
   clearLayers(selectedLayers);
   clearLayers(fsdEventLayers);
+  overviewClickIndex = [];
   selectedDriveId = null;
   document.getElementById('map-legend').classList.add('hidden');
 
@@ -2877,14 +2930,22 @@ function renderOverviewOnMap() {
 
     // Imported drives are sparse cloud breadcrumbs (15-60 s apart) — smooth
     // the displayed line so poll intervals don't render as hard corners.
-    const lls = isTessie ? smoothLatLngsForDisplay(drive.overviewPoints) : drive.overviewPoints;
+    // 1 iteration here: the overview draws every drive at once, so point
+    // count is the panning bottleneck (the selected drive gets 2).
+    const lls = isTessie ? smoothLatLngsForDisplay(drive.overviewPoints, 1) : drive.overviewPoints;
     allLatLngs.push(...lls);
 
     const styleOpts = {
       color: isTessie ? '#a855f7' : '#3b82f6',
       weight: getWeight(2.5),
       opacity: isTessie ? 0.6 : 0.5,
-      smoothFactor: 0.5,
+      // Higher simplification for the overview: thousands of lines draw at
+      // once, and at these zooms the detail is invisible anyway.
+      smoothFactor: 1.5,
+      // Non-interactive: with per-line interactivity, Leaflet hit-tests every
+      // line on EVERY mousemove (the big pan/hover lag with large histories).
+      // Clicks are handled by the single map-level nearest-line handler below.
+      interactive: false,
     };
     if (isTessie) styleOpts.dashArray = '6 4';
 
@@ -2892,9 +2953,8 @@ function renderOverviewOnMap() {
     line._baseWeight = 2.5;
     line._driveId = drive.id;
     line._source = drive.source ?? 'sei';
-
-    line.on('click', (e) => { L.DomEvent.stopPropagation(e); selectDrive(drive); });
     overviewLayers.push(line);
+    overviewClickIndex.push({ drive, lls, bounds: line.getBounds() });
   }
 
   // Toggle the Tessie legend entry based on whether any imported drives exist.
@@ -2961,6 +3021,7 @@ function drawSelectedDrive(drive) {
           color: engaged ? '#22cc55' : (isTessie ? '#a855f7' : '#2266cc'),
           weight: getWeight(baseW),
           opacity: 0.95,
+          interactive: false, // no handlers; skip mousemove hit-testing
         };
         if (isTessie) styleOpts.dashArray = '8 5';
         const line = L.polyline(isTessie ? smoothLatLngsForDisplay(seg) : seg, styleOpts).addTo(map);
@@ -2976,6 +3037,7 @@ function drawSelectedDrive(drive) {
       weight: getWeight(5),
       opacity: 0.95,
       dashArray: '8 5',
+      interactive: false,
     }).addTo(map);
     line._baseWeight = 5;
     selectedLayers.push(line);
@@ -2984,6 +3046,7 @@ function drawSelectedDrive(drive) {
       color: '#2266cc',
       weight: getWeight(4),
       opacity: 0.9,
+      interactive: false,
     }).addTo(map);
     line._baseWeight = 4;
     selectedLayers.push(line);

@@ -1,6 +1,29 @@
 {
   "versions": [
     {
+      "version": "1.2.2",
+      "date": "2026-06-11",
+      "title": "Teslascope Import, Linux Support & Major Accuracy Upgrades",
+      "changes": [
+        { "type": "fix", "description": "Fixed drives failing to load in 1.2.0 (\"Identifier 'isEventFolderPath' has already been declared\")." },
+        { "type": "feature", "description": "Teslascope import works end-to-end — connect with the API key from Account → Security, and your full drive history imports with route lines, verified against live data." },
+        { "type": "feature", "description": "Linux support — releases now include an AppImage (with the same auto-update as Windows) and a .deb package." },
+        { "type": "feature", "description": "Redesigned map layers — Light and Dark are now both Google Maps, decluttered to show only city and neighborhood labels alongside your drive lines. Dark uses Google's full night palette with parks, buildings, transit, and light-grey highways; Satellite gains the same labels; a Settings toggle hides labels entirely; Light is the new default." },
+        { "type": "feature", "description": "New Support tab in Settings — save app logs as a text file to attach to bug reports. Logs survive crashes and include the previous session." },
+        { "type": "improvement", "description": "Drive data loads dramatically faster — large files that took a minute now open in seconds." },
+        { "type": "improvement", "description": "Drive locations are more accurate — your car's own reported address is used when available, and the GPS-based lookup is much more precise for everything else. Addresses may quietly update once after installing." },
+        { "type": "improvement", "description": "Drive durations are now frame-accurate — a drive that stops partway through its final minute no longer counts the whole minute, matching Sentry USB's totals (expect your lifetime duration to drop slightly)." },
+        { "type": "fix", "description": "The replay arrow now reliably faces the direction of travel — no more random swings while stopped — and scrubbing the timeline always points it the way the car was facing at that moment." },
+        { "type": "improvement", "description": "The selected drive now draws on top of the other drive lines on the map." },
+        { "type": "improvement", "description": "Tessie and Teslascope drive lines render smoothly instead of angular (display only — stats still use the raw recorded points), and the FSD Score now counts only dashcam-recorded drives so imported drives can't dilute it." },
+        { "type": "improvement", "description": "The Import Drives dialog is much more responsive — vehicles appear instantly when switching services, date fields open a calendar picker, and the preview explains exactly why any drives were skipped." },
+        { "type": "improvement", "description": "\"Check for Update\" clearly shows what it's doing, and the corner download button pulses yellow when an update is waiting." },
+        { "type": "improvement", "description": "Processing large clip libraries is faster, an interrupted run can no longer corrupt your drive data, and saving tags or importing no longer fails on very large files." },
+        { "type": "improvement", "description": "The app works fully offline (except live map tiles) — the map framework, fonts, and icons now ship with the app. Typography is unified on Noto Sans." },
+        { "type": "improvement", "description": "Scrolling and map panning stay smooth with histories of thousands of drives." }
+      ]
+    },
+    {
       "version": "1.2.2-beta.5",
       "date": "2026-06-10",
       "title": "Import Polish, Offline Mode & Accurate Durations",
@@ -10,7 +33,8 @@
         { "type": "improvement", "description": "The app now works fully offline (except live map tiles) — the map framework, fonts, and icons ship with the app instead of loading from the internet at launch. Faster startup, no more blank map without a connection, and fewer third-party requests." },
         { "type": "improvement", "description": "Unified typography — the interface now uses Noto Sans throughout, with Noto Sans Mono for numbers and stats." },
         { "type": "fix", "description": "Dark map polish — highways are now light grey and stay visible at every zoom (they previously lost their color when zoomed in), and map labels are white for better readability." },
-        { "type": "improvement", "description": "Tessie and Teslascope drive lines render smoothly instead of angular — their sparse GPS breadcrumbs are visually rounded on the map (display only; distances and stats still use the raw recorded points)." }
+        { "type": "improvement", "description": "Tessie and Teslascope drive lines render smoothly instead of angular — their sparse GPS breadcrumbs are visually rounded on the map (display only; distances and stats still use the raw recorded points)." },
+        { "type": "fix", "description": "The FSD Score now ignores Teslascope-imported drives, like it already did for Tessie — imported drives carry coarse or missing autopilot data and were diluting the score. Mileage and duration totals still include them." }
       ]
     },
     {

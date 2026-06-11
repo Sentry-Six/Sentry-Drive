@@ -418,7 +418,9 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
         gearStates: d.gearStates,
         fsdEvents: d.fsdEvents,
       });
-      d.overviewPoints = downsampleForIPC(d.points, 200);
+      // 120 pts is visually identical at overview zooms and cuts both the IPC
+      // payload and the canvas point count ~40% vs the old 200.
+      d.overviewPoints = downsampleForIPC(d.points, 120);
       delete d.points;
       delete d.fsdStates;
       delete d.gearStates;
