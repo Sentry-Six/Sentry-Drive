@@ -3,9 +3,10 @@
 const fmt = (n) => Number(n).toLocaleString('en-US');
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let map = null;
-let overviewLayers = [];       // faint lines for all drives
-let selectedLayers = [];       // highlighted route for selected drive
+let map = null;                // maplibregl.Map
+let mapReady = false;          // style 'load' fired — sources/layers exist
+let pendingMapTasks = [];      // deferred until style load (source data, filters)
+let selectedMarkers = [];      // DOM markers for the selected drive (start/end/replay)
 let drives = [];
 let overviewRoutes = [];   // raw route points for overview map (one per clip)
 let loadedFilePath = null;
@@ -17,10 +18,9 @@ let allTags = [];          // deduplicated, sorted list of all tag names
 let activeTagFilter = '';  // currently active tag filter (empty = show all)
 let hideOtherDrives = false;
 let showFsdMarkers = true;
-let fsdEventLayers = [];
+let fsdEventMarkers = [];  // DOM markers for FSD events (toggleable in Settings)
 let showMapLabels = true;               // city/neighborhood labels on base maps
-let applyMapLabelsSetting = () => {};   // bound to the real layers at map init
-let overviewClickIndex = [];            // [{drive, lls, bounds}] for delegated click-to-select
+let applyMapLabelsSetting = () => {};   // bound to the real basemap at map init
 
 // Replay state
 let replayMarker = null;
@@ -111,24 +111,28 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ─── Map ──────────────────────────────────────────────────────────────────────
-function initMap() {
-  map = L.map('map', {
-    center: [50.0, 10.0], // central Europe until drive data loads
-    zoom: 4,
-    preferCanvas: true,
-    zoomControl: true,
-    // Shared canvas renderer with a wider hit area: the 2-3px overview
-    // lines are tedious to click dead-on, so accept clicks within 8px.
-    renderer: L.canvas({ tolerance: 8 }),
-  });
+// MapLibre GL JS (vendored under assets/vendor/maplibre). The basemap is a
+// raster source fed by Google's tile endpoint restyled via the legacy
+// apistyle parameter — the exact same tile URLs the old Leaflet stack used.
+// All drive routes render as GeoJSON line layers on the GPU: the per-layer
+// CPU overhead that made thousands of overview lines lag under Leaflet
+// (and then under a hand-rolled canvas overlay) is gone entirely.
+const EMPTY_FC = { type: 'FeatureCollection', features: [] };
 
-  // NOTE: all vector layers must share the ONE default canvas renderer
-  // (preferCanvas above). A dedicated pane would give the selected drive its
-  // own full-viewport <canvas> stacked over the overview lines' canvas, and
-  // Leaflet canvases only deliver events to their own layers — the empty top
-  // canvas swallowed every click meant for the lines underneath. Stacking is
-  // handled by paint order instead (selected layers draw after the overview;
-  // re-added overview lines call bringToBack()).
+// Zoom-scaled line widths, replicating the old Leaflet behavior of
+// max(2, base * zoom / 10) as piecewise-linear interpolation stops.
+const OVERVIEW_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 0, 2, 8, 2, 10, 2.5, 20, 5];
+const SELECTED_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'],
+  0, 2, 4, 2, 10, ['max', 2, ['get', 'w']], 20, ['max', 2, ['*', ['get', 'w'], 2]]];
+
+// Sources/layers only exist after the style's 'load' event; anything that
+// touches them (route data, filters, tile swaps) queues until then.
+function whenMapReady(fn) {
+  if (mapReady) fn();
+  else pendingMapTasks.push(fn);
+}
+
+function initMap() {
   // All base maps come from Google's tile endpoint, restyled via the legacy
   // apistyle parameter. Both Light and Dark strip every label except the
   // administrative ones (cities, neighborhoods): all labels off, then
@@ -159,20 +163,6 @@ function initMap() {
     // overlay (s.t:3) hidden.
     'Satellite': `https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&apistyle=${gmapsLabelRules()},s.t%3A3%7Cp.v%3Aoff`,
   });
-  const initialUrls = gmapsUrls();
-  // Key order = display order in the layer control: Light, Dark, Satellite.
-  const baseLayers = {
-    'Light': L.tileLayer(initialUrls['Light'], { attribution: '&copy; Google', maxZoom: 20 }),
-    'Dark': L.tileLayer(initialUrls['Dark'], { attribution: '&copy; Google', maxZoom: 20 }),
-    'Satellite': L.tileLayer(initialUrls['Satellite'], { attribution: '&copy; Google', maxZoom: 20 }),
-  };
-  // Re-point all layers at label-on/off URLs when the setting changes; the
-  // active layer redraws immediately, the others pick it up when selected.
-  applyMapLabelsSetting = () => {
-    const urls = gmapsUrls();
-    for (const [name, layer] of Object.entries(baseLayers)) layer.setUrl(urls[name]);
-  };
-
   // Migrate layer choices saved under the old names.
   const LAYER_RENAMES = { 'Google Maps': 'Light', 'Google Dark': 'Dark' };
   let savedLayer = localStorage.getItem('mapLayer');
@@ -180,27 +170,121 @@ function initMap() {
     savedLayer = LAYER_RENAMES[savedLayer];
     localStorage.setItem('mapLayer', savedLayer);
   }
-  const initialLayer = baseLayers[savedLayer] ? savedLayer : 'Light';
-  baseLayers[initialLayer].addTo(map);
+  // Display order in the layer control: Light, Dark, Satellite.
+  const LAYER_NAMES = ['Light', 'Dark', 'Satellite'];
+  let currentBaseLayer = LAYER_NAMES.includes(savedLayer) ? savedLayer : 'Light';
 
-  L.control.layers(baseLayers, null, { position: 'topright' }).addTo(map);
-  map.on('baselayerchange', (e) => localStorage.setItem('mapLayer', e.name));
+  map = new maplibregl.Map({
+    container: 'map',
+    center: [10.0, 50.0], // central Europe until drive data loads ([lng, lat])
+    zoom: 4,
+    maxZoom: 20,
+    attributionControl: { compact: false },
+    // The old map was flat — keep it that way (no right-drag rotate/pitch).
+    dragRotate: false,
+    pitchWithRotate: false,
+    touchPitch: false,
+    style: {
+      version: 8,
+      sources: {
+        basemap: {
+          type: 'raster',
+          tiles: [gmapsUrls()[currentBaseLayer]],
+          tileSize: 256,
+          maxzoom: 20,
+          attribution: '&copy; Google',
+        },
+      },
+      layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
+    },
+  });
+  map.touchZoomRotate.disableRotation();
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
 
-  // Let the replay controls / stats overlay receive clicks without Leaflet
-  // seeing them as map clicks (which would deselect the current drive).
-  const bottomOverlay = document.getElementById('map-overlay-bottom');
-  if (bottomOverlay) {
-    L.DomEvent.disableClickPropagation(bottomOverlay);
-    L.DomEvent.disableScrollPropagation(bottomOverlay);
+  // Swap the basemap tiles in place (layer switch / labels toggle).
+  const setBasemapTiles = (url) => whenMapReady(() => {
+    const src = map.getSource('basemap');
+    if (src && typeof src.setTiles === 'function') {
+      src.setTiles([url]);
+      return;
+    }
+    // Fallback for older MapLibre builds: rebuild the raster source
+    // underneath the route layers.
+    if (map.getLayer('basemap')) map.removeLayer('basemap');
+    if (src) map.removeSource('basemap');
+    map.addSource('basemap', { type: 'raster', tiles: [url], tileSize: 256, maxzoom: 20, attribution: '&copy; Google' });
+    map.addLayer({ id: 'basemap', type: 'raster', source: 'basemap' }, 'overview-dim');
+  });
+
+  // Re-point the basemap at label-on/off URLs when the setting changes.
+  applyMapLabelsSetting = () => setBasemapTiles(gmapsUrls()[currentBaseLayer]);
+
+  // Base-layer switcher: custom control replacing L.control.layers with the
+  // same look (radio list, top right). Styled in styles.css.
+  const layersCtrl = document.createElement('div');
+  layersCtrl.id = 'map-layers-control';
+  for (const name of LAYER_NAMES) {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'map-base-layer';
+    input.value = name;
+    input.checked = name === currentBaseLayer;
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      currentBaseLayer = name;
+      localStorage.setItem('mapLayer', name);
+      setBasemapTiles(gmapsUrls()[name]);
+    });
+    const span = document.createElement('span');
+    span.textContent = name;
+    label.append(input, span);
+    layersCtrl.appendChild(label);
   }
-  // Belt-and-suspenders: also stop propagation at the replay bar itself so
-  // that clicks on its inner controls are never intercepted by anything
-  // listening on the shared overlay wrapper.
-  const replayBar = document.getElementById('replay-bar');
-  if (replayBar) {
-    L.DomEvent.disableClickPropagation(replayBar);
-    L.DomEvent.disableScrollPropagation(replayBar);
-  }
+  document.getElementById('map').appendChild(layersCtrl);
+
+  // Route sources/layers go in once the style is ready; route data flows
+  // through whenMapReady so a drive file that loads faster than the style
+  // isn't lost.
+  map.on('load', () => {
+    map.addSource('overview', { type: 'geojson', data: EMPTY_FC });
+    map.addSource('selected-route', { type: 'geojson', data: EMPTY_FC });
+    // Dim-grey context lines under a selected drive (hidden in overview mode).
+    map.addLayer({
+      id: 'overview-dim', type: 'line', source: 'overview',
+      layout: { 'line-join': 'round', 'line-cap': 'round', visibility: 'none' },
+      paint: { 'line-color': '#555566', 'line-opacity': 1, 'line-width': OVERVIEW_LINE_WIDTH },
+    });
+    map.addLayer({
+      id: 'overview-native', type: 'line', source: 'overview',
+      filter: ['!=', ['get', 'imported'], true],
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#3b82f6', 'line-opacity': 0.5, 'line-width': OVERVIEW_LINE_WIDTH },
+    });
+    // Imported drives: purple dashed (dasharray is in line-width units).
+    map.addLayer({
+      id: 'overview-imported', type: 'line', source: 'overview',
+      filter: ['==', ['get', 'imported'], true],
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#a855f7', 'line-opacity': 0.6, 'line-width': OVERVIEW_LINE_WIDTH, 'line-dasharray': [2.4, 1.6] },
+    });
+    // Selected drive on top: per-segment colors via feature properties;
+    // dashes can't be data-driven, hence the solid/dashed layer pair.
+    map.addLayer({
+      id: 'selected-solid', type: 'line', source: 'selected-route',
+      filter: ['!=', ['get', 'dashed'], true],
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': ['get', 'color'], 'line-opacity': 0.95, 'line-width': SELECTED_LINE_WIDTH },
+    });
+    map.addLayer({
+      id: 'selected-dashed', type: 'line', source: 'selected-route',
+      filter: ['==', ['get', 'dashed'], true],
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': ['get', 'color'], 'line-opacity': 0.95, 'line-width': SELECTED_LINE_WIDTH, 'line-dasharray': [1.6, 1] },
+    });
+    mapReady = true;
+    for (const fn of pendingMapTasks.splice(0)) fn();
+  });
 
   const mapStatsEl = document.getElementById('map-stats');
   if (mapStatsEl) {
@@ -211,70 +295,37 @@ function initMap() {
     });
   }
 
-  window.addEventListener('resize', () => map.invalidateSize());
+  window.addEventListener('resize', () => map.resize());
 
-  map.on('zoomend', updateLineWeights);
-
-  // Single delegated click handler for drive selection. The overview lines
-  // are non-interactive (see renderOverviewOnMap), so Leaflet does zero
-  // per-mousemove hit-testing across thousands of layers — on click we run
-  // one bbox-prefiltered nearest-segment search instead.
+  // Drive selection: GPU hit-test the route layers within a 10px box around
+  // the click (replaces the old delegated nearest-segment search). Hidden
+  // layers return no features, so "Hide other drives" needs no special case;
+  // features come back topmost-first, so the selected drive's own line wins
+  // over dimmed context lines (clicking it toggles the selection off, same
+  // as clicking the drive in the list).
   map.on('click', (e) => {
-    if (overviewClickIndex.length === 0) return;
-    if (selectedDriveId != null && hideOtherDrives) return; // lines are hidden
+    if (!mapReady) return;
     const TOL_PX = 10;
-    const o = map.containerPointToLatLng(L.point(0, 0));
-    const t = map.containerPointToLatLng(L.point(TOL_PX, TOL_PX));
-    const padLat = Math.abs(o.lat - t.lat);
-    const padLng = Math.abs(o.lng - t.lng);
-    const click = map.latLngToContainerPoint(e.latlng);
-    let best = null;
-    let bestD2 = TOL_PX * TOL_PX;
-    for (const entry of overviewClickIndex) {
-      const b = entry.bounds;
-      if (e.latlng.lat < b.getSouth() - padLat || e.latlng.lat > b.getNorth() + padLat ||
-          e.latlng.lng < b.getWest() - padLng || e.latlng.lng > b.getEast() + padLng) continue;
-      const pts = entry.lls;
-      let prev = map.latLngToContainerPoint(pts[0]);
-      for (let i = 1; i < pts.length; i++) {
-        const cur = map.latLngToContainerPoint(pts[i]);
-        const d2 = distToSegmentSq(click, prev, cur);
-        if (d2 < bestD2) { bestD2 = d2; best = entry.drive; }
-        prev = cur;
+    const box = [
+      [e.point.x - TOL_PX, e.point.y - TOL_PX],
+      [e.point.x + TOL_PX, e.point.y + TOL_PX],
+    ];
+    const feats = map.queryRenderedFeatures(box, {
+      layers: ['selected-solid', 'selected-dashed', 'overview-native', 'overview-imported', 'overview-dim'],
+    });
+    for (const f of feats) {
+      const drive = drives.find((d) => d.id === f.properties.driveId);
+      if (drive) {
+        selectDrive(drive);
+        return;
       }
     }
-    if (best) selectDrive(best);
   });
 
   document.getElementById('btn-back-overview').addEventListener('click', (e) => {
     e.stopPropagation();
     deselectDrive();
   });
-}
-
-function getWeight(base) {
-  const zoom = map.getZoom();
-  return Math.max(2, base * (zoom / 10));
-}
-
-// Squared distance (px²) from point p to segment a–b, all container points.
-function distToSegmentSq(p, a, b) {
-  const abx = b.x - a.x;
-  const aby = b.y - a.y;
-  const len2 = abx * abx + aby * aby;
-  let t = len2 > 0 ? ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2 : 0;
-  t = Math.max(0, Math.min(1, t));
-  const dx = p.x - (a.x + t * abx);
-  const dy = p.y - (a.y + t * aby);
-  return dx * dx + dy * dy;
-}
-
-function updateLineWeights() {
-  for (const layer of [...overviewLayers, ...selectedLayers]) {
-    if (layer._baseWeight && layer.setStyle) {
-      layer.setStyle({ weight: getWeight(layer._baseWeight) });
-    }
-  }
 }
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
@@ -286,7 +337,7 @@ function initTabs() {
       document.querySelectorAll('.tab-pane').forEach((p) => p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById(`tab-${tab}`).classList.add('active');
-      setTimeout(() => map.invalidateSize(), 50);
+      setTimeout(() => map.resize(), 50);
     });
   });
 }
@@ -1142,7 +1193,7 @@ async function autoLoadDriveData(filePath) {
     document.querySelectorAll('.tab-pane').forEach((p) => p.classList.remove('active'));
     document.querySelector('[data-tab="drives"]').classList.add('active');
     document.getElementById('tab-drives').classList.add('active');
-    setTimeout(() => map.invalidateSize(), 50);
+    setTimeout(() => map.resize(), 50);
   } catch {
     // File may no longer exist — clear saved path
     localStorage.removeItem('lastDriveDataPath');
@@ -1447,8 +1498,8 @@ function initTessieImport() {
   if (serviceSelect) {
     serviceSelect.addEventListener('change', async () => {
       selectedService = serviceSelect.value || 'tessie';
-      lastPreviewToImport = null;
       applyServiceUI();
+      refreshConfirmReady();
       try {
         const r = await svc().getToken(); // local IPC — fast
         tokenInput.value = (r && r.token) || '';
@@ -1463,7 +1514,6 @@ function initTessieImport() {
     tessieStatesPath = '';
     drivesInput.value = '';
     statesInput.value = '';
-    lastPreviewToImport = null;
     previewEl.classList.add('hidden');
     previewEl.innerHTML = '';
     progressEl.classList.add('hidden');
@@ -1475,9 +1525,8 @@ function initTessieImport() {
   // Mode toggle
   document.querySelectorAll('.tessie-mode-btn').forEach((b) => {
     b.addEventListener('click', () => {
-      // Re-clicking the active tab must be a no-op — it used to re-run
-      // refreshConfirmReady and force-enable Import past a "0 to import"
-      // preview (CSS also disables pointer events on the active tab).
+      // Re-clicking the active tab is a no-op (CSS also disables pointer
+      // events on the active tab).
       if (b.dataset.mode === tessieImportMode) return;
       tessieImportMode = b.dataset.mode;
       document.querySelectorAll('.tessie-mode-btn').forEach((x) => x.classList.toggle('active', x === b));
@@ -1485,8 +1534,6 @@ function initTessieImport() {
       document.getElementById('tessie-mode-csv').classList.toggle('hidden', tessieImportMode !== 'csv');
       previewEl.classList.add('hidden');
       previewEl.innerHTML = '';
-      lastPreviewToImport = null;
-      confirmBtn.disabled = true;
       refreshConfirmReady();
     });
   });
@@ -1543,26 +1590,23 @@ function initTessieImport() {
     if (!p) return;
     tessieDrivesPath = p;
     drivesInput.value = p;
-    await maybePreview();
+    refreshConfirmReady();
   });
   document.getElementById('browse-tessie-states').addEventListener('click', async () => {
     const p = await window.electronAPI.selectFile({ filters: [{ name: 'CSV', extensions: ['csv'] }] });
     if (!p) return;
     tessieStatesPath = p;
     statesInput.value = p;
-    await maybePreview();
+    refreshConfirmReady();
   });
 
   // Validate API token (load vehicles + save token)
   document.getElementById('tessie-api-validate').addEventListener('click', () => validateApiToken(false));
   tokenInput.addEventListener('change', () => validateApiToken(false));
-  // Debounced: rapid date clicks / vehicle flips coalesce into one API preview.
-  let previewDebounce = null;
-  const schedulePreview = () => {
-    clearTimeout(previewDebounce);
-    previewDebounce = setTimeout(() => maybePreview(), 350);
-  };
-  [fromInput, toInput, vinSelect].forEach((el) => el.addEventListener('change', schedulePreview));
+  // No background querying: changing dates or the vehicle only re-evaluates
+  // whether Import can be clicked — the service API is contacted when the
+  // user clicks Import, not before.
+  [fromInput, toInput, vinSelect].forEach((el) => el.addEventListener('change', refreshConfirmReady));
 
   // Clicking a date field opens the native calendar picker (typing still
   // works — keyboard edits update the segments as before).
@@ -1605,12 +1649,17 @@ function initTessieImport() {
       // Instant path — then quietly refresh the cache.
       fill(cached);
       refreshConfirmReady();
-      maybePreview();
       svc().validate(token).then((result) => {
         if (seq !== validateSeq || selectedService !== service) return;
         if (result.success && result.vehicles && result.vehicles.length) {
+          // Refill only when the list actually changed — rebuilding the
+          // options closes the dropdown if the user has it open right then.
+          const changed = JSON.stringify(result.vehicles) !== JSON.stringify(vehicleCache[service]);
           vehicleCache[service] = result.vehicles;
-          fill(result.vehicles);
+          if (changed) {
+            fill(result.vehicles);
+            refreshConfirmReady();
+          }
         }
       }).catch(() => {});
       return;
@@ -1618,6 +1667,7 @@ function initTessieImport() {
 
     vinSelect.disabled = true;
     vinSelect.innerHTML = '<option>Loading vehicles…</option>';
+    refreshConfirmReady();
     const result = await svc().validate(token);
     if (seq !== validateSeq || selectedService !== service) return; // superseded
     if (!result.success) {
@@ -1631,69 +1681,45 @@ function initTessieImport() {
     }
     vehicleCache[service] = result.vehicles;
     fill(result.vehicles);
-    await maybePreview();
+    refreshConfirmReady();
   }
 
-  // Import is allowed ONLY after a preview confirmed there is something to
-  // import (null = no valid preview yet). Every input change invalidates it.
-  let lastPreviewToImport = null;
-
+  // Import enables as soon as the inputs are valid. The query that used to
+  // gate it runs on the Import click itself — a "nothing to import" result
+  // aborts the import with the explanation on screen.
   function refreshConfirmReady() {
-    const previewReady = lastPreviewToImport != null && lastPreviewToImport > 0;
     if (tessieImportMode === 'api') {
-      confirmBtn.disabled = !(previewReady && tokenInput.value.trim() && vinSelect.value && !vinSelect.disabled);
+      confirmBtn.disabled = !(tokenInput.value.trim() && vinSelect.value && !vinSelect.disabled);
     } else {
-      confirmBtn.disabled = !(previewReady && tessieDrivesPath && tessieStatesPath);
+      confirmBtn.disabled = !(tessieDrivesPath && tessieStatesPath);
     }
   }
 
-  // Stale-response guard: each call claims a sequence number; by the time a
-  // network preview answers, a newer change may have started another preview
-  // (or switched service) — the old result is dropped instead of rendered.
+  // Stale-response guard: each query claims a sequence number; a newer click
+  // supersedes any still-in-flight result.
   let previewSeq = 0;
 
-  async function maybePreview() {
-    if (!loadedFilePath) return;
-    lastPreviewToImport = null; // inputs changed — previous preview is void
-    refreshConfirmReady();
+  // Runs the drives query and renders the result lines. Called ONLY from the
+  // Import click — the modal never contacts the service API in the background
+  // (vehicles load once on open; everything else waits for the user).
+  async function runImportQuery(args) {
     const seq = ++previewSeq;
-
+    previewEl.classList.remove('hidden');
+    let result;
     if (tessieImportMode === 'api') {
-      if (!tokenInput.value.trim() || !vinSelect.value || vinSelect.disabled) return;
-      const fromSec = Math.floor(new Date(fromInput.value + 'T00:00:00').getTime() / 1000);
-      const toSec = Math.floor(new Date(toInput.value + 'T23:59:59').getTime() / 1000);
-      previewEl.classList.remove('hidden');
       previewEl.innerHTML = `<em>Querying ${escapeHtml(svc().label)} API…</em>`;
-      confirmBtn.disabled = true;
-      const result = await svc().preview({
-        token: tokenInput.value.trim(),
-        [svc().idField]: vinSelect.value,
-        fromSec, toSec,
-        driveDataPath: loadedFilePath,
-      });
-      if (seq !== previewSeq) return; // superseded by a newer change
-      if (!result.success) {
-        previewEl.innerHTML = `<span style="color:#f87171">Preview failed: ${escapeHtml(result.error)}</span>`;
-        return;
-      }
-      renderPreview(result);
+      result = await svc().preview(args);
     } else {
-      if (!tessieDrivesPath || !tessieStatesPath) return;
-      previewEl.classList.remove('hidden');
       previewEl.innerHTML = '<em>Scanning CSVs…</em>';
-      confirmBtn.disabled = true;
-      const result = await svc().csvPreview({
-        driveDataPath: loadedFilePath,
-        drivesCsvPath: tessieDrivesPath,
-        statesCsvPath: tessieStatesPath,
-      });
-      if (seq !== previewSeq) return; // superseded by a newer change
-      if (!result.success) {
-        previewEl.innerHTML = `<span style="color:#f87171">Preview failed: ${escapeHtml(result.error)}</span>`;
-        return;
-      }
-      renderPreview(result);
+      result = await svc().csvPreview(args);
     }
+    if (seq !== previewSeq) return null; // superseded by a newer click
+    if (!result.success) {
+      previewEl.innerHTML = `<span style="color:#f87171">Query failed: ${escapeHtml(result.error)}</span>`;
+      return null;
+    }
+    renderPreview(result);
+    return result;
   }
 
   function renderPreview(result) {
@@ -1707,16 +1733,51 @@ function initTessieImport() {
       parts.push('<em>Nothing new to import — every drive in this range is already covered above.</em>');
     }
     previewEl.innerHTML = parts.join('<br>');
-    lastPreviewToImport = result.toImport;
-    refreshConfirmReady();
   }
 
   confirmBtn.addEventListener('click', async () => {
     if (!loadedFilePath) return;
 
+    // Snapshot the inputs once so the query and the import describe the same
+    // request even if fields change while the query runs.
+    const modeAtClick = tessieImportMode;
+    const serviceAtClick = selectedService;
+    let args;
+    if (modeAtClick === 'api') {
+      if (!tokenInput.value.trim() || !vinSelect.value || vinSelect.disabled) return;
+      const fromSec = Math.floor(new Date(fromInput.value + 'T00:00:00').getTime() / 1000);
+      const toSec = Math.floor(new Date(toInput.value + 'T23:59:59').getTime() / 1000);
+      args = {
+        token: tokenInput.value.trim(),
+        [svc().idField]: vinSelect.value,
+        fromSec, toSec,
+        driveDataPath: loadedFilePath,
+      };
+    } else {
+      if (!tessieDrivesPath || !tessieStatesPath) return;
+      args = {
+        driveDataPath: loadedFilePath,
+        drivesCsvPath: tessieDrivesPath,
+        statesCsvPath: tessieStatesPath,
+      };
+    }
+
+    // The drives query runs now — on the click, never in the background.
+    // A failed query or "nothing to import" stops here with the explanation
+    // on screen; so does closing the modal or switching service/mode mid-check.
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Checking…';
+    const preview = await runImportQuery(args);
+    const interrupted = overlay.classList.contains('hidden') ||
+      tessieImportMode !== modeAtClick || selectedService !== serviceAtClick;
+    if (!preview || preview.toImport === 0 || interrupted) {
+      confirmBtn.textContent = 'Import';
+      refreshConfirmReady();
+      return;
+    }
+
     const beforeCount = drives.length;
 
-    confirmBtn.disabled = true;
     confirmBtn.textContent = 'Importing…';
     closeBtn.title = 'Cancel import';
     progressEl.classList.remove('hidden');
@@ -1748,21 +1809,10 @@ function initTessieImport() {
     });
 
     let result;
-    if (tessieImportMode === 'api') {
-      const fromSec = Math.floor(new Date(fromInput.value + 'T00:00:00').getTime() / 1000);
-      const toSec = Math.floor(new Date(toInput.value + 'T23:59:59').getTime() / 1000);
-      result = await svc().runImport({
-        token: tokenInput.value.trim(),
-        [svc().idField]: vinSelect.value,
-        fromSec, toSec,
-        driveDataPath: loadedFilePath,
-      });
+    if (modeAtClick === 'api') {
+      result = await svc().runImport(args);
     } else {
-      result = await svc().csvImport({
-        driveDataPath: loadedFilePath,
-        drivesCsvPath: tessieDrivesPath,
-        statesCsvPath: tessieStatesPath,
-      });
+      result = await svc().csvImport(args);
     }
 
     if (tessieProgressListener) { tessieProgressListener(); tessieProgressListener = null; }
@@ -2778,10 +2828,10 @@ async function selectDrive(drive) {
   }
   selectedDriveId = drive.id;
 
-  // Context lines: the overview canvas dims everything to grey, hides the
-  // selected drive's own line, or clears entirely per hideOtherDrives —
-  // selectedDriveId is already set, so one redraw applies the right state.
-  if (overviewRoutesCanvas) overviewRoutesCanvas.redraw();
+  // Context lines: the overview layers dim everything to grey, hide the
+  // selected drive's own line, or clear entirely per hideOtherDrives —
+  // selectedDriveId is already set, so one style pass applies the right state.
+  updateOverviewStyleState();
 
   document.getElementById('btn-back-overview').classList.remove('hidden');
   if (!drive.points) {
@@ -2803,19 +2853,15 @@ async function selectDrive(drive) {
 }
 
 function applyFsdMarkerVisibility() {
-  for (const layer of fsdEventLayers) {
-    if (showFsdMarkers) {
-      if (!map.hasLayer(layer)) layer.addTo(map);
-    } else if (map.hasLayer(layer)) {
-      map.removeLayer(layer);
-    }
+  for (const m of fsdEventMarkers) {
+    m.getElement().style.display = showFsdMarkers ? '' : 'none';
   }
 }
 
 function applyOtherDrivesVisibility() {
   if (selectedDriveId === null) return;
-  // The overview canvas derives hidden/dim state from the globals.
-  if (overviewRoutesCanvas) overviewRoutesCanvas.redraw();
+  // The overview layers derive hidden/dim state from the globals.
+  updateOverviewStyleState();
 }
 
 function deselectDrive() {
@@ -2823,8 +2869,9 @@ function deselectDrive() {
   freeDriveDetail(selectedDriveId);
   selectedDriveId = null;
   document.querySelectorAll('.drive-item').forEach((el) => el.classList.remove('selected'));
-  clearLayers(selectedLayers);
-  clearLayers(fsdEventLayers);
+  removeMarkers(selectedMarkers);
+  removeMarkers(fsdEventMarkers);
+  whenMapReady(() => map.getSource('selected-route').setData(EMPTY_FC));
   document.getElementById('map-legend').classList.add('hidden');
   document.getElementById('btn-back-overview').classList.add('hidden');
 
@@ -2832,25 +2879,63 @@ function deselectDrive() {
   if (drives.length > 0 && lastDrivesMeta) renderDriveStats(drives, lastDrivesMeta);
 
   // Restore overview lines to original style (imports keep purple/dashed) —
-  // selectedDriveId is null again, so the canvas redraw renders overview mode.
-  if (overviewRoutesCanvas) overviewRoutesCanvas.redraw();
+  // selectedDriveId is null again, so the style pass renders overview mode.
+  updateOverviewStyleState();
 
   // Fit map to all drives
-  const allLatLngs = [];
+  const bounds = new maplibregl.LngLatBounds();
+  let any = false;
   for (const drive of drives) {
     if (!drive.overviewPoints || drive.overviewPoints.length < 2) continue;
-    allLatLngs.push(drive.overviewPoints[0]);
-    allLatLngs.push(drive.overviewPoints[drive.overviewPoints.length - 1]);
+    const a = drive.overviewPoints[0];
+    const b = drive.overviewPoints[drive.overviewPoints.length - 1];
+    bounds.extend([a[1], a[0]]);
+    bounds.extend([b[1], b[0]]);
+    any = true;
   }
-  if (allLatLngs.length > 0) {
-    map.fitBounds(L.latLngBounds(allLatLngs), { padding: [30, 30] });
-  }
+  if (any) map.fitBounds(bounds, { padding: 30 });
 }
 
 // ─── Map Drawing ──────────────────────────────────────────────────────────────
-function clearLayers(arr) {
-  arr.forEach((l) => map.removeLayer(l));
+function removeMarkers(arr) {
+  arr.forEach((m) => m.remove());
   arr.length = 0;
+}
+
+// Circle DOM marker (start/end/FSD events) with a hover tooltip — replaces
+// L.circleMarker + bindTooltip. Anchored at its center like the old radius-
+// based markers.
+function makeDotMarker(latLng, { fill, radius = 7, strokeW = 2, opacity = 1, tooltip }) {
+  const el = document.createElement('div');
+  el.className = 'map-dot-marker';
+  el.style.width = `${radius * 2}px`;
+  el.style.height = `${radius * 2}px`;
+  el.style.background = fill;
+  el.style.border = `${strokeW}px solid #fff`;
+  if (opacity !== 1) el.style.opacity = String(opacity);
+  if (tooltip) attachMapTooltip(el, tooltip);
+  return new maplibregl.Marker({ element: el, anchor: 'center' })
+    .setLngLat([latLng[1], latLng[0]])
+    .addTo(map);
+}
+
+// Minimal hover tooltip for DOM markers, styled like the old Leaflet ones.
+function attachMapTooltip(el, text) {
+  let tip = null;
+  el.addEventListener('mouseenter', () => {
+    const mapEl = document.getElementById('map');
+    tip = document.createElement('div');
+    tip.className = 'map-tooltip';
+    tip.textContent = text;
+    mapEl.appendChild(tip);
+    const r = el.getBoundingClientRect();
+    const m = mapEl.getBoundingClientRect();
+    tip.style.left = `${r.left - m.left + r.width / 2}px`;
+    tip.style.top = `${r.top - m.top - 6}px`;
+  });
+  el.addEventListener('mouseleave', () => {
+    if (tip) { tip.remove(); tip = null; }
+  });
 }
 
 // Display-only smoothing for imported (non-SEI) drives. Their cloud
@@ -2880,153 +2965,74 @@ function smoothLatLngsForDisplay(latLngs, iterations = 2) {
   return pts;
 }
 
-// ─── Single-pass overview routes layer ───────────────────────────────────────
-// One custom canvas that strokes EVERY overview route in a single draw pass.
-// Per-drive L.polyline layers were the overview's bottleneck: profiling on a
-// ~5,400-drive history showed per-layer overhead (not point count) costing
-// ~1 FPS pans and a multi-second initial draw — merging into batched canvas
-// strokes removes the per-layer bookkeeping entirely. Display states mirror
-// the old per-layer styling: overview (blue solid / purple dashed imports),
-// dim-grey context under a selected drive, hidden when "Hide other drives"
-// is on. The canvas is pointer-events:none — selection goes through the
-// delegated map click handler, so no interactivity is lost.
-const OverviewRoutesLayer = L.Layer.extend({
-  onAdd(map) {
-    this._map = map;
-    const c = L.DomUtil.create('canvas', 'leaflet-zoom-animated');
-    this._canvas = c;
-    c.style.pointerEvents = 'none';
-    // First child of the overlay pane → beneath the default vector canvas
-    // that draws the selected drive, so selection renders on top.
-    const pane = map.getPane('overlayPane');
-    pane.insertBefore(c, pane.firstChild);
-    map.on('moveend zoomend viewreset resize', this._reset, this);
-    if (map.options.zoomAnimation) map.on('zoomanim', this._animateZoom, this);
-    this._reset();
-    return this;
-  },
-  onRemove(map) {
-    map.off('moveend zoomend viewreset resize', this._reset, this);
-    map.off('zoomanim', this._animateZoom, this);
-    if (this._canvas) L.DomUtil.remove(this._canvas);
-    this._canvas = null;
-    this._map = null;
-  },
-  // Standard custom-canvas zoom animation (same recipe as Leaflet.heat).
-  _animateZoom(e) {
-    const scale = this._map.getZoomScale(e.zoom);
-    const offset = this._map._latLngBoundsToNewLayerBounds(this._map.getBounds(), e.zoom, e.center).min;
-    L.DomUtil.setTransform(this._canvas, offset, scale);
-  },
-  _reset() {
-    if (!this._map || !this._canvas) return;
-    const topLeft = this._map.containerPointToLayerPoint([0, 0]);
-    L.DomUtil.setPosition(this._canvas, topLeft);
-    const size = this._map.getSize();
-    const dpr = window.devicePixelRatio || 1;
-    this._canvas.width = size.x * dpr;
-    this._canvas.height = size.y * dpr;
-    this._canvas.style.width = `${size.x}px`;
-    this._canvas.style.height = `${size.y}px`;
-    const ctx = this._canvas.getContext('2d');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.redraw();
-  },
-  redraw() {
-    if (!this._map || !this._canvas) return;
-    const map = this._map;
-    const ctx = this._canvas.getContext('2d');
-    const size = map.getSize();
-    ctx.clearRect(0, 0, size.x, size.y);
+// ─── Overview routes ─────────────────────────────────────────────────────────
+// Every overview route lives in ONE GeoJSON source rendered by the GPU.
+// History: per-drive L.polyline layers cost ~1 FPS pans on a ~5,400-drive
+// history (per-layer overhead, not point count), and a single-pass 2D-canvas
+// overlay still redrew ~191k points on the CPU after every move. MapLibre
+// keeps the geometry in GPU buffers — pan/zoom no longer touches it at all.
+// Display states mirror the old styling: overview (blue solid / purple
+// dashed imports), dim-grey context under a selected drive, hidden when
+// "Hide other drives" is on.
 
-    const data = overviewClickIndex;
-    if (!data.length) return;
-    const selected = selectedDriveId != null;
-    if (selected && hideOtherDrives) return; // context lines hidden entirely
-
-    // Skip drives fully outside the (padded) viewport.
-    const vb = map.getBounds().pad(0.05);
-    const weight = getWeight(2.5);
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
-    ctx.lineWidth = weight;
-
-    // One stroked path per style batch instead of one per drive.
-    const strokeBatch = (entries, color, alpha, dash) => {
-      if (!entries.length) return;
-      ctx.beginPath();
-      for (const entry of entries) {
-        const pts = entry.lls;
-        let p = map.latLngToContainerPoint(pts[0]);
-        ctx.moveTo(p.x, p.y);
-        for (let i = 1; i < pts.length; i++) {
-          p = map.latLngToContainerPoint(pts[i]);
-          ctx.lineTo(p.x, p.y);
-        }
-      }
-      ctx.strokeStyle = color;
-      ctx.globalAlpha = alpha;
-      ctx.setLineDash(dash);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
-    };
-
-    const native = [];
-    const imported = [];
-    for (const entry of data) {
-      if (selected && entry.drive.id === selectedDriveId) continue; // own line: selection draws it
-      if (!vb.intersects(entry.bounds)) continue;
-      (entry.imported ? imported : native).push(entry);
-    }
-
-    if (selected) {
-      // Dim-grey context under the selected drive (old per-layer #555566).
-      strokeBatch(native.concat(imported), '#555566', 1, []);
-    } else {
-      strokeBatch(native, '#3b82f6', 0.5, []);
-      strokeBatch(imported, '#a855f7', 0.6, [6, 4]);
-    }
-  },
-});
-let overviewRoutesCanvas = null;
+// One central place derives the overview layers' visibility and filters from
+// (selectedDriveId, hideOtherDrives). The selected drive draws its own
+// highlighted route, so its grey twin is filtered out of the dim layer.
+function updateOverviewStyleState() {
+  if (!mapReady) {
+    whenMapReady(updateOverviewStyleState);
+    return;
+  }
+  const selected = selectedDriveId != null;
+  const overviewVis = selected ? 'none' : 'visible';
+  const dimVis = selected && !hideOtherDrives ? 'visible' : 'none';
+  map.setLayoutProperty('overview-native', 'visibility', overviewVis);
+  map.setLayoutProperty('overview-imported', 'visibility', overviewVis);
+  map.setLayoutProperty('overview-dim', 'visibility', dimVis);
+  map.setFilter('overview-dim', selected ? ['!=', ['get', 'driveId'], selectedDriveId] : null);
+}
 
 function renderOverviewOnMap() {
-  clearLayers(overviewLayers);
-  clearLayers(selectedLayers);
-  clearLayers(fsdEventLayers);
-  overviewClickIndex = [];
+  removeMarkers(selectedMarkers);
+  removeMarkers(fsdEventMarkers);
   selectedDriveId = null;
   document.getElementById('map-legend').classList.add('hidden');
 
-  const allLatLngs = [];
-
-  // Build the route data for the single-pass canvas (and the click index —
-  // same array, same displayed geometry). Imported drives are sparse cloud
+  // Build one LineString feature per drive. Imported drives are sparse cloud
   // breadcrumbs (15-60 s apart), smoothed so poll intervals don't render as
   // hard corners; 1 iteration here vs the selected drive's 2.
+  const bounds = new maplibregl.LngLatBounds();
+  const features = [];
   let anyTessie = false;
   for (const drive of drives) {
     if (!drive.overviewPoints || drive.overviewPoints.length < 2) continue;
     const imported = isImportedSource(drive.source);
     if (imported) anyTessie = true;
     const lls = imported ? smoothLatLngsForDisplay(drive.overviewPoints, 1) : drive.overviewPoints;
-    allLatLngs.push(...lls);
-    overviewClickIndex.push({ drive, lls, imported, bounds: L.latLngBounds(lls) });
+    const coords = new Array(lls.length);
+    for (let i = 0; i < lls.length; i++) {
+      coords[i] = [lls[i][1], lls[i][0]]; // [lat,lng] → GeoJSON [lng,lat]
+      bounds.extend(coords[i]);
+    }
+    features.push({
+      type: 'Feature',
+      properties: { driveId: drive.id, imported },
+      geometry: { type: 'LineString', coordinates: coords },
+    });
   }
 
-  if (!overviewRoutesCanvas) {
-    overviewRoutesCanvas = new OverviewRoutesLayer();
-    overviewRoutesCanvas.addTo(map);
-  }
-  overviewRoutesCanvas.redraw();
+  whenMapReady(() => {
+    map.getSource('overview').setData({ type: 'FeatureCollection', features });
+    map.getSource('selected-route').setData(EMPTY_FC);
+    updateOverviewStyleState();
+  });
 
   // Toggle the imported legend entry based on whether any imported drives exist.
   const tessieLegend = document.querySelector('.legend-tessie');
   if (tessieLegend) tessieLegend.classList.toggle('hidden', !anyTessie);
 
-  if (allLatLngs.length > 0) {
-    map.fitBounds(L.latLngBounds(allLatLngs), { padding: [30, 30] });
+  if (features.length > 0) {
+    map.fitBounds(bounds, { padding: 30 });
   }
 }
 
@@ -3056,11 +3062,16 @@ function downsample(points, maxPoints) {
 }
 
 function drawSelectedDrive(drive) {
-  clearLayers(selectedLayers);
-  clearLayers(fsdEventLayers);
+  removeMarkers(selectedMarkers);
+  removeMarkers(fsdEventMarkers);
 
   const pts = drive.points;
-  if (!pts || pts.length < 2) return;
+  if (!pts || pts.length < 2) {
+    // Nothing drawable — still clear the previous drive's highlighted route
+    // (the old per-layer code cleared it as a side effect of clearLayers).
+    whenMapReady(() => map.getSource('selected-route').setData(EMPTY_FC));
+    return;
+  }
 
   const fsd = drive.fsdStates;
   const isTessie = isImportedSource(drive.source);
@@ -3069,6 +3080,20 @@ function drawSelectedDrive(drive) {
   // source stays visually distinct from native SEI.
   const hasFSD = Array.isArray(fsd) && fsd.length === pts.length && fsd.some((s) => s !== 0);
   const latLngs = pts.map((p) => [p[0], p[1]]);
+
+  // The route goes into the 'selected-route' GeoJSON source as one feature
+  // per styling run; the solid/dashed layer pair reads color/width/dash from
+  // the feature properties. driveId lets the map click handler treat clicks
+  // on the highlighted route as a toggle.
+  const features = [];
+  const pushSeg = (lls, color, dashed, w) => {
+    if (!Array.isArray(lls) || lls.length < 2) return;
+    features.push({
+      type: 'Feature',
+      properties: { driveId: drive.id, color, dashed, w },
+      geometry: { type: 'LineString', coordinates: lls.map((p) => [p[1], p[0]]) },
+    });
+  };
 
   if (hasFSD) {
     // Split into segments by FSD engagement
@@ -3079,84 +3104,48 @@ function drawSelectedDrive(drive) {
       while (j < pts.length && (fsd[j] !== 0) === engaged) j++;
 
       const seg = latLngs.slice(i, Math.min(j + 1, pts.length));
-      const baseW = 5;
-      if (seg.length >= 2) {
-        const styleOpts = {
-          color: engaged ? '#22cc55' : (isTessie ? '#a855f7' : '#2266cc'),
-          weight: getWeight(baseW),
-          opacity: 0.95,
-          interactive: false, // no handlers; skip mousemove hit-testing
-        };
-        if (isTessie) styleOpts.dashArray = '8 5';
-        const line = L.polyline(isTessie ? smoothLatLngsForDisplay(seg) : seg, styleOpts).addTo(map);
-        line._baseWeight = baseW;
-        selectedLayers.push(line);
-      }
+      pushSeg(
+        isTessie ? smoothLatLngsForDisplay(seg) : seg,
+        engaged ? '#22cc55' : (isTessie ? '#a855f7' : '#2266cc'),
+        isTessie,
+        5
+      );
       i = j;
     }
   } else if (isTessie) {
     // Tessie drive with no per-point FSD data (CSV import or missing path).
-    const line = L.polyline(smoothLatLngsForDisplay(latLngs), {
-      color: '#a855f7',
-      weight: getWeight(5),
-      opacity: 0.95,
-      dashArray: '8 5',
-      interactive: false,
-    }).addTo(map);
-    line._baseWeight = 5;
-    selectedLayers.push(line);
+    pushSeg(smoothLatLngsForDisplay(latLngs), '#a855f7', true, 5);
   } else {
-    const line = L.polyline(latLngs, {
-      color: '#2266cc',
-      weight: getWeight(4),
-      opacity: 0.9,
-      interactive: false,
-    }).addTo(map);
-    line._baseWeight = 4;
-    selectedLayers.push(line);
+    pushSeg(latLngs, '#2266cc', false, 4);
   }
 
-  // Start marker
-  const startM = L.circleMarker(latLngs[0], {
-    radius: 7,
-    fillColor: '#22cc55',
-    color: '#fff',
-    weight: 2,
-    fillOpacity: 1,
-    opacity: 1,
-  }).bindTooltip('Start').addTo(map);
-  selectedLayers.push(startM);
+  whenMapReady(() => {
+    map.getSource('selected-route').setData({ type: 'FeatureCollection', features });
+  });
 
-  // End marker
-  const endM = L.circleMarker(latLngs[latLngs.length - 1], {
-    radius: 7,
-    fillColor: '#ff3344',
-    color: '#fff',
-    weight: 2,
-    fillOpacity: 1,
-    opacity: 1,
-  }).bindTooltip('End').addTo(map);
-  selectedLayers.push(endM);
+  // Start / end markers
+  selectedMarkers.push(makeDotMarker(latLngs[0], { fill: '#22cc55', tooltip: 'Start' }));
+  selectedMarkers.push(makeDotMarker(latLngs[latLngs.length - 1], { fill: '#ff3344', tooltip: 'End' }));
 
   // FSD event markers (visibility controlled by Settings toggle)
   if (Array.isArray(drive.fsdEvents)) {
     for (const ev of drive.fsdEvents) {
       const disengage = ev.type === 'disengagement';
-      const m = L.circleMarker([ev.lat, ev.lng], {
+      fsdEventMarkers.push(makeDotMarker([ev.lat, ev.lng], {
+        fill: disengage ? '#ff8c00' : '#ffdd00',
         radius: 5,
-        fillColor: disengage ? '#ff8c00' : '#ffdd00',
-        color: '#fff',
-        weight: 1,
-        fillOpacity: 0.9,
-        opacity: 1,
-      }).bindTooltip(disengage ? 'FSD Disengagement' : 'Accelerator Override');
-      fsdEventLayers.push(m);
+        strokeW: 1,
+        opacity: 0.9,
+        tooltip: disengage ? 'FSD Disengagement' : 'Accelerator Override',
+      }));
     }
   }
   applyFsdMarkerVisibility();
 
   // Fit map to selected drive
-  map.fitBounds(L.latLngBounds(latLngs), { padding: [50, 50] });
+  const bounds = new maplibregl.LngLatBounds();
+  for (const p of latLngs) bounds.extend([p[1], p[0]]);
+  map.fitBounds(bounds, { padding: 50 });
 
   // Show legend if FSD data present or this is a Tessie drive
   const legend = document.getElementById('map-legend');
@@ -3166,22 +3155,23 @@ function drawSelectedDrive(drive) {
     legend.classList.add('hidden');
   }
 
-  // Add replay marker at start (navigation arrow, rotatable).
+  // Add replay marker at start (navigation arrow, rotatable image inside a
+  // plain wrapper div; the wrapper is the marker element MapLibre positions,
+  // the inner #replay-arrow img is what the bearing code rotates).
   // Use the first point where the car is actually moving, not idx 0 — the
   // earliest samples are often stationary parked GPS noise that gives a
   // meaningless bearing.
   const initBearing = computeInitBearing(drive.points, drive.gearStates);
   const { w: mW, h: mH } = getMarkerSize();
-  replayMarker = L.marker(latLngs[0], {
-    icon: L.divIcon({
-      className: '',
-      html: buildMarkerHtml(initBearing),
-      iconSize: [mW, mH],
-      iconAnchor: [mW / 2, mH / 2],
-    }),
-    zIndexOffset: 1000,
-  }).addTo(map);
-  selectedLayers.push(replayMarker);
+  const wrap = document.createElement('div');
+  wrap.style.width = `${mW}px`;
+  wrap.style.height = `${mH}px`;
+  wrap.style.zIndex = '1000'; // above the start/end/FSD dot markers
+  wrap.innerHTML = buildMarkerHtml(initBearing);
+  replayMarker = new maplibregl.Marker({ element: wrap, anchor: 'center' })
+    .setLngLat([latLngs[0][1], latLngs[0][0]])
+    .addTo(map);
+  selectedMarkers.push(replayMarker);
 
   // Initialize replay
   initReplay(drive);
@@ -3298,7 +3288,8 @@ function updateReplayPosition(idx, snap = false) {
   const pts = replayDrive.points;
   const pt = pts[idx];
 
-  // Move marker with smooth transition on the Leaflet container
+  // Move marker with a smooth transition on the marker element (MapLibre
+  // positions it via a CSS transform, same technique Leaflet used).
   if (replayMarker) {
     const el = replayMarker.getElement();
     if (el && replayPlaying) {
@@ -3306,7 +3297,7 @@ function updateReplayPosition(idx, snap = false) {
     } else if (el) {
       el.style.transition = 'none';
     }
-    replayMarker.setLatLng([pt[0], pt[1]]);
+    replayMarker.setLngLat([pt[1], pt[0]]);
   }
 
   // Rotate arrow to face the direction the front of the car points.
@@ -3413,12 +3404,10 @@ function refreshReplayMarkerIcon() {
     if (m) bearing = parseFloat(m[1]) || 0;
   }
   const { w: mW, h: mH } = getMarkerSize();
-  replayMarker.setIcon(L.divIcon({
-    className: '',
-    html: buildMarkerHtml(bearing),
-    iconSize: [mW, mH],
-    iconAnchor: [mW / 2, mH / 2],
-  }));
+  const el = replayMarker.getElement();
+  el.style.width = `${mW}px`;
+  el.style.height = `${mH}px`;
+  el.innerHTML = buildMarkerHtml(bearing);
 }
 
 function renderModel3Color(color) {

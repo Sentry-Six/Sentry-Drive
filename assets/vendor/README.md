@@ -7,7 +7,7 @@ the packaged app (`build.files` includes `assets/**`).
 
 | Component | Version | License | Text |
 |---|---|---|---|
-| Leaflet | 1.9.4 | BSD-2-Clause | `leaflet/LICENSE.txt` |
+| MapLibre GL JS | 5.24.0 | BSD-3-Clause | `maplibre/LICENSE.txt` |
 | iro.js (color picker) | 5.5.2 | MPL-2.0 | `LICENSE-iro.txt` |
 | Noto Sans | Google Fonts (2026-06) | SIL OFL 1.1 | `fonts/OFL-NotoSans.txt` |
 | Noto Sans Mono | Google Fonts (2026-06) | SIL OFL 1.1 | `fonts/OFL-NotoSansMono.txt` |

@@ -893,24 +893,22 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   border-color: rgba(96, 165, 250, 0.5);
 }
 
-/* ── Leaflet Layer Control (dark theme override) ───────────────────────── */
-.leaflet-control-layers {
-  background: var(--map-glass-bg) !important;
-  border: 1px solid var(--glass-border) !important;
-  border-radius: 14px !important;
-  box-shadow: var(--card-shadow) !important;
+/* ── Map Layer Control (custom radio list, top right of the map) ────────── */
+#map-layers-control {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  background: var(--map-glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
-  color: var(--text) !important;
+  color: var(--text);
+  padding: 10px 12px;
 }
-.leaflet-control-layers-toggle {
-  filter: invert(0.9) hue-rotate(180deg);
-}
-.leaflet-control-layers-expanded {
-  padding: 10px 12px !important;
-}
-.leaflet-control-layers-expanded .leaflet-control-layers-toggle { display: none; }
-.leaflet-control-layers-base label {
+#map-layers-control label {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
@@ -922,14 +920,12 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
-.leaflet-control-layers-base label input { display: none; }
-.leaflet-control-layers-base label > span { padding-left: 0 !important; }
-.leaflet-control-layers-base label:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
-.leaflet-control-layers-base label:has(input:checked) {
+#map-layers-control label input { display: none; }
+#map-layers-control label:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+#map-layers-control label:has(input:checked) {
   background: var(--blue);
   color: #fff;
 }
-.leaflet-control-layers-separator { border-top: 1px solid var(--border-light) !important; }
 
 /* ── Map Bottom Overlay (replay bar + stats, stacked) ───────────────────── */
 #map-overlay-bottom {
@@ -1472,8 +1468,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+  /* blur lives on ::before — see the popup-safe glass section */
 }
 
 #settings-modal {
@@ -1867,8 +1862,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  /* blur lives on ::before — see the popup-safe glass section */
 }
 
 .reprocess-modal {
@@ -2550,30 +2544,45 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 /* ── Utility ────────────────────────────────────────────────────────────── */
 .hidden { display: none !important; }
 
-/* ── Leaflet overrides ──────────────────────────────────────────────────── */
-.leaflet-container { background: var(--bg); }
-.leaflet-control-attribution {
+/* ── MapLibre overrides ─────────────────────────────────────────────────── */
+#map, .maplibregl-map { background: var(--bg); }
+.maplibregl-ctrl-attrib {
   background: rgba(7, 9, 12, 0.75) !important;
   color: var(--text-dim) !important;
   font-size: 9px !important;
 }
-.leaflet-control-attribution a { color: var(--text-dim) !important; }
-.leaflet-control-zoom a {
+.maplibregl-ctrl-attrib a { color: var(--text-dim) !important; }
+.maplibregl-ctrl-group {
   background: rgba(11, 14, 19, 0.92) !important;
-  color: var(--text-muted) !important;
-  border-color: var(--border) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: none !important;
 }
-.leaflet-control-zoom a:hover { background: var(--drive-hover) !important; }
-.leaflet-tooltip {
+.maplibregl-ctrl-group button { background: transparent !important; }
+.maplibregl-ctrl-group button + button { border-top: 1px solid var(--border) !important; }
+.maplibregl-ctrl-group button:hover { background: var(--drive-hover) !important; }
+/* The +/- glyphs are dark SVG background images — invert them for the theme. */
+.maplibregl-ctrl button .maplibregl-ctrl-icon { filter: invert(0.75); }
+
+/* Circle markers (start/end/FSD events) — DOM replacements for circleMarker. */
+.map-dot-marker {
+  box-sizing: content-box;
+  border-radius: 50%;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
+}
+/* Hover tooltip for map markers, styled like the old Leaflet tooltips. */
+.map-tooltip {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
   background: rgba(11, 14, 19, 0.92);
   border: 1px solid var(--border-light);
   color: var(--text);
   font-size: 11px;
   border-radius: 4px;
   padding: 4px 8px;
-  box-shadow: none;
 }
-.leaflet-tooltip::before { display: none; }
 
 /* ── Tessie Import ─────────────────────────────────────────────────────── */
 .legend-swatch.legend-swatch-tessie {
@@ -2704,13 +2713,66 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   border-color: var(--glass-border);
 }
 
-.stat,
+.stat {
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+/* ── Popup-safe glass ───────────────────────────────────────────────────────
+   Native <select> and date-picker popups fail to open inside elements with
+   backdrop-filter (Chromium bug — the Import/Settings dropdowns went dead).
+   Modals and modal overlays keep their glass blur on a ::before layer painted
+   behind the content instead: identical look, but the popups' ancestor chain
+   is filter-free. Do not move backdrop-filter back onto these containers. */
+#settings-modal,
+#tessie-modal,
+.reprocess-modal,
+#update-modal,
+#changelog-modal {
+  position: relative;
+}
+#settings-overlay,
+#tessie-overlay,
+#remove-tessie-overlay,
 #settings-modal,
 #tessie-modal,
 .reprocess-modal,
 #update-modal,
 #changelog-modal,
 #car-color-popup {
+  isolation: isolate;
+}
+#settings-overlay::before,
+#tessie-overlay::before,
+#remove-tessie-overlay::before,
+#settings-modal::before,
+#tessie-modal::before,
+.reprocess-modal::before,
+#update-modal::before,
+#changelog-modal::before,
+#car-color-popup::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+}
+#settings-overlay::before {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+#tessie-overlay::before,
+#remove-tessie-overlay::before {
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+#settings-modal::before,
+#tessie-modal::before,
+.reprocess-modal::before,
+#update-modal::before,
+#changelog-modal::before,
+#car-color-popup::before {
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
 }

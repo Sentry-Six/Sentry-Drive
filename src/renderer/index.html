@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- Leaflet + all fonts are bundled (assets/vendor/) — the app works fully
+  <!-- MapLibre + all fonts are bundled (assets/vendor/) — the app works fully
        offline and makes no third-party requests at launch. The only remote
-       host left is Google's tile server, loaded as images. -->
+       host left is Google's tile server: MapLibre fetches raster tiles with
+       fetch() (connect-src) and runs its layout worker from a blob: URL. -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     script-src 'self';
@@ -13,11 +14,11 @@
     font-src 'self';
     img-src 'self' data: blob: https://*.google.com;
     worker-src blob:;
-    connect-src 'self';
+    connect-src 'self' https://*.google.com;
   " />
   <title>Sentry Drive</title>
   <link rel="stylesheet" href="../../assets/vendor/fonts/fonts.css" />
-  <link rel="stylesheet" href="../../assets/vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="../../assets/vendor/maplibre/maplibre-gl.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -572,7 +573,7 @@
     </div>
   </div>
 
-  <script src="../../assets/vendor/leaflet/leaflet.js"></script>
+  <script src="../../assets/vendor/maplibre/maplibre-gl.js"></script>
   <script src="../../assets/vendor/iro.min.js"></script>
   <script src="renderer.js"></script>
 </body>

@@ -1,6 +1,26 @@
 {
   "versions": [
     {
+      "version": "1.3.0",
+      "date": "2026-06-11",
+      "title": "GPU Map Engine, Smarter Imports & Replay Accuracy",
+      "changes": [
+        { "type": "feature", "description": "The map runs on a new GPU-accelerated engine (MapLibre GL) — panning and zooming stay smooth even with thousands of drive lines on screen. Same Google map styles, layers, and labels; clicking, replay, and the legend all work as before." },
+        { "type": "fix", "description": "Dropdowns work again — the Service and Vehicle pickers in Import Drives and the marker picker in Settings wouldn't open (a Chromium quirk with the frosted-glass blur on modals; the glass look is unchanged)." },
+        { "type": "fix", "description": "Clicking a drive line on the map overview works again — selecting a drive from the map had stopped working — and lines now accept clicks within a comfortable distance instead of needing a pixel-perfect hit." },
+        { "type": "fix", "description": "The replay arrow keeps tracking at parking speeds — below ~5 mph, while reversing, and through back-in maneuvers it no longer freezes or swings to a direction the car never faced. Replaying a finished drive snaps the arrow back to the departure heading." },
+        { "type": "improvement", "description": "Import Drives no longer queries the service in the background — nothing is fetched while you adjust dates or pick a vehicle. Clicking Import runs the check first, shows what was found, and stops safely if there's nothing new." },
+        { "type": "feature", "description": "The replay bar now shows the current gear (P / D / R / N), and speed reads correctly while reversing." },
+        { "type": "feature", "description": "Remove Imported Drives lets you choose which service to clean out — Tessie, Teslascope, or both — and reports the real number of drives removed (it previously counted internal clips, e.g. \"339\" for 25 drives). It also explains when removed drives were hidden behind dashcam drives." },
+        { "type": "improvement", "description": "Drive locations fall back to the city when no street address exists at a spot, instead of showing raw GPS coordinates." },
+        { "type": "improvement", "description": "Buttons across the app now match the Liquid Glass design — translucent blue primary buttons and frosted glass secondary tiles." },
+        { "type": "improvement", "description": "FSD analytics: Autopilot now uses Tesla's signature blue, and the donut chart center is fully transparent so the map shows through." },
+        { "type": "improvement", "description": "The aggregate stats panel always stays on one line, compressing spacing and text on narrow windows instead of wrapping." },
+        { "type": "improvement", "description": "The app now opens on View Drives instead of Processing, with a new route icon next to the title." },
+        { "type": "improvement", "description": "Integration cards have clearer descriptions, both services link with \"Get API key\", and the Teslascope link opens the correct page (Account → Security)." }
+      ]
+    },
+    {
       "version": "1.2.3-beta.1",
       "date": "2026-06-11",
       "title": "Replay Accuracy, Map Clicks & Liquid Glass Polish",
