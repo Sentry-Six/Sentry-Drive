@@ -1,16 +1,26 @@
 {
   "versions": [
     {
+      "version": "1.2.2-beta.5",
+      "date": "2026-06-10",
+      "title": "Import Polish, Offline Mode & Accurate Durations",
+      "changes": [
+        { "type": "fix", "description": "Import Drives — the Import button can no longer be tricked into starting an import the preview said would do nothing (re-clicking the active tab used to enable it), and the preview now explains why drives were skipped instead of just showing \"0 will be imported\"." },
+        { "type": "improvement", "description": "Drive durations are now frame-accurate — a drive that stops partway through its final minute no longer counts the whole minute, matching Sentry USB's totals (expect your lifetime duration to drop slightly)." },
+        { "type": "improvement", "description": "The app now works fully offline (except live map tiles) — the map framework, fonts, and icons ship with the app instead of loading from the internet at launch. Faster startup, no more blank map without a connection, and fewer third-party requests." },
+        { "type": "improvement", "description": "Unified typography — the interface now uses Noto Sans throughout, with Noto Sans Mono for numbers and stats." },
+        { "type": "fix", "description": "Dark map polish — highways are now light grey and stay visible at every zoom (they previously lost their color when zoomed in), and map labels are white for better readability." },
+        { "type": "improvement", "description": "Tessie and Teslascope drive lines render smoothly instead of angular — their sparse GPS breadcrumbs are visually rounded on the map (display only; distances and stats still use the raw recorded points)." }
+      ]
+    },
+    {
       "version": "1.2.2-beta.4",
       "date": "2026-06-10",
       "title": "Teslascope Import — For Real This Time",
       "changes": [
         { "type": "fix", "description": "Teslascope drives now actually import — the app now reads Teslascope's real drive format (timestamps, coordinates, distance), verified against live data. Previously every drive was skipped as unreadable." },
         { "type": "improvement", "description": "Logs now survive crashes — they're written to disk as they happen, and the log export includes the previous session, so whatever happened right before a crash is always recoverable." },
-        { "type": "improvement", "description": "The Dark map now distinguishes more detail — parks render dark green, highways render in light grey that stays visible at every zoom, buildings and built-up areas are distinct at street zooms, and transit lines are visible." },
-        { "type": "improvement", "description": "The app now works fully offline (except live map tiles) — the map framework, fonts, and icons ship with the app instead of loading from the internet at launch. Faster startup, no more blank map without a connection, and fewer third-party requests." },
-        { "type": "improvement", "description": "Unified typography — the interface now uses Noto Sans throughout, with Noto Sans Mono for numbers and stats." },
-        { "type": "improvement", "description": "Drive durations are now frame-accurate — a drive that stops partway through its final minute no longer counts the whole minute, matching Sentry USB's totals." }
+        { "type": "improvement", "description": "The Dark map now distinguishes more detail — parks render dark green, buildings and built-up areas are distinct at street zooms, transit lines are visible, and highways are distinguished from local roads." }
       ]
     },
     {

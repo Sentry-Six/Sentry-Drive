@@ -2671,6 +2671,10 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .tessie-mode-btn.active {
   background: rgba(168, 85, 247, 0.22);
   color: #c084fc;
+  /* The selected tab isn't a button anymore — re-clicking it used to
+     re-enable Import past a "0 to import" preview. */
+  pointer-events: none;
+  cursor: default;
 }
 .tessie-mode-pane { text-align: left; }
 

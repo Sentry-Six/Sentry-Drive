@@ -1370,7 +1370,7 @@ ipcMain.handle('teslascope-api-preview', async (_e, { token, publicId, fromSec, 
       toImport++;
     }
     logger.info('import', `teslascope preview result: ${drives.length} drives, ${toImport} to import, ${overlapSkipped} overlap-skipped, ${duplicateSkipped} duplicates, ${badTimestamps} bad-timestamps`);
-    return { success: true, totalDrives: drives.length, toImport, overlapSkipped, duplicateSkipped };
+    return { success: true, totalDrives: drives.length, toImport, overlapSkipped, duplicateSkipped, badTimestamps };
   } catch (err) {
     logger.error('import', 'teslascope preview failed:', err);
     return { success: false, error: err.message };

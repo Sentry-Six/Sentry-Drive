@@ -1403,6 +1403,7 @@ function initTessieImport() {
   if (serviceSelect) {
     serviceSelect.addEventListener('change', async () => {
       selectedService = serviceSelect.value || 'tessie';
+      lastPreviewToImport = null;
       applyServiceUI();
       try {
         const r = await svc().getToken(); // local IPC — fast
@@ -1418,6 +1419,7 @@ function initTessieImport() {
     tessieStatesPath = '';
     drivesInput.value = '';
     statesInput.value = '';
+    lastPreviewToImport = null;
     previewEl.classList.add('hidden');
     previewEl.innerHTML = '';
     progressEl.classList.add('hidden');
@@ -1429,12 +1431,17 @@ function initTessieImport() {
   // Mode toggle
   document.querySelectorAll('.tessie-mode-btn').forEach((b) => {
     b.addEventListener('click', () => {
+      // Re-clicking the active tab must be a no-op — it used to re-run
+      // refreshConfirmReady and force-enable Import past a "0 to import"
+      // preview (CSS also disables pointer events on the active tab).
+      if (b.dataset.mode === tessieImportMode) return;
       tessieImportMode = b.dataset.mode;
       document.querySelectorAll('.tessie-mode-btn').forEach((x) => x.classList.toggle('active', x === b));
       document.getElementById('tessie-mode-api').classList.toggle('hidden', tessieImportMode !== 'api');
       document.getElementById('tessie-mode-csv').classList.toggle('hidden', tessieImportMode !== 'csv');
       previewEl.classList.add('hidden');
       previewEl.innerHTML = '';
+      lastPreviewToImport = null;
       confirmBtn.disabled = true;
       refreshConfirmReady();
     });
@@ -1583,11 +1590,16 @@ function initTessieImport() {
     await maybePreview();
   }
 
+  // Import is allowed ONLY after a preview confirmed there is something to
+  // import (null = no valid preview yet). Every input change invalidates it.
+  let lastPreviewToImport = null;
+
   function refreshConfirmReady() {
+    const previewReady = lastPreviewToImport != null && lastPreviewToImport > 0;
     if (tessieImportMode === 'api') {
-      confirmBtn.disabled = !(tokenInput.value.trim() && vinSelect.value && !vinSelect.disabled);
+      confirmBtn.disabled = !(previewReady && tokenInput.value.trim() && vinSelect.value && !vinSelect.disabled);
     } else {
-      confirmBtn.disabled = !(tessieDrivesPath && tessieStatesPath);
+      confirmBtn.disabled = !(previewReady && tessieDrivesPath && tessieStatesPath);
     }
   }
 
@@ -1598,6 +1610,7 @@ function initTessieImport() {
 
   async function maybePreview() {
     if (!loadedFilePath) return;
+    lastPreviewToImport = null; // inputs changed — previous preview is void
     refreshConfirmReady();
     const seq = ++previewSeq;
 
@@ -1645,8 +1658,13 @@ function initTessieImport() {
     parts.push(`<span class="tessie-preview-count">${fmt(result.toImport)}</span> will be imported.`);
     if (result.overlapSkipped > 0) parts.push(`${fmt(result.overlapSkipped)} skipped (overlaps existing SEI data).`);
     if (result.duplicateSkipped > 0) parts.push(`${fmt(result.duplicateSkipped)} skipped (already imported).`);
+    if (result.badTimestamps > 0) parts.push(`${fmt(result.badTimestamps)} skipped (couldn't be read — export logs from Settings → Support).`);
+    if (result.toImport === 0 && result.totalDrives > 0) {
+      parts.push('<em>Nothing new to import — every drive in this range is already covered above.</em>');
+    }
     previewEl.innerHTML = parts.join('<br>');
-    confirmBtn.disabled = result.toImport === 0;
+    lastPreviewToImport = result.toImport;
+    refreshConfirmReady();
   }
 
   confirmBtn.addEventListener('click', async () => {
@@ -2815,6 +2833,30 @@ function clearLayers(arr) {
   arr.length = 0;
 }
 
+// Display-only smoothing for imported (non-SEI) drives. Their cloud
+// breadcrumbs are 15-60 s apart, so raw segments render angular; Chaikin
+// corner-cutting rounds the DISPLAYED polyline only. Endpoints are preserved
+// exactly, and drive.points / distance math / the replay never see this —
+// rendering and stats are deliberately separate.
+function smoothLatLngsForDisplay(latLngs, iterations = 2) {
+  if (!Array.isArray(latLngs) || latLngs.length < 3) return latLngs;
+  let pts = latLngs;
+  // Dense inputs need less rounding and would balloon the point count.
+  const iters = pts.length > 100 ? 1 : iterations;
+  for (let it = 0; it < iters; it++) {
+    const out = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+      out.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+    }
+    out.push(pts[pts.length - 1]);
+    pts = out;
+  }
+  return pts;
+}
+
 function renderOverviewOnMap() {
   clearLayers(overviewLayers);
   clearLayers(selectedLayers);
@@ -2830,11 +2872,13 @@ function renderOverviewOnMap() {
   let anyTessie = false;
   for (const drive of drives) {
     if (!drive.overviewPoints || drive.overviewPoints.length < 2) continue;
-    const lls = drive.overviewPoints;
-    allLatLngs.push(...lls);
-
     const isTessie = isImportedSource(drive.source);
     if (isTessie) anyTessie = true;
+
+    // Imported drives are sparse cloud breadcrumbs (15-60 s apart) — smooth
+    // the displayed line so poll intervals don't render as hard corners.
+    const lls = isTessie ? smoothLatLngsForDisplay(drive.overviewPoints) : drive.overviewPoints;
+    allLatLngs.push(...lls);
 
     const styleOpts = {
       color: isTessie ? '#a855f7' : '#3b82f6',
@@ -2919,7 +2963,7 @@ function drawSelectedDrive(drive) {
           opacity: 0.95,
         };
         if (isTessie) styleOpts.dashArray = '8 5';
-        const line = L.polyline(seg, styleOpts).addTo(map);
+        const line = L.polyline(isTessie ? smoothLatLngsForDisplay(seg) : seg, styleOpts).addTo(map);
         line._baseWeight = baseW;
         selectedLayers.push(line);
       }
@@ -2927,7 +2971,7 @@ function drawSelectedDrive(drive) {
     }
   } else if (isTessie) {
     // Tessie drive with no per-point FSD data (CSV import or missing path).
-    const line = L.polyline(latLngs, {
+    const line = L.polyline(smoothLatLngsForDisplay(latLngs), {
       color: '#a855f7',
       weight: getWeight(5),
       opacity: 0.95,
