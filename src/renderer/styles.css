@@ -568,6 +568,11 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   transition: border-color 0.15s, background 0.15s;
   flex-shrink: 0;
   scroll-margin-top: 44px;
+  /* Skip layout/paint for off-screen cards so large histories (1000s of drives)
+     stay responsive while every card stays in the DOM. contain-intrinsic-size is
+     a placeholder height for unrendered cards; `auto` remembers the real size. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 140px;
 }
 .drive-item:hover {
   border-color: rgba(96, 165, 250, 0.45);
