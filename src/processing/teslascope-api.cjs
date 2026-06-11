@@ -274,17 +274,21 @@ async function fetchDrivePath(token, publicId, driveId) {
 
 // Pull a GPS point list out of a drive detail, accepting several shapes.
 function extractPoints(detail) {
-  const arr = pickArray(detail, ['path', 'points', 'locations', 'coordinates', 'gps', 'route']);
+  // Teslascope returns the GPS path under `progress`; the other keys cover
+  // alternate response shapes.
+  const arr = pickArray(detail, ['progress', 'path', 'points', 'locations', 'coordinates', 'gps', 'route']);
   return arr
     .map((p) => {
       // Points may be objects or [lat,lng] / [lat,lng,ts] tuples.
       if (Array.isArray(p)) {
-        return { latitude: num(p[0]), longitude: num(p[1]), timestamp: p[2], speed: num(p[3]), autopilot: undefined };
+        return { latitude: num(p[0]), longitude: num(p[1]), timestamp: toMs(p[2]), speed: num(p[3]), autopilot: undefined };
       }
       return {
         latitude: num(pick(p, ['latitude', 'lat'])),
         longitude: num(pick(p, ['longitude', 'lng', 'lon', 'long'])),
-        timestamp: pick(p, ['timestamp', 'time', 'date', 'recorded_at', 't']),
+        // Normalize to epoch ms — `progress` gives ISO strings, but clip-building
+        // expects a numeric timestamp.
+        timestamp: toMs(pick(p, ['timestamp', 'time', 'date', 'recorded_at', 'created_at', 't'])),
         speed: num(pick(p, ['speed', 'speed_mph', 'velocity'])),
         autopilot: pick(p, ['autopilot', 'autopilot_state', 'state', 'ap']),
       };
