@@ -121,7 +121,12 @@ const EMPTY_FC = { type: 'FeatureCollection', features: [] };
 
 // Zoom-scaled line widths, replicating the old Leaflet behavior of
 // max(2, base * zoom / 10) as piecewise-linear interpolation stops.
-const OVERVIEW_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 0, 2, 8, 2, 10, 2.5, 20, 5];
+const OVERVIEW_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 0, 3, 8, 3, 10, 3.5, 20, 6];
+// Imported overview lines run ~1px thinner. The difference is baked into
+// the stops because zoom expressions are only legal as the TOP-LEVEL
+// interpolate — wrapping OVERVIEW_LINE_WIDTH in ['*', factor, …] is
+// rejected by the style spec and would abort layer setup.
+const OVERVIEW_IMPORTED_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 0, 2.5, 8, 2.5, 10, 2.9, 20, 4.75];
 const SELECTED_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'],
   0, 2, 4, 2, 10, ['max', 2, ['get', 'w']], 20, ['max', 2, ['*', ['get', 'w'], 2]]];
 
@@ -255,18 +260,21 @@ function initMap() {
       layout: { 'line-join': 'round', 'line-cap': 'round', visibility: 'none' },
       paint: { 'line-color': '#555566', 'line-opacity': 1, 'line-width': OVERVIEW_LINE_WIDTH },
     });
+    // Imported drives: purple dashed (dasharray is in line-width units).
+    // Added BEFORE the native layer so dashcam lines paint on top, and kept
+    // faint/thin — a dense imported history was drowning out the real
+    // drive-data lines.
+    map.addLayer({
+      id: 'overview-imported', type: 'line', source: 'overview',
+      filter: ['==', ['get', 'imported'], true],
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#a855f7', 'line-opacity': 0.25, 'line-width': OVERVIEW_IMPORTED_LINE_WIDTH, 'line-dasharray': [2.4, 1.6] },
+    });
     map.addLayer({
       id: 'overview-native', type: 'line', source: 'overview',
       filter: ['!=', ['get', 'imported'], true],
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': '#3b82f6', 'line-opacity': 0.5, 'line-width': OVERVIEW_LINE_WIDTH },
-    });
-    // Imported drives: purple dashed (dasharray is in line-width units).
-    map.addLayer({
-      id: 'overview-imported', type: 'line', source: 'overview',
-      filter: ['==', ['get', 'imported'], true],
-      layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#a855f7', 'line-opacity': 0.6, 'line-width': OVERVIEW_LINE_WIDTH, 'line-dasharray': [2.4, 1.6] },
     });
     // Selected drive on top: per-segment colors via feature properties;
     // dashes can't be data-driven, hence the solid/dashed layer pair.
