@@ -257,6 +257,38 @@ test('locationName rollup: omitted entirely when no clip has telemetry', () => {
   assert.equal('locationNameEnd' in drives[0], false);
 });
 
+// ─── BLE battery rollup ────────────────────────────────────────────────────────
+// Shares the locationName convention: first non-null batteryPctStart, last
+// non-null batteryPctEnd across the drive's clips; omitted entirely when no
+// clip carries battery telemetry (pre-BLE history, imports).
+
+test('battery rollup: first non-null start, last non-null end', () => {
+  const routes = [
+    // First clip: no battery sample yet (BLE connected late).
+    testRoute('RecentClips/2026-05-17_10-00-00-front.mp4', [[37.0, -122.0]]),
+    // Middle clip: provides the drive's starting charge.
+    { ...testRoute('RecentClips/2026-05-17_10-01-00-front.mp4', [[37.001, -122.0]]),
+      batteryPctStart: 78, batteryPctEnd: 71 },
+    // Last clip: its end-of-clip sample is the drive's ending charge.
+    { ...testRoute('RecentClips/2026-05-17_10-02-00-front.mp4', [[37.002, -122.0]]),
+      batteryPctStart: 71, batteryPctEnd: 64 },
+  ];
+  const drives = drivesOf(routes);
+  assert.equal(drives.length, 1);
+  assert.equal(drives[0].batteryPctStart, 78);
+  assert.equal(drives[0].batteryPctEnd, 64);
+});
+
+test('battery rollup: omitted entirely when no clip has battery telemetry', () => {
+  const drives = drivesOf([
+    testRoute('RecentClips/2026-05-17_10-00-00-front.mp4', [[37.0, -122.0]]),
+    testRoute('RecentClips/2026-05-17_10-01-00-front.mp4', [[37.001, -122.0]]),
+  ]);
+  assert.equal(drives.length, 1);
+  assert.equal('batteryPctStart' in drives[0], false);
+  assert.equal('batteryPctEnd' in drives[0], false);
+});
+
 // ─── Geocode endpoint snapping (Drive-leading; geocoding only, not stats) ─────
 // Median of the stationary cluster at each end; raw terminal fix when the car
 // was already rolling (cluster < 3 points).

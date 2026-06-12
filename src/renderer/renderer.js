@@ -20,10 +20,13 @@ let hideOtherDrives = false;
 let showFsdMarkers = true;
 let fsdEventMarkers = [];  // DOM markers for FSD events (toggleable in Settings)
 let showMapLabels = true;               // city/neighborhood labels on base maps
+let showRoadLabels = true;              // street/highway names on base maps
 let applyMapLabelsSetting = () => {};   // bound to the real basemap at map init
 
 // Replay state
 let replayMarker = null;
+let mapInteracting = false; // pan/zoom in progress — suspend marker easing
+let replayTrailCtx = null;  // {runs, latLngs, smooth} — traveled-route overlay data
 let replayInterval = null;
 let replayPlaying = false;
 let replayIdx = 0;
@@ -140,13 +143,18 @@ function whenMapReady(fn) {
 function initMap() {
   // All base maps come from Google's tile endpoint, restyled via the legacy
   // apistyle parameter. Both Light and Dark strip every label except the
-  // administrative ones (cities, neighborhoods): all labels off, then
-  // s.t:1 (administrative) labels back on — or every label when the
-  // "Show city & neighborhood labels" setting is off. Dark additionally
+  // administrative ones (cities, neighborhoods) and road labels (street
+  // names): all labels off, then s.t:1 + s.t:3/49 labels back on — or every
+  // label off when the labels setting is off. Dark additionally
   // applies Google's own night-mode palette (#242f3e base / #17263c water /
   // #38414e roads / muted tan labels) — verified live at ~49 avg tile
   // brightness vs ~214 for the standard roadmap.
   showMapLabels = localStorage.getItem('showMapLabels') !== 'false';
+  // Road labels follow the city-labels setting until the user chooses
+  // explicitly — anyone who hid all labels before this toggle existed
+  // keeps a fully clean map.
+  const savedRoadLabels = localStorage.getItem('showRoadLabels');
+  showRoadLabels = savedRoadLabels != null ? savedRoadLabels !== 'false' : showMapLabels;
   // Google night-mode palette (every color verified pixel-by-pixel on live
   // tiles): base #242f3e, parks #263c3f (s.t:37), built-up/building lots
   // #2b3645 (81), water #17263c (6), roads #38414e + stroke #212a37 (3),
@@ -157,16 +165,23 @@ function initMap() {
   // because the high-zoom highway rendering ignores the generic g rule
   // (verified at z15: without g.f the color vanished when zoomed in).
   const GMAPS_NIGHT_RULES = 's.e%3Ag%7Cp.c%3A%23242f3e,s.e%3Al.t.f%7Cp.c%3A%23ffffff,s.e%3Al.t.s%7Cp.c%3A%23242f3e,s.t%3A37%7Cs.e%3Ag%7Cp.c%3A%23263c3f,s.t%3A81%7Cs.e%3Ag%7Cp.c%3A%232b3645,s.t%3A6%7Cs.e%3Ag%7Cp.c%3A%2317263c,s.t%3A3%7Cs.e%3Ag%7Cp.c%3A%2338414e,s.t%3A3%7Cs.e%3Ag.s%7Cp.c%3A%23212a37,s.t%3A49%7Cs.e%3Ag%7Cp.c%3A%235f6b7c,s.t%3A49%7Cs.e%3Ag.f%7Cp.c%3A%235f6b7c,s.t%3A49%7Cs.e%3Ag.s%7Cp.c%3A%232a3340,s.t%3A4%7Cs.e%3Ag%7Cp.c%3A%232f3948';
-  const gmapsLabelRules = () => (showMapLabels
-    ? 's.e%3Al%7Cp.v%3Aoff,s.t%3A1%7Cs.e%3Al%7Cp.v%3Aon'
-    : 's.e%3Al%7Cp.v%3Aoff');
+  // Everything off, then each label class the user wants back on:
+  // administrative (s.t:1, cities/neighborhoods) and roads (s.t:3, plus
+  // highways s.t:49 for names/shields at high zoom) — independently
+  // toggled in Settings → Map UI, applied to every base layer.
+  const gmapsLabelRules = () => {
+    const rules = ['s.e%3Al%7Cp.v%3Aoff'];
+    if (showMapLabels) rules.push('s.t%3A1%7Cs.e%3Al%7Cp.v%3Aon');
+    if (showRoadLabels) rules.push('s.t%3A3%7Cs.e%3Al%7Cp.v%3Aon', 's.t%3A49%7Cs.e%3Al%7Cp.v%3Aon');
+    return rules.join(',');
+  };
   const gmapsUrls = () => ({
     'Dark': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${GMAPS_NIGHT_RULES},${gmapsLabelRules()}`,
     'Light': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${gmapsLabelRules()}`,
     // Hybrid (lyrs=y) instead of bare satellite (lyrs=s): same imagery plus
-    // the label overlay, filtered like Light/Dark, with the hybrid road
-    // overlay (s.t:3) hidden.
-    'Satellite': `https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&apistyle=${gmapsLabelRules()},s.t%3A3%7Cp.v%3Aoff`,
+    // the label overlay, filtered like Light/Dark. Only the hybrid road
+    // GEOMETRY overlay (s.t:3|s.e:g) is hidden — street names stay.
+    'Satellite': `https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&apistyle=${gmapsLabelRules()},s.t%3A3%7Cs.e%3Ag%7Cp.v%3Aoff`,
   });
   // Migrate layer choices saved under the old names.
   const LAYER_RENAMES = { 'Google Maps': 'Light', 'Google Dark': 'Dark' };
@@ -225,9 +240,14 @@ function initMap() {
   applyMapLabelsSetting = () => setBasemapTiles(gmapsUrls()[currentBaseLayer]);
 
   // Base-layer switcher: custom control replacing L.control.layers with the
-  // same look (radio list, top right). Styled in styles.css.
+  // same behavior (top right, collapsed to a layers icon, expands to the
+  // radio list on hover — CSS-driven). Styled in styles.css.
   const layersCtrl = document.createElement('div');
   layersCtrl.id = 'map-layers-control';
+  const layersToggle = document.createElement('span');
+  layersToggle.className = 'map-layers-toggle material-icons';
+  layersToggle.textContent = 'layers';
+  layersCtrl.appendChild(layersToggle);
   for (const name of LAYER_NAMES) {
     const label = document.createElement('label');
     const input = document.createElement('input');
@@ -254,6 +274,7 @@ function initMap() {
   map.on('load', () => {
     map.addSource('overview', { type: 'geojson', data: EMPTY_FC });
     map.addSource('selected-route', { type: 'geojson', data: EMPTY_FC });
+    map.addSource('selected-traveled', { type: 'geojson', data: EMPTY_FC });
     // Dim-grey context lines under a selected drive (hidden in overview mode).
     map.addLayer({
       id: 'overview-dim', type: 'line', source: 'overview',
@@ -278,14 +299,29 @@ function initMap() {
     });
     // Selected drive on top: per-segment colors via feature properties;
     // dashes can't be data-driven, hence the solid/dashed layer pair.
+    // The base route renders DIMMED (colorDim) — the not-yet-traveled state.
+    // The 'selected-traveled' overlay above it grows behind the replay marker
+    // in the normal colors, revealing the route as it's driven (or scrubbed).
     map.addLayer({
       id: 'selected-solid', type: 'line', source: 'selected-route',
+      filter: ['!=', ['get', 'dashed'], true],
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': ['get', 'colorDim'], 'line-opacity': 0.95, 'line-width': SELECTED_LINE_WIDTH },
+    });
+    map.addLayer({
+      id: 'selected-dashed', type: 'line', source: 'selected-route',
+      filter: ['==', ['get', 'dashed'], true],
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': ['get', 'colorDim'], 'line-opacity': 0.95, 'line-width': SELECTED_LINE_WIDTH, 'line-dasharray': [1.6, 1] },
+    });
+    map.addLayer({
+      id: 'traveled-solid', type: 'line', source: 'selected-traveled',
       filter: ['!=', ['get', 'dashed'], true],
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': ['get', 'color'], 'line-opacity': 0.95, 'line-width': SELECTED_LINE_WIDTH },
     });
     map.addLayer({
-      id: 'selected-dashed', type: 'line', source: 'selected-route',
+      id: 'traveled-dashed', type: 'line', source: 'selected-traveled',
       filter: ['==', ['get', 'dashed'], true],
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': ['get', 'color'], 'line-opacity': 0.95, 'line-width': SELECTED_LINE_WIDTH, 'line-dasharray': [1.6, 1] },
@@ -304,6 +340,19 @@ function initMap() {
   }
 
   window.addEventListener('resize', () => map.resize());
+
+  // The replay marker's CSS transition smooths its point-to-point steps,
+  // but MapLibre repositions markers through the same transform on every
+  // map frame — while the user pans/zooms, the eased marker visibly slides
+  // off the route and catches up afterwards. Suspend the easing for the
+  // whole gesture (movestart→moveend covers drags incl. inertia, zooms,
+  // and programmatic fitBounds animations alike).
+  map.on('movestart', () => {
+    mapInteracting = true;
+    const el = replayMarker?.getElement();
+    if (el) el.style.transition = 'none';
+  });
+  map.on('moveend', () => { mapInteracting = false; });
 
   // Drive selection: GPU hit-test the route layers within a 10px box around
   // the click (replaces the old delegated nearest-segment search). Hidden
@@ -705,12 +754,13 @@ function initFooter() {
     refreshReplayMarkerIcon();
   });
 
-  // Hide other drives setting
-  const hideChk = document.getElementById('chk-hide-other-drives');
+  // "Show other drives when viewing a drive" — inverted presentation of the
+  // stored hideOtherDrives flag, so existing preferences carry over as-is.
+  const showOthersChk = document.getElementById('chk-show-other-drives');
   hideOtherDrives = localStorage.getItem('hideOtherDrives') === 'true';
-  hideChk.checked = hideOtherDrives;
-  hideChk.addEventListener('change', () => {
-    hideOtherDrives = hideChk.checked;
+  showOthersChk.checked = !hideOtherDrives;
+  showOthersChk.addEventListener('change', () => {
+    hideOtherDrives = !showOthersChk.checked;
     localStorage.setItem('hideOtherDrives', String(hideOtherDrives));
     applyOtherDrivesVisibility();
   });
@@ -754,6 +804,18 @@ function initFooter() {
   mapLabelsChk.addEventListener('change', () => {
     showMapLabels = mapLabelsChk.checked;
     localStorage.setItem('showMapLabels', String(showMapLabels));
+    applyMapLabelsSetting();
+  });
+
+  // Same default-follow logic as initMap: unset road labels mirror the
+  // city-labels choice so pre-toggle opt-outs keep a label-free map.
+  const roadLabelsChk = document.getElementById('chk-show-road-labels');
+  const savedRoadLabelsChoice = localStorage.getItem('showRoadLabels');
+  showRoadLabels = savedRoadLabelsChoice != null ? savedRoadLabelsChoice !== 'false' : showMapLabels;
+  roadLabelsChk.checked = showRoadLabels;
+  roadLabelsChk.addEventListener('change', () => {
+    showRoadLabels = roadLabelsChk.checked;
+    localStorage.setItem('showRoadLabels', String(showRoadLabels));
     applyMapLabelsSetting();
   });
 
@@ -2625,6 +2687,22 @@ function buildDriveItem(drive) {
     ? `<span class="drive-source-chip">${sourceLabel}</span>`
     : '';
 
+  // Battery % at each end of the drive (BLE telemetry rolled up by the
+  // grouper), shown beside Departed/Arrived. Only drives recorded since the
+  // Sentry USB BLE update carry it; older history and imports omit it.
+  // Icon fill tracks the charge across the 7 glyphs the vendored font has
+  // (battery_android_frame_1..6 + _full; no 0/7 frames), and the color
+  // follows the car's convention: green, amber under 20%, red under 10%.
+  const battBadge = (pct) => {
+    if (pct == null) return '';
+    const lvl = Math.round((pct / 100) * 6);
+    const icon = lvl >= 6 ? 'battery_android_frame_full' : `battery_android_frame_${Math.max(1, lvl)}`;
+    const tone = pct < 10 ? ' jt-batt--red' : pct < 20 ? ' jt-batt--amber' : '';
+    return `<span class="jt-batt${tone}"><span class="material-icons">${icon}</span>${pct}%</span>`;
+  };
+  const battStart = battBadge(drive.batteryPctStart);
+  const battEnd = battBadge(drive.batteryPctEnd);
+
   // Place name if already resolved, else GPS coords as a fallback until
   // reverse-geocoding fills it in (see applyDriveLocations).
   const startPlace = drive._startName || gpsLabel(drive, 'origin');
@@ -2638,8 +2716,8 @@ function buildDriveItem(drive) {
         <span class="jt-time">${endTime}</span>
       </div>
       <div class="journey-labels">
-        <span class="jt-label">Departed${sourceChip}</span>
-        <span class="jt-label">Arrived</span>
+        <span class="jt-label">Departed${sourceChip}${battStart}</span>
+        <span class="jt-label">Arrived${battEnd}</span>
       </div>
       <div class="journey-locs">
         <span class="ep-place ep-place--start" data-ep="origin">${startPlace}</span>
@@ -2912,8 +2990,8 @@ function removeMarkers(arr) {
 
 // Circle DOM marker (start/end/FSD events) with a hover tooltip — replaces
 // L.circleMarker + bindTooltip. Anchored at its center like the old radius-
-// based markers.
-function makeDotMarker(latLng, { fill, radius = 7, strokeW = 2, opacity = 1, tooltip }) {
+// based markers. `label` centers a single letter inside the dot.
+function makeDotMarker(latLng, { fill, radius = 7, strokeW = 2, opacity = 1, tooltip, label, labelColor = '#fff' }) {
   const el = document.createElement('div');
   el.className = 'map-dot-marker';
   el.style.width = `${radius * 2}px`;
@@ -2921,6 +2999,14 @@ function makeDotMarker(latLng, { fill, radius = 7, strokeW = 2, opacity = 1, too
   el.style.background = fill;
   el.style.border = `${strokeW}px solid #fff`;
   if (opacity !== 1) el.style.opacity = String(opacity);
+  if (label) {
+    el.textContent = label;
+    el.style.color = labelColor;
+    el.style.font = `700 ${Math.round(radius * 1.2)}px/1 'Noto Sans', sans-serif`;
+    el.style.display = 'flex';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+  }
   if (tooltip) attachMapTooltip(el, tooltip);
   return new maplibregl.Marker({ element: el, anchor: 'center' })
     .setLngLat([latLng[1], latLng[0]])
@@ -3032,6 +3118,7 @@ function renderOverviewOnMap() {
   whenMapReady(() => {
     map.getSource('overview').setData({ type: 'FeatureCollection', features });
     map.getSource('selected-route').setData(EMPTY_FC);
+    map.getSource('selected-traveled').setData(EMPTY_FC);
     updateOverviewStyleState();
   });
 
@@ -3069,6 +3156,41 @@ function downsample(points, maxPoints) {
   return result;
 }
 
+// Darken a #rrggbb color — the not-yet-traveled route state. 0.45 keeps the
+// hue readable on both the Light and Dark basemaps while clearly receded.
+function dimColor(hex, factor = 0.45) {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (shift) => Math.round(((n >> shift) & 255) * factor)
+    .toString(16).padStart(2, '0');
+  return `#${ch(16)}${ch(8)}${ch(0)}`;
+}
+
+// Repaint the traveled part of the selected route (everything at or before
+// the replay marker) in its normal colors; the base layers underneath stay
+// dimmed. Runs every replay tick and scrub — slicing plus one small setData
+// is cheap, and scrubbing backwards just shrinks the overlay again.
+function updateReplayTrail(idx) {
+  if (!mapReady || !replayTrailCtx) return;
+  const { runs, latLngs, smooth } = replayTrailCtx;
+  const features = [];
+  for (const run of runs) {
+    if (run.from >= idx) break; // runs are in route order
+    const to = Math.min(run.to, idx);
+    let seg = latLngs.slice(run.from, to + 1);
+    if (seg.length < 2) continue;
+    // Chaikin preserves endpoints, so a smoothed partial run still ends
+    // exactly at the marker's current point.
+    if (smooth) seg = smoothLatLngsForDisplay(seg);
+    features.push({
+      type: 'Feature',
+      properties: { color: run.color, dashed: run.dashed, w: run.w },
+      geometry: { type: 'LineString', coordinates: seg.map((p) => [p[1], p[0]]) },
+    });
+    if (run.to >= idx) break;
+  }
+  map.getSource('selected-traveled').setData({ type: 'FeatureCollection', features });
+}
+
 function drawSelectedDrive(drive) {
   removeMarkers(selectedMarkers);
   removeMarkers(fsdEventMarkers);
@@ -3077,7 +3199,11 @@ function drawSelectedDrive(drive) {
   if (!pts || pts.length < 2) {
     // Nothing drawable — still clear the previous drive's highlighted route
     // (the old per-layer code cleared it as a side effect of clearLayers).
-    whenMapReady(() => map.getSource('selected-route').setData(EMPTY_FC));
+    replayTrailCtx = null;
+    whenMapReady(() => {
+      map.getSource('selected-route').setData(EMPTY_FC);
+      map.getSource('selected-traveled').setData(EMPTY_FC);
+    });
     return;
   }
 
@@ -3092,15 +3218,21 @@ function drawSelectedDrive(drive) {
   // The route goes into the 'selected-route' GeoJSON source as one feature
   // per styling run; the solid/dashed layer pair reads color/width/dash from
   // the feature properties. driveId lets the map click handler treat clicks
-  // on the highlighted route as a toggle.
+  // on the highlighted route as a toggle. The base route renders DIMMED
+  // (colorDim) — updateReplayTrail re-paints the traveled part in the normal
+  // color as the replay marker passes, using the index ranges in trailRuns.
   const features = [];
-  const pushSeg = (lls, color, dashed, w) => {
-    if (!Array.isArray(lls) || lls.length < 2) return;
+  const trailRuns = [];
+  const pushSeg = (from, to, color, dashed, w) => {
+    if (to - from < 1) return;
+    let seg = latLngs.slice(from, to + 1);
+    if (isTessie) seg = smoothLatLngsForDisplay(seg);
     features.push({
       type: 'Feature',
-      properties: { driveId: drive.id, color, dashed, w },
-      geometry: { type: 'LineString', coordinates: lls.map((p) => [p[1], p[0]]) },
+      properties: { driveId: drive.id, color, colorDim: dimColor(color), dashed, w },
+      geometry: { type: 'LineString', coordinates: seg.map((p) => [p[1], p[0]]) },
     });
+    trailRuns.push({ from, to, color, dashed, w });
   };
 
   if (hasFSD) {
@@ -3111,9 +3243,9 @@ function drawSelectedDrive(drive) {
       let j = i + 1;
       while (j < pts.length && (fsd[j] !== 0) === engaged) j++;
 
-      const seg = latLngs.slice(i, Math.min(j + 1, pts.length));
       pushSeg(
-        isTessie ? smoothLatLngsForDisplay(seg) : seg,
+        i,
+        Math.min(j, pts.length - 1),
         engaged ? '#22cc55' : (isTessie ? '#a855f7' : '#2266cc'),
         isTessie,
         5
@@ -3122,13 +3254,15 @@ function drawSelectedDrive(drive) {
     }
   } else if (isTessie) {
     // Tessie drive with no per-point FSD data (CSV import or missing path).
-    pushSeg(smoothLatLngsForDisplay(latLngs), '#a855f7', true, 5);
+    pushSeg(0, latLngs.length - 1, '#a855f7', true, 5);
   } else {
-    pushSeg(latLngs, '#2266cc', false, 4);
+    pushSeg(0, latLngs.length - 1, '#2266cc', false, 4);
   }
 
+  replayTrailCtx = { runs: trailRuns, latLngs, smooth: isTessie };
   whenMapReady(() => {
     map.getSource('selected-route').setData({ type: 'FeatureCollection', features });
+    map.getSource('selected-traveled').setData(EMPTY_FC); // nothing traveled yet
   });
 
   // Start / end markers
@@ -3140,10 +3274,12 @@ function drawSelectedDrive(drive) {
     for (const ev of drive.fsdEvents) {
       const disengage = ev.type === 'disengagement';
       fsdEventMarkers.push(makeDotMarker([ev.lat, ev.lng], {
-        fill: disengage ? '#ff8c00' : '#ffdd00',
-        radius: 5,
-        strokeW: 1,
+        fill: disengage ? '#ef4444' : '#ffdd00',
+        radius: 8,
+        strokeW: 1.5,
         opacity: 0.9,
+        label: disengage ? 'D' : 'A',
+        labelColor: disengage ? '#fff' : '#1f2937',
         tooltip: disengage ? 'FSD Disengagement' : 'Accelerator Override',
       }));
     }
@@ -3297,16 +3433,21 @@ function updateReplayPosition(idx, snap = false) {
   const pt = pts[idx];
 
   // Move marker with a smooth transition on the marker element (MapLibre
-  // positions it via a CSS transform, same technique Leaflet used).
+  // positions it via a CSS transform, same technique Leaflet used) — except
+  // while the map itself is moving, when MapLibre drives that transform
+  // every frame and easing it would drag the marker off the route.
   if (replayMarker) {
     const el = replayMarker.getElement();
-    if (el && replayPlaying) {
+    if (el && replayPlaying && !mapInteracting) {
       el.style.transition = `transform ${REPLAY_BASE_MS / replaySpeed}ms linear`;
     } else if (el) {
       el.style.transition = 'none';
     }
     replayMarker.setLngLat([pt[1], pt[0]]);
   }
+
+  // Reveal the traveled portion of the route up to this point.
+  updateReplayTrail(idx);
 
   // Rotate arrow to face the direction the front of the car points.
   const arrow = document.getElementById('replay-arrow');
@@ -3723,6 +3864,8 @@ function cleanupReplay() {
   stopReplay();
   replayDrive = null;
   replayMarker = null;
+  replayTrailCtx = null;
+  whenMapReady(() => map.getSource('selected-traveled').setData(EMPTY_FC));
   document.getElementById('replay-bar').classList.add('hidden');
 }
 

@@ -551,8 +551,12 @@ function buildDriveStats(clips, idx) {
   // sub-segments isn't read twice. Stored verbatim — Tesla's reverse-geocoder
   // picked the label (street address, business name, etc.); no post-processing.
   // Absent on pre-BLE data, non-telemetry Pis, and imported drives.
+  // Battery % (BLE, same provenance) follows the identical convention:
+  // first non-null batteryPctStart / last non-null batteryPctEnd.
   let locationNameStart = null;
   let locationNameEnd = null;
+  let batteryPctStart = null;
+  let batteryPctEnd = null;
   const seenTelemetryFiles = new Set();
   for (const clip of clips) {
     if (seenTelemetryFiles.has(clip.file)) continue;
@@ -561,6 +565,10 @@ function buildDriveStats(clips, idx) {
       locationNameStart = clip.locationNameStart;
     }
     if (clip.locationNameEnd != null) locationNameEnd = clip.locationNameEnd;
+    if (batteryPctStart == null && clip.batteryPctStart != null) {
+      batteryPctStart = clip.batteryPctStart;
+    }
+    if (clip.batteryPctEnd != null) batteryPctEnd = clip.batteryPctEnd;
   }
 
   return {
@@ -608,6 +616,8 @@ function buildDriveStats(clips, idx) {
     ...(firstClip.tessieAutopilotPercent != null ? { tessieAutopilotPercent: firstClip.tessieAutopilotPercent } : {}),
     ...(locationNameStart != null ? { locationNameStart } : {}),
     ...(locationNameEnd != null ? { locationNameEnd } : {}),
+    ...(batteryPctStart != null ? { batteryPctStart } : {}),
+    ...(batteryPctEnd != null ? { batteryPctEnd } : {}),
     ...(geocodeStartPoint ? { geocodeStartPoint } : {}),
     ...(geocodeEndPoint ? { geocodeEndPoint } : {}),
   };

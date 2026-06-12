@@ -612,6 +612,19 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 .journey-labels .jt-label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 
+/* Battery % beside Departed/Arrived (BLE telemetry; absent on old drives). */
+.jt-batt {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.jt-batt .material-icons { font-size: 12px; color: var(--success); }
+.jt-batt--amber .material-icons { color: #f59e0b; }
+.jt-batt--red .material-icons { color: var(--danger); }
+
 .journey-locs { display: flex; justify-content: space-between; gap: 12px; }
 .journey-locs .ep-place {
   flex: 0 1 auto;
@@ -874,9 +887,11 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   background: var(--map-glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  padding: 10px;
+  /* 32px glyph + 15px padding + 1px borders = 64px box, matching the
+     layers control. */
+  padding: 15px;
   color: var(--text);
-  font-size: 24px;
+  font-size: 32px;
   font-weight: 600;
   line-height: 1;
   display: flex;
@@ -889,15 +904,30 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   transition: background 0.15s, border-color 0.15s;
   outline: none;
 }
+#btn-back-overview .material-icons {
+  /* The base .material-icons rule pins 24px; restate the 32px glyph here
+     so the box actually reaches 64px. */
+  font-size: 32px;
+}
 #btn-back-overview:hover {
   border-color: rgba(96, 165, 250, 0.5);
 }
+/* The back button replaces the zoom buttons while a drive is open — its
+   translucent glass would otherwise show them blurred underneath and
+   sticking out past its edges. */
+#map-container:has(#btn-back-overview:not(.hidden)) .maplibregl-ctrl-top-left {
+  visibility: hidden;
+}
 
 /* ── Map Layer Control (custom radio list, top right of the map) ────────── */
+/* Collapsed to a layers icon (like the old Leaflet control); hovering the
+   control swaps the icon for the radio list. */
 #map-layers-control {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  /* Mirrors #btn-back-overview's 14px corner offset and 46px box (44px
+     toggle + 1px borders vs the button's 24px glyph + 10px padding). */
+  top: 14px;
+  right: 14px;
   z-index: 5;
   background: var(--map-glass-bg);
   border: 1px solid var(--glass-border);
@@ -906,13 +936,27 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   color: var(--text);
-  padding: 10px 12px;
+  padding: 0;
 }
+.map-layers-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 62px + the control's 1px borders = 64px box, matching the back button. */
+  width: 62px;
+  height: 62px;
+  font-size: 32px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+#map-layers-control:hover { padding: 10px 12px; }
+#map-layers-control:hover .map-layers-toggle { display: none; }
+#map-layers-control:hover label { display: flex; }
 #map-layers-control label {
+  display: none; /* collapsed; the :hover rule above expands the list */
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
-  display: flex;
   align-items: center;
   padding: 6px 12px;
   margin: 2px 0;

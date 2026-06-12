@@ -1,12 +1,23 @@
 {
   "versions": [
     {
+      "version": "1.3.2",
+      "date": "2026-06-12",
+      "title": "Battery on Drive Cards & Replay Progress Trail",
+      "changes": [
+        { "type": "feature", "description": "Drive cards now show the battery charge beside Departed and Arrived when your Sentry USB device recorded it — available on drives captured since its BLE vehicle-data update. Older history and imported drives simply omit it." },
+        { "type": "feature", "description": "Drive replay paints progress along the route — the path ahead of the marker is dimmed and takes on its normal color as the marker passes. Scrubbing moves the boundary both ways, and the FSD green/manual blue segments stay distinct in both states." },
+        { "type": "improvement", "description": "Map UI settings: city labels and road labels now have separate toggles, and the old \"Hide other drives\" checkbox is now the clearer \"Show other drives when viewing a drive\"." }
+      ]
+    },
+    {
       "version": "1.3.1",
       "date": "2026-06-11",
       "title": "Map Overview Readability",
       "changes": [
         { "type": "improvement", "description": "Imported drives no longer drown out dashcam drives on the map overview — they draw underneath, fainter and thinner, so your recorded drive lines stay readable." },
-        { "type": "improvement", "description": "Drive lines on the overview are slightly thicker — easier to see and easier to click." }
+        { "type": "improvement", "description": "Drive lines on the overview are slightly thicker — easier to see and easier to click." },
+        { "type": "improvement", "description": "Street names are now shown on all map layers — Light, Dark, and Satellite — with a new \"Show road labels\" toggle in Map UI, independent of the city-labels toggle." }
       ]
     },
     {
