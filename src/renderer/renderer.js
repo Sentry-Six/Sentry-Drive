@@ -175,14 +175,25 @@ function initMap() {
     if (showRoadLabels) rules.push('s.t%3A3%7Cs.e%3Al%7Cp.v%3Aon', 's.t%3A49%7Cs.e%3Al%7Cp.v%3Aon');
     return rules.join(',');
   };
+  // Labels are NOT baked into the basemap tiles: they render on a separate
+  // transparent overlay (lyrs=h with all geometry hidden) layered ABOVE the
+  // drive lines, so city and street names stay readable over dense route
+  // areas. The base tiles get every label stripped instead.
+  const ALL_LABELS_OFF = 's.e%3Al%7Cp.v%3Aoff';
   const gmapsUrls = () => ({
-    'Dark': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${GMAPS_NIGHT_RULES},${gmapsLabelRules()}`,
-    'Light': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${gmapsLabelRules()}`,
-    // Hybrid (lyrs=y) instead of bare satellite (lyrs=s): same imagery plus
-    // the label overlay, filtered like Light/Dark. Only the hybrid road
-    // GEOMETRY overlay (s.t:3|s.e:g) is hidden — street names stay.
-    'Satellite': `https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&apistyle=${gmapsLabelRules()},s.t%3A3%7Cs.e%3Ag%7Cp.v%3Aoff`,
+    'Dark': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${GMAPS_NIGHT_RULES},${ALL_LABELS_OFF}`,
+    'Light': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${ALL_LABELS_OFF}`,
+    'Satellite': `https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}`,
   });
+  // Dark re-applies the night label colors on the overlay (white text with
+  // a dark halo); Light/Satellite keep lyrs=h's default label styling.
+  const NIGHT_LABEL_TEXT = 's.e%3Al.t.f%7Cp.c%3A%23ffffff,s.e%3Al.t.s%7Cp.c%3A%23242f3e';
+  const gmapsLabelOverlayUrl = () => {
+    const rules = [];
+    if (currentBaseLayer === 'Dark') rules.push(NIGHT_LABEL_TEXT);
+    rules.push('s.e%3Ag%7Cp.v%3Aoff', gmapsLabelRules());
+    return `https://mt1.google.com/vt/lyrs=h&x={x}&y={y}&z={z}&apistyle=${rules.join(',')}`;
+  };
   // Migrate layer choices saved under the old names.
   const LAYER_RENAMES = { 'Google Maps': 'Light', 'Google Dark': 'Dark' };
   let savedLayer = localStorage.getItem('mapLayer');
@@ -214,30 +225,46 @@ function initMap() {
           maxzoom: 20,
           attribution: '&copy; Google',
         },
+        'labels-overlay': {
+          type: 'raster',
+          tiles: [gmapsLabelOverlayUrl()],
+          tileSize: 256,
+          maxzoom: 20,
+        },
       },
+      // The labels-overlay LAYER is added in the 'load' handler, after the
+      // route layers, so labels draw above the drive lines.
       layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
     },
   });
   map.touchZoomRotate.disableRotation();
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
 
-  // Swap the basemap tiles in place (layer switch / labels toggle).
-  const setBasemapTiles = (url) => whenMapReady(() => {
-    const src = map.getSource('basemap');
+  // Swap raster tiles in place (layer switch / labels toggle).
+  const setRasterTiles = (sourceId, url, beforeLayerId) => whenMapReady(() => {
+    const src = map.getSource(sourceId);
     if (src && typeof src.setTiles === 'function') {
       src.setTiles([url]);
       return;
     }
-    // Fallback for older MapLibre builds: rebuild the raster source
-    // underneath the route layers.
-    if (map.getLayer('basemap')) map.removeLayer('basemap');
-    if (src) map.removeSource('basemap');
-    map.addSource('basemap', { type: 'raster', tiles: [url], tileSize: 256, maxzoom: 20, attribution: '&copy; Google' });
-    map.addLayer({ id: 'basemap', type: 'raster', source: 'basemap' }, 'overview-dim');
+    // Fallback for older MapLibre builds: rebuild the raster source at its
+    // place in the layer order.
+    if (map.getLayer(sourceId)) map.removeLayer(sourceId);
+    if (src) map.removeSource(sourceId);
+    map.addSource(sourceId, {
+      type: 'raster', tiles: [url], tileSize: 256, maxzoom: 20,
+      ...(sourceId === 'basemap' ? { attribution: '&copy; Google' } : {}),
+    });
+    map.addLayer({ id: sourceId, type: 'raster', source: sourceId }, beforeLayerId);
   });
+  // Basemap sits under the route layers; the label overlay above them.
+  const applyMapTiles = () => {
+    setRasterTiles('basemap', gmapsUrls()[currentBaseLayer], 'overview-dim');
+    setRasterTiles('labels-overlay', gmapsLabelOverlayUrl());
+  };
 
-  // Re-point the basemap at label-on/off URLs when the setting changes.
-  applyMapLabelsSetting = () => setBasemapTiles(gmapsUrls()[currentBaseLayer]);
+  // Re-point both rasters when the label settings change.
+  applyMapLabelsSetting = applyMapTiles;
 
   // Base-layer switcher: custom control replacing L.control.layers with the
   // same behavior (top right, collapsed to a layers icon, expands to the
@@ -259,7 +286,7 @@ function initMap() {
       if (!input.checked) return;
       currentBaseLayer = name;
       localStorage.setItem('mapLayer', name);
-      setBasemapTiles(gmapsUrls()[name]);
+      applyMapTiles();
     });
     const span = document.createElement('span');
     span.textContent = name;
@@ -326,6 +353,8 @@ function initMap() {
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': ['get', 'color'], 'line-opacity': 0.95, 'line-width': SELECTED_LINE_WIDTH, 'line-dasharray': [1.6, 1] },
     });
+    // City/street labels above every drive line (transparent overlay tiles).
+    map.addLayer({ id: 'labels-overlay', type: 'raster', source: 'labels-overlay' });
     mapReady = true;
     for (const fn of pendingMapTasks.splice(0)) fn();
   });
@@ -2245,7 +2274,7 @@ function buildDriveTagsHtml(drive) {
   const tags = drive.tags ?? [];
   let html = `<div class="info-tags-list" id="info-tags-list">`;
   for (const t of tags) {
-    html += `<span class="tag-pill tag-removable" data-tag="${t}">${t}<button class="tag-remove" data-tag="${t}">&times;</button></span>`;
+    html += `<span class="tag-pill tag-removable" data-tag="${escapeHtml(t)}">${escapeHtml(t)}<button class="tag-remove" data-tag="${escapeHtml(t)}">&times;</button></span>`;
   }
   html += `<button class="tag-add-btn" id="btn-add-tag" title="Add tag">+</button>`;
   html += `</div>`;
@@ -2679,7 +2708,7 @@ function buildDriveItem(drive) {
     : '';
 
   const tagPills = (drive.tags ?? []).map((t) =>
-    `<span class="tag-pill tag-removable" data-tag="${t}">${t}<button class="tag-remove" data-tag="${t}">&times;</button></span>`
+    `<span class="tag-pill tag-removable" data-tag="${escapeHtml(t)}">${escapeHtml(t)}<button class="tag-remove" data-tag="${escapeHtml(t)}">&times;</button></span>`
   ).join('');
 
   const sourceLabel = SOURCE_LABELS[drive.source];
@@ -2704,9 +2733,11 @@ function buildDriveItem(drive) {
   const battEnd = battBadge(drive.batteryPctEnd);
 
   // Place name if already resolved, else GPS coords as a fallback until
-  // reverse-geocoding fills it in (see applyDriveLocations).
-  const startPlace = drive._startName || gpsLabel(drive, 'origin');
-  const endPlace = drive._endName || gpsLabel(drive, 'dest');
+  // reverse-geocoding fills it in (see applyDriveLocations). Escaped: names
+  // come from outside the app (Tesla's geocoder via the data file, Nominatim)
+  // and must never be interpreted as markup.
+  const startPlace = escapeHtml(drive._startName || gpsLabel(drive, 'origin'));
+  const endPlace = escapeHtml(drive._endName || gpsLabel(drive, 'dest'));
 
   item.innerHTML = `
     <div class="drive-journey">
@@ -2872,7 +2903,7 @@ function showListTagSuggestions(drive, item, query) {
   }
 
   container.classList.remove('hidden');
-  container.innerHTML = filtered.map((t) => `<div class="tag-suggestion" data-tag="${t}">${t}</div>`).join('');
+  container.innerHTML = filtered.map((t) => `<div class="tag-suggestion" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</div>`).join('');
 
   container.querySelectorAll('.tag-suggestion').forEach((el) => {
     el.addEventListener('click', (e) => {
@@ -2986,6 +3017,9 @@ function deselectDrive() {
 function removeMarkers(arr) {
   arr.forEach((m) => m.remove());
   arr.length = 0;
+  // A marker removed mid-hover never fires mouseleave, which would orphan
+  // its tooltip on the map forever — sweep any that are showing.
+  document.querySelectorAll('#map .map-tooltip').forEach((t) => t.remove());
 }
 
 // Circle DOM marker (start/end/FSD events) with a hover tooltip — replaces
@@ -3089,6 +3123,7 @@ function updateOverviewStyleState() {
 function renderOverviewOnMap() {
   removeMarkers(selectedMarkers);
   removeMarkers(fsdEventMarkers);
+  replayTrailCtx = null; // release the last drive's trail geometry
   selectedDriveId = null;
   document.getElementById('map-legend').classList.add('hidden');
 
@@ -3891,7 +3926,7 @@ function renderTagFilter() {
   container.classList.remove('hidden');
   let html = `<button class="tag-filter-btn${activeTagFilter === '' ? ' active' : ''}" data-tag="">All</button>`;
   for (const t of allTags) {
-    html += `<button class="tag-filter-btn${activeTagFilter === t ? ' active' : ''}" data-tag="${t}">${t}</button>`;
+    html += `<button class="tag-filter-btn${activeTagFilter === t ? ' active' : ''}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`;
   }
   container.innerHTML = html;
 
@@ -3972,7 +4007,7 @@ function showTagSuggestions(drive, query) {
   }
 
   container.classList.remove('hidden');
-  container.innerHTML = filtered.map((t) => `<div class="tag-suggestion" data-tag="${t}">${t}</div>`).join('');
+  container.innerHTML = filtered.map((t) => `<div class="tag-suggestion" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</div>`).join('');
 
   container.querySelectorAll('.tag-suggestion').forEach((el) => {
     el.addEventListener('click', (e) => {

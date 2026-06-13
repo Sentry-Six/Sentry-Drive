@@ -153,6 +153,21 @@ async function main() {
   console.log(`Cutoff: ${CUTOFF_DATE} (front camera only)`);
   console.log();
 
+  // Sweep stale temp files from crashed or killed runs — the atomic writer
+  // renames its tmp away on success, so anything still matching the pattern
+  // is dead weight from an interrupted write.
+  try {
+    const outDir = path.dirname(OUTPUT_PATH);
+    const outBase = path.basename(OUTPUT_PATH);
+    for (const f of await readdir(outDir)) {
+      if (f.startsWith(`${outBase}.`) && f.endsWith('.tmp')) {
+        await unlink(path.join(outDir, f)).catch(() => {});
+      }
+    }
+  } catch {
+    // Output dir may not exist yet — the writer creates the file later.
+  }
+
   // Load existing data if available (for incremental processing).
   // In --reprocess-all mode we still read the file so user-authored driveTags
   // survive a reprocess, but processedFiles/routes are discarded so every
@@ -211,10 +226,12 @@ async function main() {
   // (growing) dataset more and more often relative to runtime — O(N²) total
   // checkpoint I/O that could rival the extraction itself on big libraries.
   // One write per minute keeps crash-loss bounded at ~60s of work regardless
-  // of library size. `checkpointBusy` guarantees writes never overlap.
+  // of library size. `checkpointBusy` guarantees checkpoints never overlap
+  // each other; `pendingCheckpoint` lets the final save wait for the last one.
   const CHECKPOINT_MS = 60_000;
   let lastCheckpointMs = Date.now();
   let checkpointBusy = false;
+  let pendingCheckpoint = null;
 
   const processedFiles = [...(existingData.processedFiles || [])];
   const routeMap = new Map();
@@ -264,7 +281,7 @@ async function main() {
       checkpointBusy = true;
       const routes = Array.from(routeMap.values());
       const doneAt = totalDone;
-      streamWriteJSON(OUTPUT_PATH, processedFiles, routes, driveTags)
+      pendingCheckpoint = streamWriteJSON(OUTPUT_PATH, processedFiles, routes, driveTags)
         .then(() => console.log(`\n  Checkpoint saved (${doneAt} files)`))
         .catch(() => {})
         .finally(() => {
@@ -276,6 +293,13 @@ async function main() {
 
   // Run the shared-queue pool
   await runWorkerPool(newFiles, poolSize, onResult);
+
+  // A checkpoint that fired on one of the last files can still be writing.
+  // Wait it out: the final save below must be the LAST writer, both so the
+  // two never interleave and so a stale checkpoint can't land on top of the
+  // complete final file. (Skipping this once crashed the final rename with
+  // ENOENT when the checkpoint consumed the shared tmp file first.)
+  if (pendingCheckpoint) await pendingCheckpoint;
 
   const routes = Array.from(routeMap.values());
 
@@ -325,18 +349,6 @@ async function main() {
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`\nDone in ${elapsed}s`);
-
-  // Also copy to Sentry USB location so it can be loaded
-  const sentryDataPath = path.join(
-    "C:", "Users", "scott", "Documents", "Sentry-Six-Assets", "Sentry-USB",
-    "drive-data.json"
-  );
-  try {
-    await streamWriteJSON(sentryDataPath, processedFiles, routes, driveTags);
-    console.log(`Also saved to ${sentryDataPath}`);
-  } catch {
-    // Not critical
-  }
 }
 
 function routeForDisk(r) {
@@ -351,8 +363,12 @@ function routeForDisk(r) {
 // target, so a crash mid-checkpoint can't leave a truncated drive-data.json
 // and concurrent readers never see a half-written file. Honoring `drain`
 // keeps memory flat instead of buffering the whole serialized dataset.
+// The tmp name carries a per-call sequence number: a pid-only name once let
+// an overlapping checkpoint and final save share (and corrupt) one tmp file,
+// crashing the rename with ENOENT when the other call consumed it first.
+let writeSeq = 0;
 async function streamWriteJSON(filePath, processedFiles, routes, driveTags) {
-  const tmpPath = `${filePath}.${process.pid}.tmp`;
+  const tmpPath = `${filePath}.${process.pid}.${++writeSeq}.tmp`;
   await new Promise((resolve, reject) => {
     const ws = createWriteStream(tmpPath);
     let settled = false;

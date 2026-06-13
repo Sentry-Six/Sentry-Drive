@@ -1,13 +1,25 @@
 {
   "versions": [
     {
+      "version": "1.3.3",
+      "date": "2026-06-12",
+      "title": "Processing Reliability & Hardening",
+      "changes": [
+        { "type": "fix", "description": "Fixed a crash at the end of processing (\"ENOENT: no such file or directory, rename ... drive-data.json.tmp\") — a progress checkpoint still writing when processing finished could collide with the final save, killing the run and potentially corrupting drive-data.json. Checkpoints and the final save are now strictly ordered and never share files. If a previous run hit this, simply process again." },
+        { "type": "fix", "description": "Place names and tags are now safely escaped in the drive list — a location label or tag containing HTML characters could break the card layout or be interpreted as markup." },
+        { "type": "improvement", "description": "Processing sweeps leftover temporary files from previously crashed or interrupted runs." },
+        { "type": "fix", "description": "Processing no longer attempts a leftover debug copy of drive-data.json to a developer's local path at the end of every run." }
+      ]
+    },
+    {
       "version": "1.3.2",
       "date": "2026-06-12",
       "title": "Battery on Drive Cards & Replay Progress Trail",
       "changes": [
         { "type": "feature", "description": "Drive cards now show the battery charge beside Departed and Arrived when your Sentry USB device recorded it — available on drives captured since its BLE vehicle-data update. Older history and imported drives simply omit it." },
         { "type": "feature", "description": "Drive replay paints progress along the route — the path ahead of the marker is dimmed and takes on its normal color as the marker passes. Scrubbing moves the boundary both ways, and the FSD green/manual blue segments stay distinct in both states." },
-        { "type": "improvement", "description": "Map UI settings: city labels and road labels now have separate toggles, and the old \"Hide other drives\" checkbox is now the clearer \"Show other drives when viewing a drive\"." }
+        { "type": "improvement", "description": "Map UI settings: city labels and road labels now have separate toggles, and the old \"Hide other drives\" checkbox is now the clearer \"Show other drives when viewing a drive\"." },
+        { "type": "improvement", "description": "City and street labels now draw above the drive lines, so place names stay readable over dense route areas on every map layer." }
       ]
     },
     {
