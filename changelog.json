@@ -1,6 +1,14 @@
 {
   "versions": [
     {
+      "version": "1.3.4",
+      "date": "2026-06-13",
+      "title": "Universal Drive Stats (Sentry USB Parity)",
+      "changes": [
+        { "type": "fix", "description": "A clip where the car only sat parked (no movement) is no longer counted as a zero-mile drive, matching Sentry USB exactly so the two apps report the same lifetime drive count and total time. Your count and time may tick down slightly; distance is unaffected." }
+      ]
+    },
+    {
       "version": "1.3.3",
       "date": "2026-06-12",
       "title": "Processing Reliability & Hardening",

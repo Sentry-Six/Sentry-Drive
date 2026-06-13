@@ -2,12 +2,10 @@
 // grouper suite (Sentry-USB-Rusty/crates/drives/src/grouper.rs `#[cfg(test)]`).
 //
 // These run against Drive's real public entry point, groupIntoDrives, which
-// MATERIALIZES the drive list (one drive per group). Where a Rust test targets
-// the server's fast summary-count path, we port its intent against the
-// materialized result and call out the known fast-path-vs-materialized
-// difference (the only one: an all-parked clip → 1 materialized drive here,
-// vs 0 from Rust's 0.6 count-only optimization; Rust's own materialized path
-// also counts it as 1 — see grouper.rs:1774).
+// MATERIALIZES the drive list (one drive per group). Drive now matches Rust's
+// summary path exactly — including dropping a fully-parked group (no driving →
+// no drive; Rust split_summary_by_gear_state, grouper.rs:1893). There is no
+// remaining known fast-path-vs-materialized divergence.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -145,15 +143,15 @@ test('no internal park gap keeps one drive', () => {
   assert.equal(drives.length, 1);
 });
 
-test('all-parked clip → 1 materialized drive', () => {
-  // Drive materializes the all-parked group as a single drive (the
-  // splitByGearState [group] fallback), matching Rust's materialized path
-  // (grouper.rs:1774 "count as 1"). Rust's FAST summary endpoint returns 0
-  // via its 0.6 count-only shortcut — that approximation is not replicated.
+test('all-parked clip → no drive (Rust split_summary_by_gear_state)', () => {
+  // An isolated, fully-parked clip is a stationary recording, not a trip:
+  // splitByGearState returns [] for an all-Park group, so groupIntoDrives
+  // emits nothing — matching Rust's summary path (grouper.rs:1893, "return
+  // nothing so drives_count stays 0").
   const drives = drivesOf([
     clipWithGearRuns('/cam/2025-01-15_12-00-00-front.mp4', [[GEAR_PARK, 60]]),
   ]);
-  assert.equal(drives.length, 1);
+  assert.equal(drives.length, 0);
 });
 
 test('a fully-parked clip between two drives yields two drives', () => {

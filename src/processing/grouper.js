@@ -201,7 +201,11 @@ function splitByGearState(group) {
     }
   }
   if (current.length > 0) result.push(current);
-  if (result.length === 0) return [group];
+  // Every segment was parked → no driving happened, so emit no drive.
+  // Mirrors Rust split_summary_by_gear_state (grouper.rs:1893, "return
+  // nothing so drives_count stays 0"). An isolated all-Park clip is a
+  // stationary recording, not a trip.
+  if (result.length === 0) return [];
   return result;
 }
 
@@ -297,7 +301,10 @@ function splitByGearStateLegacy(group) {
     }
   }
   if (current.length > 0) result.push(current);
-  if (result.length === 0) return [group];
+  // All clips were mostly-parked → drop, matching Rust
+  // split_summary_by_gear_state_legacy (a single clip is still kept by the
+  // group.length <= 1 guard above; only the multi-clip all-park case drops).
+  if (result.length === 0) return [];
   return result;
 }
 
