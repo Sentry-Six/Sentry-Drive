@@ -9,6 +9,7 @@ import { createWriteStream } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { groupIntoDrives, encodeByteField } from "./grouper.js";
+import { fsyncFile, tempLooksComplete } from "../shared/atomic-write.cjs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -408,6 +409,15 @@ async function streamWriteJSON(filePath, processedFiles, routes, driveTags) {
       }
     })();
   });
+
+  // Durability + integrity gate before the rename (same as writeDriveDataJSON):
+  // flush the temp to disk, then refuse to let a truncated checkpoint replace
+  // good data. fsync is best-effort (non-fatal on filesystems that reject it).
+  try { await fsyncFile(tmpPath); } catch { /* non-fatal on some filesystems */ }
+  if (!tempLooksComplete(tmpPath)) {
+    await unlink(tmpPath).catch(() => {});
+    throw new Error('drive-data write failed its integrity check (incomplete temp); original file left intact');
+  }
 
   // Windows throws transient EPERM/EBUSY while a reader holds the destination
   // open — and the viewer's streaming read of a large drive-data.json can hold

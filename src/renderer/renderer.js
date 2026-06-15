@@ -2061,6 +2061,10 @@ async function reloadDrivesAfterWrite() {
       drives = reloaded.drives;
       overviewRoutes = reloaded.overviewRoutes ?? [];
       refreshAllTags(reloaded.driveTags ?? {});
+      // Let the loading overlay paint one frame before the synchronous
+      // re-render (building the card list + map layers) briefly blocks the
+      // renderer — otherwise the overlay appears frozen during the rebuild.
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       renderTagFilter();
       renderDriveStats(drives, reloaded);
       renderDriveList(drives);
@@ -2623,7 +2627,19 @@ function renderDriveStats(drives, meta) {
   panel.classList.remove('hidden');
 }
 
-function renderDriveList(drives) {
+// Bumped on every call so a chunked render in progress aborts the moment a
+// newer render starts (load, filter, removal) — same stale-guard pattern as
+// previewSeq/validateSeq. Without it two overlapping chunked renders could
+// interleave cards.
+let _driveListRenderSeq = 0;
+
+// Building thousands of drive cards at once blocked the renderer for a second
+// or more (the freeze after a large import/reload). Build in batches, yielding
+// a frame between them so the UI stays responsive and the list fills in
+// progressively. Small lists (< one batch) still render in a single synchronous
+// pass — no behavior change for the common case.
+async function renderDriveList(drives) {
+  const seq = ++_driveListRenderSeq;
   const list = document.getElementById('drives-list');
   list.innerHTML = '';
 
@@ -2643,18 +2659,30 @@ function renderDriveList(drives) {
     return;
   }
 
+  const BATCH = 100;
   let currentDate = '';
-  for (const drive of sorted) {
+  let frag = document.createDocumentFragment();
+  for (let i = 0; i < sorted.length; i++) {
+    const drive = sorted[i];
     const driveDate = drive.startTime.slice(0, 10);
     if (driveDate !== currentDate) {
       currentDate = driveDate;
       const header = document.createElement('div');
       header.className = 'drive-date-header';
       header.textContent = formatDateHeader(driveDate);
-      list.appendChild(header);
+      frag.appendChild(header);
     }
-    list.appendChild(buildDriveItem(drive));
+    frag.appendChild(buildDriveItem(drive));
+
+    // Flush + yield every BATCH so the renderer can paint between chunks.
+    if ((i + 1) % BATCH === 0 && i + 1 < sorted.length) {
+      list.appendChild(frag);
+      frag = document.createDocumentFragment();
+      await new Promise((r) => requestAnimationFrame(r));
+      if (seq !== _driveListRenderSeq) return; // superseded by a newer render
+    }
   }
+  if (frag.childNodes.length) list.appendChild(frag);
 }
 
 function formatDateHeader(dateStr) {

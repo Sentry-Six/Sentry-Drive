@@ -23,6 +23,7 @@ let driveDetailCache = null;
 // here would crash with ERR_STRING_TOO_LONG on >512 MiB files — the shared
 // reader fixes that everywhere at once.
 const { readDriveData } = require('./drive-data-reader.cjs');
+const { fsyncFile, tempLooksComplete } = require('../shared/atomic-write.cjs');
 
 // ─── Logging ─────────────────────────────────────────────────────────────────
 // Terminal echo + in-memory buffer; exported from Settings → Support → Logs.
@@ -561,13 +562,22 @@ function renameWithRetry(from, to, attempts = 12) {
 // The API imports fetch for minutes; merging against a re-read of the file
 // (rather than the snapshot taken before the fetch) keeps writes made in the
 // meantime — tag edits, drive removals — from being clobbered.
-function saveImportedClips(filePath, clips) {
+// onProgress (optional) receives {phase, current, total} so the importer's
+// progress bar keeps moving through the otherwise-silent save — reading the
+// current file, then encoding + writing it back can take several seconds on a
+// large drive-data.json and used to look like a freeze.
+function saveImportedClips(filePath, clips, onProgress) {
   logger.info('import', `saving ${clips.length} imported clip(s) → ${filePath}`);
   return withDriveDataLock(async () => {
     let data;
     if (fs.existsSync(filePath)) {
       fs.copyFileSync(filePath, filePath + '.bak'); // pre-import restore point
-      data = await readDriveData(filePath, { wantProcessedFiles: true });
+      data = await readDriveData(filePath, {
+        wantProcessedFiles: true,
+        onProgress: onProgress
+          ? (current, total) => onProgress({ phase: 'Saving — reading current data…', current, total })
+          : undefined,
+      });
     } else {
       data = { routes: [], processedFiles: [], driveTags: {} };
     }
@@ -577,6 +587,7 @@ function saveImportedClips(filePath, clips) {
       data.routes.push(clip);
       data.processedFiles.push(clip.file);
     }
+    if (onProgress) onProgress({ phase: 'Saving — writing drive data…', current: 0, total: 0 });
     data.routes = await routesToWireFormat(data.routes);
     await writeDriveDataJSON(filePath, data);
   });
@@ -598,9 +609,21 @@ function writeDriveDataJSON(filePath, data) {
       fs.unlink(tmpPath, () => reject(err));
     };
     ws.on('error', fail);
-    ws.on('finish', () => {
+    ws.on('finish', async () => {
       if (settled) return;
       settled = true;
+      // Durability + integrity gate BEFORE the rename replaces the good file:
+      //  - fsync flushes the temp to physical disk, closing the window where a
+      //    power loss after the rename surfaces a temp whose bytes were still
+      //    only in the OS write cache (non-fatal if the filesystem rejects it).
+      //  - tempLooksComplete refuses to let a truncated write (full disk /
+      //    dropped network share) clobber real data — the original is kept.
+      try { await fsyncFile(tmpPath); } catch { /* fsync unsupported on some shares — non-fatal */ }
+      if (!tempLooksComplete(tmpPath)) {
+        fs.unlink(tmpPath, () => {});
+        reject(new Error('drive-data write failed its integrity check (incomplete temp); original file left intact'));
+        return;
+      }
       renameWithRetry(tmpPath, filePath).then(resolve, (err) => fs.unlink(tmpPath, () => reject(err)));
     });
 
@@ -1130,6 +1153,37 @@ function normalizeApiDrive(driveEntry, pointsArr) {
   };
 }
 
+// Import overlap/dedup index — the existing drives' time-ranges and external
+// signatures. Building it requires a full parse + group of drive-data.json,
+// which the preview and the import would otherwise each do back-to-back on the
+// same unchanged file (two 100+ MB parses per import click). Cache the small,
+// READ-ONLY derived result keyed by path + mtime + size so the import reuses
+// the preview's work; the key self-invalidates the instant the file changes (a
+// tag edit, a removal, the import's own write). Only the tiny derived data is
+// cached — never the mutable parsed object — so callers can't corrupt it.
+let _overlapIndexCache = null; // { key, ranges, signatures }
+async function getOverlapIndex(driveDataPath) {
+  if (!driveDataPath || !fs.existsSync(driveDataPath)) {
+    return { ranges: [], signatures: new Set() };
+  }
+  const st = fs.statSync(driveDataPath);
+  const key = `${driveDataPath}|${st.mtimeMs}|${st.size}`;
+  if (_overlapIndexCache && _overlapIndexCache.key === key) {
+    return { ranges: _overlapIndexCache.ranges, signatures: _overlapIndexCache.signatures };
+  }
+  const { buildExistingDriveRanges } = require('../processing/tessie-import.cjs');
+  const data = await readDriveData(driveDataPath);
+  const { groupIntoDrives } = await import('../processing/grouper.js');
+  const { drives: existing } = groupIntoDrives(data.routes ?? []);
+  const ranges = buildExistingDriveRanges(existing);
+  const signatures = new Set();
+  for (const r of (data.routes ?? [])) {
+    if (r.externalSignature) signatures.add(r.externalSignature);
+  }
+  _overlapIndexCache = { key, ranges, signatures };
+  return { ranges, signatures };
+}
+
 ipcMain.handle('tessie-api-preview', async (_e, { token, vin, fromSec, toSec, driveDataPath }) => {
   try {
     const { fetchDrives } = require('../processing/tessie-api.cjs');
@@ -1138,18 +1192,8 @@ ipcMain.handle('tessie-api-preview', async (_e, { token, vin, fromSec, toSec, dr
     logger.info('import', `tessie preview: vehicle …${String(vin).slice(-6)}, window ${fromSec}→${toSec}`);
     const drives = await fetchDrives(token, vin, { from: fromSec, to: toSec });
 
-    // Build existing-drive index from current drive-data.json
-    let existingRanges = [];
-    const existingSignatures = new Set();
-    if (driveDataPath && fs.existsSync(driveDataPath)) {
-      const data = await readDriveData(driveDataPath);
-      const { groupIntoDrives } = await import('../processing/grouper.js');
-      const { drives: existing } = groupIntoDrives(data.routes ?? []);
-      existingRanges = buildExistingDriveRanges(existing);
-      for (const r of (data.routes ?? [])) {
-        if (r.externalSignature) existingSignatures.add(r.externalSignature);
-      }
-    }
+    // Existing-drive overlap/dedup index (cached by file mtime — see getOverlapIndex).
+    const { ranges: existingRanges, signatures: existingSignatures } = await getOverlapIndex(driveDataPath);
 
     let toImport = 0;
     let overlapSkipped = 0;
@@ -1184,24 +1228,12 @@ ipcMain.handle('tessie-api-import', async (_e, { token, vin, fromSec, toSec, dri
     sendTessieProgress({ phase: 'Fetching drives list…', current: 0, total: 1 });
     const drivesList = await fetchDrives(token, vin, { from: fromSec, to: toSec });
 
-    // Snapshot for overlap/duplicate decisions only — the authoritative merge
-    // re-reads the file under the drive-data lock at save time (the fetch loop
-    // below can run for minutes while tags or removals land in between).
-    let data;
-    if (fs.existsSync(driveDataPath)) {
-      data = await readDriveData(driveDataPath);
-    } else {
-      data = { routes: [], processedFiles: [], driveTags: {} };
-    }
-    if (!Array.isArray(data.routes)) data.routes = [];
-
-    const { groupIntoDrives } = await import('../processing/grouper.js');
-    const { drives: existingDrives } = groupIntoDrives(data.routes);
-    const existingRanges = buildExistingDriveRanges(existingDrives);
-    const existingSignatures = new Set();
-    for (const r of data.routes) {
-      if (r.externalSignature) existingSignatures.add(r.externalSignature);
-    }
+    // Overlap/dedup snapshot only — reuses the preview's parse when the file is
+    // unchanged (getOverlapIndex is mtime-keyed), so one import click doesn't
+    // parse the full drive-data twice. The authoritative merge still re-reads
+    // under the drive-data lock at save time (the fetch loop below can run for
+    // minutes while tags or removals land in between).
+    const { ranges: existingRanges, signatures: existingSignatures } = await getOverlapIndex(driveDataPath);
 
     // Filter overlap / duplicates
     const candidates = [];
@@ -1261,7 +1293,7 @@ ipcMain.handle('tessie-api-import', async (_e, { token, vin, fromSec, toSec, dri
     }
 
     sendTessieProgress({ phase: 'Saving…', current: candidates.length, total: candidates.length });
-    if (newClips.length > 0) await saveImportedClips(driveDataPath, newClips);
+    if (newClips.length > 0) await saveImportedClips(driveDataPath, newClips, sendTessieProgress);
 
     logger.info('import', `tessie import done: ${imported}/${candidates.length} imported${canceled ? ' (canceled)' : ''}, skips: ${JSON.stringify(skipReasons)}`);
     return { success: true, imported, canceled, totalCandidates: candidates.length, skipReasons };
@@ -1341,17 +1373,8 @@ ipcMain.handle('teslascope-api-preview', async (_e, { token, publicId, fromSec, 
     logger.info('import', `teslascope preview: vehicle …${String(publicId).slice(-6)}, window ${fromSec}→${toSec}`);
     const drives = await fetchDrives(token, publicId, { from: fromSec, to: toSec });
 
-    let existingRanges = [];
-    const existingSignatures = new Set();
-    if (driveDataPath && fs.existsSync(driveDataPath)) {
-      const data = await readDriveData(driveDataPath, { wantProcessedFiles: true });
-      const { groupIntoDrives } = await import('../processing/grouper.js');
-      const { drives: existing } = groupIntoDrives(data.routes ?? []);
-      existingRanges = buildExistingDriveRanges(existing);
-      for (const r of (data.routes ?? [])) {
-        if (r.externalSignature) existingSignatures.add(r.externalSignature);
-      }
-    }
+    // Existing-drive overlap/dedup index (cached by file mtime — see getOverlapIndex).
+    const { ranges: existingRanges, signatures: existingSignatures } = await getOverlapIndex(driveDataPath);
 
     let toImport = 0, overlapSkipped = 0, duplicateSkipped = 0, badTimestamps = 0;
     for (const d of drives) {
@@ -1389,24 +1412,10 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
     sendTeslascopeProgress({ phase: 'Fetching drives list…', current: 0, total: 1 });
     const drivesList = await fetchDrives(token, publicId, { from: fromSec, to: toSec });
 
-    // Snapshot for overlap/duplicate decisions only — the authoritative merge
-    // re-reads the file under the drive-data lock at save time (see the
-    // Tessie API import above).
-    let data;
-    if (fs.existsSync(driveDataPath)) {
-      data = await readDriveData(driveDataPath);
-    } else {
-      data = { routes: [], processedFiles: [], driveTags: {} };
-    }
-    if (!Array.isArray(data.routes)) data.routes = [];
-
-    const { groupIntoDrives } = await import('../processing/grouper.js');
-    const { drives: existingDrives } = groupIntoDrives(data.routes);
-    const existingRanges = buildExistingDriveRanges(existingDrives);
-    const existingSignatures = new Set();
-    for (const r of data.routes) {
-      if (r.externalSignature) existingSignatures.add(r.externalSignature);
-    }
+    // Overlap/dedup snapshot only (mtime-cached, reused from preview); the
+    // authoritative merge re-reads under the lock at save time (see the Tessie
+    // API import above).
+    const { ranges: existingRanges, signatures: existingSignatures } = await getOverlapIndex(driveDataPath);
 
     const candidates = [];
     let badTimestamps = 0;
@@ -1457,7 +1466,7 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
     }
 
     sendTeslascopeProgress({ phase: 'Saving…', current: candidates.length, total: candidates.length });
-    if (newClips.length > 0) await saveImportedClips(driveDataPath, newClips);
+    if (newClips.length > 0) await saveImportedClips(driveDataPath, newClips, sendTeslascopeProgress);
     logger.info('import', `teslascope import done: ${imported}/${candidates.length} imported${canceled ? ' (canceled)' : ''}, skips: ${JSON.stringify(skipReasons)}`);
     return { success: true, imported, canceled, totalCandidates: candidates.length, skipReasons };
   } catch (err) {
