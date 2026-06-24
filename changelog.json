@@ -1,6 +1,29 @@
 {
   "versions": [
     {
+      "version": "1.3.5",
+      "date": "2026-06-15",
+      "title": "Corruption Hardening, Smoother Imports & Auto-Refresh",
+      "changes": [
+        { "type": "feature", "description": "The app now auto-refreshes when drive-data.json changes on disk — for example when Sentry USB re-exports it or processing finishes — so you no longer have to reload manually. It waits politely if you're viewing a drive or processing, then refreshes when you're done." },
+        { "type": "improvement", "description": "Saving your drive data is now hardened against corruption: every write is flushed to disk and integrity-checked before it replaces the real file, so a power loss, full disk, or dropped network drive mid-save can no longer leave you with a truncated drive-data.json — the previous good copy is kept instead." },
+        { "type": "improvement", "description": "Importing drives feels much smoother on large drive libraries: the save step now shows live progress instead of appearing frozen, and the import no longer re-scans your existing drives twice per run." },
+        { "type": "improvement", "description": "The drive list no longer freezes the app while it builds after a large import or reload — it now fills in progressively and the window stays responsive." },
+        { "type": "improvement", "description": "The FSD Score now shows one decimal place and rounds down (e.g. 99.8% instead of 100%), so a near-perfect score is no longer flattered up to a perfect one." },
+        { "type": "fix", "description": "Adding or removing a tag from the drive stats panel now updates the panel right away — it previously saved the tag but didn't show it there until you reselected the drive." }
+      ]
+    },
+    {
+      "version": "1.3.5-beta.2",
+      "date": "2026-06-15",
+      "title": "Auto-Refresh, FSD Score Precision & Tag Fix",
+      "changes": [
+        { "type": "feature", "description": "The app now auto-refreshes when drive-data.json changes on disk — for example when Sentry USB re-exports it or processing finishes — so you no longer have to reload manually. It waits politely if you're viewing a drive or processing, then refreshes when you're done." },
+        { "type": "improvement", "description": "The FSD Score now shows one decimal place and rounds down (e.g. 99.8% instead of 100%), so a near-perfect score is no longer flattered up to a perfect one." },
+        { "type": "fix", "description": "Adding or removing a tag from the drive stats panel now updates the panel right away — it previously saved the tag but didn't show it there until you reselected the drive." }
+      ]
+    },
+    {
       "version": "1.3.5-beta.1",
       "date": "2026-06-13",
       "title": "Drive Data Corruption Hardening & Smoother Imports",

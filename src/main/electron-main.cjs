@@ -624,7 +624,8 @@ function writeDriveDataJSON(filePath, data) {
         reject(new Error('drive-data write failed its integrity check (incomplete temp); original file left intact'));
         return;
       }
-      renameWithRetry(tmpPath, filePath).then(resolve, (err) => fs.unlink(tmpPath, () => reject(err)));
+      renameWithRetry(tmpPath, filePath).then(() => { noteOwnWrite(filePath); resolve(); },
+        (err) => fs.unlink(tmpPath, () => reject(err)));
     });
 
     const write = (chunk) => {
@@ -664,6 +665,46 @@ function writeDriveDataJSON(filePath, data) {
     })();
   });
 }
+
+// ─── External drive-data change watcher ──────────────────────────────────────
+// drive-data.json is a shared file: Sentry USB (Rusty) re-exports it and our
+// own processing writes it. Poll the loaded file's mtime+size and tell the
+// renderer when it changes underneath us, so the app auto-refreshes. We POLL
+// rather than fs.watch because this file usually lives on a network share,
+// where fs.watch is unreliable over SMB. Our own writes (imports/tags/removes)
+// call noteOwnWrite so the poll doesn't flag them as external (no reload loop).
+let _watchedPath = null;
+let _watchSig = null;   // last seen { mtimeMs, size }
+let _watchTimer = null;
+
+function driveDataSig(p) {
+  try { const st = fs.statSync(p); return { mtimeMs: st.mtimeMs, size: st.size }; }
+  catch { return null; }
+}
+
+function noteOwnWrite(filePath) {
+  // Re-baseline after the app writes the file so the next poll sees no change.
+  if (filePath && filePath === _watchedPath) _watchSig = driveDataSig(filePath);
+}
+
+ipcMain.handle('watch-drive-data', (_e, filePath) => {
+  _watchedPath = filePath || null;
+  _watchSig = _watchedPath ? driveDataSig(_watchedPath) : null;
+  if (!_watchTimer && _watchedPath) {
+    _watchTimer = setInterval(() => {
+      if (!_watchedPath || !mainWindow || mainWindow.isDestroyed()) return;
+      const cur = driveDataSig(_watchedPath);
+      if (!cur) return;                 // file briefly missing (mid-rename) — ignore
+      if (!_watchSig) { _watchSig = cur; return; }
+      if (cur.mtimeMs !== _watchSig.mtimeMs || cur.size !== _watchSig.size) {
+        _watchSig = cur;
+        mainWindow.webContents.send('drive-data-changed', { filePath: _watchedPath });
+      }
+    }, 3000);
+    if (_watchTimer.unref) _watchTimer.unref();
+  }
+  return { success: true };
+});
 
 async function decodeRoutesByteFields(routes) {
   if (!Array.isArray(routes)) return routes;

@@ -54,6 +54,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('processing-output', listener);
     return () => ipcRenderer.off('processing-output', listener);
   },
+  // Watch the loaded drive-data.json for external changes (e.g. Sentry USB
+  // re-exporting it) and notify the renderer to auto-refresh.
+  watchDriveData: (filePath) => ipcRenderer.invoke('watch-drive-data', filePath),
+  onDriveDataChanged: (cb) => {
+    const listener = (_ev, data) => cb(data);
+    ipcRenderer.on('drive-data-changed', listener);
+    return () => ipcRenderer.off('drive-data-changed', listener);
+  },
   tessiePreview: (args) => ipcRenderer.invoke('tessie-preview', args),
   tessieImport: (args) => ipcRenderer.invoke('tessie-import', args),
   tessieImportCancel: () => ipcRenderer.invoke('tessie-import-cancel'),

@@ -10,6 +10,7 @@ let selectedMarkers = [];      // DOM markers for the selected drive (start/end/
 let drives = [];
 let overviewRoutes = [];   // raw route points for overview map (one per clip)
 let loadedFilePath = null;
+let pendingExternalReload = false; // drive-data.json changed on disk while busy
 let selectedDriveId = null;
 let removeOutputListener = null;
 let processingStartTime = null;
@@ -1276,6 +1277,8 @@ async function autoLoadDriveData(filePath) {
 
     loadedFilePath = filePath;
     localStorage.setItem('lastDriveDataPath', filePath);
+    pendingExternalReload = false;
+    window.electronAPI.watchDriveData(filePath);
     drives = result.drives;
     overviewRoutes = result.overviewRoutes ?? [];
     refreshAllTags(result.driveTags ?? {});
@@ -1364,6 +1367,14 @@ function onProcessingDone(code) {
   processingStartTime = null;
   document.getElementById('eta-label').textContent = '';
 
+  // Processing rewrote drive-data.json — show the new data now (the watcher
+  // deferred the refresh while the run was active). If the poll hasn't seen the
+  // final write yet, it will within a few seconds and refresh then anyway.
+  if (pendingExternalReload && selectedDriveId === null) {
+    pendingExternalReload = false;
+    reloadDrivesAfterWrite();
+  }
+
   if (code === 0) {
     document.getElementById('progress-phase').textContent = 'Complete!';
     appendLogLine('✓ Processing complete!', 'success');
@@ -1445,6 +1456,21 @@ function fmtDuration(sec) {
 function initViewDrivesTab() {
   document.getElementById('btn-load-drives').addEventListener('click', loadDrives);
   initTessieImport();
+
+  // Auto-refresh when drive-data.json changes on disk (e.g. Sentry USB
+  // re-exports it, or our own processing finishes). The main process suppresses
+  // the app's own writes, so this only fires for external changes. Defer the
+  // refresh while the user is viewing a specific drive or a processing run is
+  // active — applied when they return to the overview / processing finishes —
+  // so an external update never yanks them out of a replay.
+  window.electronAPI.onDriveDataChanged(() => {
+    if (!loadedFilePath) return;
+    if (selectedDriveId !== null || processingStartTime !== null) {
+      pendingExternalReload = true;
+    } else {
+      reloadDrivesAfterWrite();
+    }
+  });
 
   const checkOverlay = document.getElementById('check-drives-overlay');
   document.getElementById('btn-repair-gps').addEventListener('click', () => {
@@ -2242,6 +2268,8 @@ async function loadDrives() {
 
     loadedFilePath = filePath;
     localStorage.setItem('lastDriveDataPath', filePath);
+    pendingExternalReload = false;
+    window.electronAPI.watchDriveData(filePath);
     drives = result.drives;
     overviewRoutes = result.overviewRoutes ?? [];
     refreshAllTags(result.driveTags ?? {});
@@ -2326,6 +2354,18 @@ function wireDriveTagInteractions(root, drive) {
   }
 }
 
+// Re-render just the tag editor inside the open drive-stats panel after a tag
+// change, so adding/removing a tag FROM that panel updates it in place. The
+// drive-list cards refresh separately via renderDriveList — without this the
+// panel you're looking at wouldn't show the new pill.
+function refreshSelectedDriveTags(drive) {
+  const panel = document.getElementById('map-stats');
+  const tagsEl = panel && panel.querySelector('.map-stats-tags');
+  if (!tagsEl) return;
+  tagsEl.innerHTML = buildDriveTagsHtml(drive);
+  wireDriveTagInteractions(panel, drive);
+}
+
 function renderSelectedDriveStats(drive) {
   const isTessie = isImportedSource(drive.source); // any imported service
   const totalMi = drive.distanceMi ?? 0;
@@ -2339,6 +2379,7 @@ function renderSelectedDriveStats(drive) {
   const apDistM = (drive.autosteerDistanceKm ?? (drive.autosteerDistanceMi ?? 0) * MI_TO_KM) * 1000;
   const taccDistM = (drive.taccDistanceKm ?? (drive.taccDistanceMi ?? 0) * MI_TO_KM) * 1000;
   const fsdPct   = Math.round(drive.fsdPercent        ?? (totalDistM > 0 ? (fsdDistM  / totalDistM) * 100 : 0));
+  const fsdScore = floorPct1(drive.fsdPercent         ?? (totalDistM > 0 ? (fsdDistM  / totalDistM) * 100 : 0));
   const apPct    = Math.round(drive.autosteerPercent  ?? (totalDistM > 0 ? (apDistM   / totalDistM) * 100 : 0));
   const taccPct  = Math.round(drive.taccPercent       ?? (totalDistM > 0 ? (taccDistM / totalDistM) * 100 : 0));
   const manualDistM = Math.max(0, totalDistM - fsdDistM - apDistM - taccDistM);
@@ -2355,7 +2396,7 @@ function renderSelectedDriveStats(drive) {
     <div class="map-stat"><span class="map-stat-val">${durStr}</span><span class="map-stat-lbl">Duration</span></div>
     <div class="map-stat"><span class="map-stat-val">${speedVal(drive.avgSpeedMph ?? 0)}</span><span class="map-stat-lbl">Avg ${speedShort().toUpperCase()}</span></div>
     <div class="map-stat"><span class="map-stat-val">${speedVal(drive.maxSpeedMph ?? 0)}</span><span class="map-stat-lbl">Max ${speedShort().toUpperCase()}</span></div>
-    <div class="map-stat"><span class="map-stat-val" style="color:${fsdScoreColor(fsdPct)}">${fsdPct}%</span><span class="map-stat-lbl">${isTessie ? 'FSD*' : 'FSD Usage'}</span></div>
+    <div class="map-stat"><span class="map-stat-val" style="color:${fsdScoreColor(fsdScore)}">${fsdScore}%</span><span class="map-stat-lbl">${isTessie ? 'FSD*' : 'FSD Usage'}</span></div>
   `;
   if (apPct > 0 && !isTessie) {
     summary += `<div class="map-stat"><span class="map-stat-val">${apPct}%</span><span class="map-stat-lbl">Autopilot</span></div>`;
@@ -2395,12 +2436,12 @@ function renderSelectedDriveStats(drive) {
       <div class="map-stats-chart-wrap">
         <div class="map-stats-chart" style="--donut-bg: conic-gradient(${gradientStops});">
           <div class="map-stats-chart-center">
-            <span class="map-stats-chart-val" style="color:${fsdScoreColor(fsdPct)}">${fsdScoreLabel(fsdPct)}</span>
-            <span class="map-stats-chart-lbl" style="color:${fsdScoreColor(fsdPct)}">${fsdPct}%</span>
+            <span class="map-stats-chart-val" style="color:${fsdScoreColor(fsdScore)}">${fsdScoreLabel(fsdScore)}</span>
+            <span class="map-stats-chart-lbl" style="color:${fsdScoreColor(fsdScore)}">${fsdScore}%</span>
           </div>
         </div>
         <div class="map-stats-legend">
-          ${fsdDistM > 0    ? detailsRow('Full Self-Driving', 'mode-fsd',    metersToDistStr(fsdDistM),    fsdPct)    : ''}
+          ${fsdDistM > 0    ? detailsRow('Full Self-Driving', 'mode-fsd',    metersToDistStr(fsdDistM),    fsdScore)    : ''}
           ${manualDistM > 0 ? detailsRow('Manual',            'mode-manual', metersToDistStr(manualDistM), manualPct) : ''}
         </div>
       </div>
@@ -2414,12 +2455,12 @@ function renderSelectedDriveStats(drive) {
       <div class="map-stats-chart-wrap">
         <div class="map-stats-chart" style="--donut-bg: conic-gradient(${gradientStops});">
           <div class="map-stats-chart-center">
-            <span class="map-stats-chart-val" style="color:${fsdScoreColor(fsdPct)}">${fsdScoreLabel(fsdPct)}</span>
-            <span class="map-stats-chart-lbl" style="color:${fsdScoreColor(fsdPct)}">${fsdPct}%</span>
+            <span class="map-stats-chart-val" style="color:${fsdScoreColor(fsdScore)}">${fsdScoreLabel(fsdScore)}</span>
+            <span class="map-stats-chart-lbl" style="color:${fsdScoreColor(fsdScore)}">${fsdScore}%</span>
           </div>
         </div>
         <div class="map-stats-legend">
-          ${fsdDistM > 0    ? detailsRow('Full Self-Driving', 'mode-fsd',    metersToDistStr(fsdDistM),    fsdPct)    : ''}
+          ${fsdDistM > 0    ? detailsRow('Full Self-Driving', 'mode-fsd',    metersToDistStr(fsdDistM),    fsdScore)    : ''}
           ${apDistM > 0     ? detailsRow('Autopilot',         'mode-ap',     metersToDistStr(apDistM),     apPct)     : ''}
           ${taccDistM > 0   ? detailsRow('TACC',              'mode-tacc',   metersToDistStr(taccDistM),   taccPct)   : ''}
           ${manualDistM > 0 ? detailsRow('Manual',            'mode-manual', metersToDistStr(manualDistM), manualPct) : ''}
@@ -2467,6 +2508,11 @@ function renderSelectedDriveStats(drive) {
 
   wireDriveTagInteractions(panel, drive);
 }
+
+// FSD score/usage is shown floored to one decimal (99.896% → 99.8%, never
+// rounded up to a flattering 100%). Kept separate from the integer fsdPct used
+// for the donut breakdown math so AP/TACC/Manual still sum to 100.
+const floorPct1 = (p) => Math.floor((Number(p) || 0) * 10) / 10;
 
 function fsdScoreColor(pct) {
   // Smooth red → amber → green gradient in HSL (0°=red, 120°=green).
@@ -2524,6 +2570,7 @@ function renderDriveStats(drives, meta) {
   const apDistM = seiDrives.reduce((s, d) => s + (d.autosteerDistanceKm ?? (d.autosteerDistanceMi ?? 0) * MI_TO_KM) * 1000, 0);
   const taccDistM = seiDrives.reduce((s, d) => s + (d.taccDistanceKm ?? (d.taccDistanceMi ?? 0) * MI_TO_KM) * 1000, 0);
   const fsdPct = seiDistM > 0 ? Math.round((fsdDistM / seiDistM) * 100) : 0;
+  const fsdScore = seiDistM > 0 ? floorPct1((fsdDistM / seiDistM) * 100) : 0;
   const apPct = seiDistM > 0 ? Math.round((apDistM / seiDistM) * 100) : 0;
   const taccPct = seiDistM > 0 ? Math.round((taccDistM / seiDistM) * 100) : 0;
   const manualDistM = Math.max(0, seiDistM - fsdDistM - apDistM - taccDistM);
@@ -2544,7 +2591,7 @@ function renderDriveStats(drives, meta) {
     <div class="map-stat"><span class="map-stat-val">${fmt(drives.length)}</span><span class="map-stat-lbl">Drives</span></div>
     <div class="map-stat"><span class="map-stat-val">${fmt(distVal(totalMi, 0))}</span><span class="map-stat-lbl">${distLong()} Driven</span></div>
     <div class="map-stat"><span class="map-stat-val">${durStr}</span><span class="map-stat-lbl">Time Driving</span></div>
-    <div class="map-stat"><span class="map-stat-val" style="color:${fsdScoreColor(fsdPct)}">${fsdPct}%</span><span class="map-stat-lbl">FSD Score</span></div>
+    <div class="map-stat"><span class="map-stat-val" style="color:${fsdScoreColor(fsdScore)}">${fsdScore}%</span><span class="map-stat-lbl">FSD Score</span></div>
   `;
   if (apPct > 0) summary += `<div class="map-stat"><span class="map-stat-val">${apPct}%</span><span class="map-stat-lbl">Autopilot</span></div>`;
 
@@ -2576,12 +2623,12 @@ function renderDriveStats(drives, meta) {
       <div class="map-stats-chart-wrap">
         <div class="map-stats-chart" style="--donut-bg: conic-gradient(${gradientStops});">
           <div class="map-stats-chart-center">
-            <span class="map-stats-chart-val" style="color:${fsdScoreColor(fsdPct)}">${fsdScoreLabel(fsdPct)}</span>
-            <span class="map-stats-chart-lbl" style="color:${fsdScoreColor(fsdPct)}">${fsdPct}%</span>
+            <span class="map-stats-chart-val" style="color:${fsdScoreColor(fsdScore)}">${fsdScoreLabel(fsdScore)}</span>
+            <span class="map-stats-chart-lbl" style="color:${fsdScoreColor(fsdScore)}">${fsdScore}%</span>
           </div>
         </div>
         <div class="map-stats-legend">
-          ${fsdDistM > 0    ? detailsRow('Full Self-Driving', 'mode-fsd',    metersToDistStr(fsdDistM),    fsdPct)    : ''}
+          ${fsdDistM > 0    ? detailsRow('Full Self-Driving', 'mode-fsd',    metersToDistStr(fsdDistM),    fsdScore)    : ''}
           ${apDistM > 0     ? detailsRow('Autopilot',         'mode-ap',     metersToDistStr(apDistM),     apPct)     : ''}
           ${taccDistM > 0   ? detailsRow('TACC',              'mode-tacc',   metersToDistStr(taccDistM),   taccPct)   : ''}
           ${manualDistM > 0 ? detailsRow('Manual',            'mode-manual', metersToDistStr(manualDistM), manualPct) : ''}
@@ -2604,7 +2651,7 @@ function renderDriveStats(drives, meta) {
       </div>
     `;
   }
-  const avgFsdPct = seiDrives.length > 0 ? Math.round(seiDrives.reduce((s, d) => s + (d.fsdPercent ?? 0), 0) / seiDrives.length) : 0;
+  const avgFsdPct = seiDrives.length > 0 ? floorPct1(seiDrives.reduce((s, d) => s + (d.fsdPercent ?? 0), 0) / seiDrives.length) : 0;
   if (disengagements > 0 || accelOverrides > 0) {
     details += `
       <div class="map-stats-extras">
@@ -3039,6 +3086,12 @@ function deselectDrive() {
     any = true;
   }
   if (any) map.fitBounds(bounds, { padding: 30 });
+
+  // Apply an external drive-data change that arrived while a drive was open.
+  if (pendingExternalReload) {
+    pendingExternalReload = false;
+    reloadDrivesAfterWrite();
+  }
 }
 
 // ─── Map Drawing ──────────────────────────────────────────────────────────────
@@ -3990,6 +4043,7 @@ async function addTag(drive, tagName) {
     renderTagFilter();
   }
   renderDriveList(drives);
+  if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
 
   // Persist; roll back the UI only if the write fails.
   const res = await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags });
@@ -3998,6 +4052,7 @@ async function addTag(drive, tagName) {
     rebuildAllTagsFromDrives();
     renderTagFilter();
     renderDriveList(drives);
+    if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
     alert(`Couldn't save tag: ${res.error || 'write failed'}`);
   }
 }
@@ -4012,6 +4067,7 @@ async function removeTag(drive, tagName) {
   if (activeTagFilter === tagName && !allTags.includes(tagName)) activeTagFilter = '';
   renderTagFilter();
   renderDriveList(drives);
+  if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
 
   const res = await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags: drive.tags });
   if (res && res.success === false) {
@@ -4019,6 +4075,7 @@ async function removeTag(drive, tagName) {
     rebuildAllTagsFromDrives();
     renderTagFilter();
     renderDriveList(drives);
+    if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
     alert(`Couldn't remove tag: ${res.error || 'write failed'}`);
   }
 }
