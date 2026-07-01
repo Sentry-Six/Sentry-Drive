@@ -20,6 +20,7 @@ Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam file
 <br> Observe each drive in detail at your own pace - up to 10x speed.
 - **Import from 3rd Party Sources**
 <br> Import your drives from Tessie or Teslascope for a more extensive drive history!
+<br> **Note:** _Imported drives do not affect FSD score._
 
 ### Sentry USB-Compatible
 Running Sentry USB? You can import your drive data! Simply locate your drives-data.json and load it! If it's in your TeslaCam folder, it'll automatically locate and load it for you.
