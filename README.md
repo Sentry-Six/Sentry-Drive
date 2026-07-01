@@ -8,7 +8,7 @@ Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam file
 
 ## Features
 - **Visualize your Recent Drives**
-<br> With TeslaUSB, Sentry USB, and Tesla's 2026 Spring Update (2026.14), you can save and visualize your drives. Every single one.
+<br> With TeslaUSB, Sentry USB, and Tesla's 2025 Holiday Update (2025.44.25 or newer), you can save and visualize your drives. Every single one.
 - **Fix Broken Drives (ALPHA)**
 <br> Attempts to bridge missing data points in a drive by generating the missing data using Open Street Map's route API.
 <br> **Note:** _Feature is currently in ALPHA and may not work as expected. Bridged gaps will appear as manual._
