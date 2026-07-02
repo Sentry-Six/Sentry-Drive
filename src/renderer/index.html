@@ -234,6 +234,10 @@
                   <select id="sel-marker-type" class="settings-select">
                     <option value="arrow">Arrow</option>
                     <option value="model3">Model 3</option>
+                    <option value="modelY">Model Y</option>
+                    <option value="modelS">Model S</option>
+                    <option value="modelX">Model X</option>
+                    <option value="cybertruck">Cybertruck</option>
                   </select>
                 </div>
                 <div id="vehicle-color-row" class="settings-row hidden">
@@ -242,6 +246,27 @@
                 </div>
                 <div id="vehicle-preview-wrap" class="hidden">
                   <canvas id="vehicle-preview-canvas" class="vehicle-preview-canvas"></canvas>
+                </div>
+                <div class="settings-subhead">Drive Line Colors</div>
+                <div class="settings-row">
+                  <span class="settings-row-label">Manual</span>
+                  <button class="car-color-swatch line-color-swatch" data-linecolor="manual" type="button"></button>
+                </div>
+                <div class="settings-row">
+                  <span class="settings-row-label">Full Self-Driving</span>
+                  <button class="car-color-swatch line-color-swatch" data-linecolor="fsd" type="button"></button>
+                </div>
+                <div class="settings-row">
+                  <span class="settings-row-label">Imported</span>
+                  <button class="car-color-swatch line-color-swatch" data-linecolor="imported" type="button"></button>
+                </div>
+                <div class="settings-row">
+                  <span class="settings-row-label">All Drives (Overview)</span>
+                  <button class="car-color-swatch line-color-swatch" data-linecolor="overview" type="button"></button>
+                </div>
+                <div class="settings-row">
+                  <span></span>
+                  <button id="btn-line-colors-reset" class="btn-line-colors-reset" type="button">Reset to Defaults</button>
                 </div>
               </div>
             </div>
@@ -305,8 +330,11 @@
                 <span class="settings-section-title">Support</span>
               </div>
               <div class="settings-section-body">
-                <div class="settings-row" title="Errors and app events from this and the previous session. May include drive locations from import diagnostics.">
-                  <span class="settings-row-label">Logs</span>
+                <div class="settings-row settings-row--stacked" title="Errors and app events from this and the previous session, for bug reports.">
+                  <div class="settings-row-main">
+                    <span class="settings-row-label">Logs</span>
+                    <div class="settings-row-hint">Saved logs may include personal data. While addresses, tokens, and other information are automatically removed, please review the file before sharing.</div>
+                  </div>
                   <button id="btn-download-logs" class="btn-primary" type="button">Save</button>
                 </div>
               </div>
@@ -327,6 +355,21 @@
         <div class="reprocess-modal-actions">
           <button id="btn-reprocess-confirm" class="btn-primary btn-update-full">Reprocess All</button>
           <button id="btn-reprocess-cancel" class="update-skip-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Import Drive Data Confirm (FSD warning) ─────────────────── -->
+    <div id="import-json-confirm-overlay" class="hidden">
+      <div class="reprocess-modal">
+        <div class="reprocess-modal-icon halo-amber"><span class="material-icons">merge_type</span></div>
+        <div class="reprocess-modal-title">Merge This Drive Data?</div>
+        <div class="reprocess-modal-msg">
+          The drives from this file will be merged into your data as regular drives — including their FSD and Autopilot data. This may change your FSD score and other statistics. A backup of your current file is written first (.bak), so you can revert.
+        </div>
+        <div class="reprocess-modal-actions">
+          <button id="btn-import-json-confirm" class="btn-primary btn-update-full">Merge</button>
+          <button id="btn-import-json-cancel" class="update-skip-btn">Cancel</button>
         </div>
       </div>
     </div>
@@ -371,6 +414,7 @@
         <div class="tessie-mode-tabs">
           <button class="tessie-mode-btn active" data-mode="api" type="button">API (Recommended)</button>
           <button class="tessie-mode-btn" data-mode="csv" type="button">CSV Export</button>
+          <button class="tessie-mode-btn" data-mode="json" type="button">Drive Data File</button>
         </div>
 
         <div id="tessie-mode-api" class="tessie-mode-pane">
@@ -422,6 +466,19 @@
             <div class="input-row">
               <input id="tessie-states-path" type="text" class="text-input" placeholder="driving_states.csv" readonly />
               <button id="browse-tessie-states" class="btn-icon" title="Browse"><span class="material-icons">folder_open</span></button>
+            </div>
+          </div>
+        </div>
+
+        <div id="tessie-mode-json" class="tessie-mode-pane hidden">
+          <div class="reprocess-modal-msg">
+            Merge drives from another Sentry Drive <strong>drive-data.json</strong> — a backup, or data from another device — into your current data. Clips you already have are skipped automatically.
+          </div>
+          <div class="tessie-file-row">
+            <label class="field-label">drive-data.json</label>
+            <div class="input-row">
+              <input id="import-json-path" type="text" class="text-input" placeholder="Select a drive-data.json…" readonly />
+              <button id="browse-import-json" class="btn-icon" title="Browse"><span class="material-icons">folder_open</span></button>
             </div>
           </div>
         </div>
@@ -545,7 +602,15 @@
               <input type="range" id="replay-slider" class="replay-slider" min="0" max="0" value="0" />
             </div>
             <span id="replay-time-end" class="replay-time">--:--</span>
-            <button id="btn-replay-speed" class="replay-speed-btn" title="Playback speed">1x</button>
+            <div class="replay-speed-wrap">
+              <button id="btn-replay-speed" class="replay-speed-btn" title="Playback speed">1x</button>
+              <div id="replay-speed-menu" class="replay-speed-menu hidden">
+                <button class="replay-speed-item" data-speed="1" type="button">1x</button>
+                <button class="replay-speed-item" data-speed="2" type="button">2x</button>
+                <button class="replay-speed-item" data-speed="5" type="button">5x</button>
+                <button class="replay-speed-item" data-speed="10" type="button">10x</button>
+              </div>
+            </div>
           </div>
           <div id="replay-data" class="replay-data">
             <span>Speed: <strong id="replay-speed-val">--</strong></span>

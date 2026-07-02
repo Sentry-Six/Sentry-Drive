@@ -350,6 +350,12 @@ async function main() {
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`\nDone in ${elapsed}s`);
+  // Single machine-readable line the main process lifts into the app log
+  // (Settings → Support → Logs), so a crash log still shows the outcome.
+  const noSei = totalDone - filesWithGPS;
+  console.log(`SUMMARY: scanned ${totalDone} clip(s) → ${drives.length} drive(s)` +
+    `${noSei > 0 ? `, ${noSei} without GPS` : ''}${errors > 0 ? `, ${errors} error(s)` : ''}` +
+    `${droppedCount > 0 ? `, ${droppedCount} dropped` : ''} in ${elapsed}s`);
 }
 
 function routeForDisk(r) {

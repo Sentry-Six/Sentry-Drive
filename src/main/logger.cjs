@@ -79,6 +79,23 @@ function fmt(v) {
   try { return JSON.stringify(v); } catch { return String(v); }
 }
 
+// Scrub anything privacy-sensitive from EXPORTED logs (the .txt users paste for
+// support): API tokens/keys, GPS coordinates, and reverse-geocoded addresses.
+// Applied only in getLogText — the live terminal + on-disk session log keep
+// full detail for local debugging.
+function redact(text) {
+  return String(text)
+    // tokens / keys / bearer credentials in key:value or key=value form
+    .replace(/((?:token|api[_-]?key|apikey|authorization|bearer|secret)"?\s*[:=]\s*"?)[A-Za-z0-9._\-]{8,}/gi, '$1[redacted]')
+    // GPS coordinate JSON fields (latitude_start, longitude, lat, lng, …)
+    .replace(/("(?:lat|lng|latitude|longitude)[a-z_]*"\s*:\s*)"?-?\d+\.\d+"?/gi, '$1[coord]')
+    // reverse-geocoded addresses echoed from import APIs
+    .replace(/("(?:starting_|ending_)?(?:saved_)?location"\s*:\s*)"[^"]*"/gi, '$1"[location]"')
+    // free-standing coordinates: a signed decimal with 4+ fractional digits,
+    // not part of a larger number (epoch timestamps, ids stay intact)
+    .replace(/(?<![\d.])-?\d{1,3}\.\d{4,}(?!\d)/g, '[coord]');
+}
+
 function add(level, scope, args) {
   const text = args.map(fmt).join(' ').slice(0, MAX_ENTRY_LEN);
   const line = `[${ts()}] [${level.toUpperCase().padEnd(5)}] [${scope}] ${text}`;
@@ -110,8 +127,10 @@ module.exports = {
   getLogText() {
     const parts = [
       `Sentry Drive logs — exported ${ts()}`,
-      `version ${appInfo.version} | ${process.platform} ${process.arch} | ` +
+      `version ${appInfo.version} | ${process.platform} ${process.arch}` +
+        `${appInfo.osBuild ? ` (${appInfo.osBuild})` : ''} | ` +
         `electron ${process.versions.electron ?? 'n/a'} | node ${process.versions.node}`,
+      'GPS coordinates, addresses, and any tokens are redacted from this export.',
     ];
     // Tail of the previous session (survives crashes thanks to the file sink).
     try {
@@ -123,11 +142,11 @@ module.exports = {
           const buf = Buffer.alloc(len);
           fs.readSync(fd, buf, 0, len, stat.size - len);
           fs.closeSync(fd);
-          parts.push('─'.repeat(78), `PREVIOUS SESSION${stat.size > len ? ' (tail)' : ''}:`, buf.toString('utf8').trimEnd());
+          parts.push('─'.repeat(78), `PREVIOUS SESSION${stat.size > len ? ' (tail)' : ''}:`, redact(buf.toString('utf8').trimEnd()));
         }
       }
     } catch { /* export must never fail on the extras */ }
-    parts.push('─'.repeat(78), 'CURRENT SESSION:', ...entries, '');
+    parts.push('─'.repeat(78), 'CURRENT SESSION:', redact(entries.join('\n')), '');
     return parts.join('\n');
   },
 };

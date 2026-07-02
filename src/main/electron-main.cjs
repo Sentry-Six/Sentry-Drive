@@ -28,11 +28,13 @@ const { fsyncFile, tempLooksComplete } = require('../shared/atomic-write.cjs');
 // ─── Logging ─────────────────────────────────────────────────────────────────
 // Terminal echo + in-memory buffer; exported from Settings → Support → Logs.
 const logger = require('./logger.cjs');
-logger.setAppInfo({ version: app.getVersion() });
+const os = require('os');
+logger.setAppInfo({ version: app.getVersion(), osBuild: os.release() });
 // Crash-surviving sink: appended live; last session rotates to
 // previous-session.log and is included in exports.
 logger.initFileSink(path.join(app.getPath('userData'), 'logs'));
-logger.info('main', 'app starting');
+logger.info('main', `app starting — v${app.getVersion()} | ${process.platform} ${process.arch} (${os.release()}) | ` +
+  `${os.cpus().length} CPUs | electron ${process.versions.electron} | node ${process.versions.node}`);
 // API-client diagnostics flow into this log (Settings → Support → Logs).
 require('../processing/teslascope-api.cjs').setLogger(logger);
 require('../processing/tessie-api.cjs').setLogger?.(logger);
@@ -147,13 +149,13 @@ function sendUpdateStatus(status, data = {}) {
   mainWindow?.webContents.send('update-status', { status, ...data });
 }
 
-autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'));
-autoUpdater.on('update-available', (info) => sendUpdateStatus('available', { version: info.version }));
-autoUpdater.on('update-not-available', () => sendUpdateStatus('up-to-date'));
+autoUpdater.on('checking-for-update', () => { logger.info('update', 'checking for update…'); sendUpdateStatus('checking'); });
+autoUpdater.on('update-available', (info) => { logger.info('update', `update available: v${info.version}`); sendUpdateStatus('available', { version: info.version }); });
+autoUpdater.on('update-not-available', () => { logger.info('update', `up to date (v${app.getVersion()})`); sendUpdateStatus('up-to-date'); });
 autoUpdater.on('download-progress', (progress) => sendUpdateStatus('downloading', { percent: Math.round(progress.percent) }));
-autoUpdater.on('update-downloaded', () => sendUpdateStatus('ready'));
+autoUpdater.on('update-downloaded', () => { logger.info('update', 'update downloaded — ready to install'); sendUpdateStatus('ready'); });
 autoUpdater.on('error', (err) => {
-  logger.error('updater', err?.message ?? err);
+  logger.error('update', 'auto-updater error:', err?.message ?? err);
   sendUpdateStatus('error', { message: err.message });
 });
 
@@ -196,7 +198,13 @@ function createWindow() {
 
 Menu.setApplicationMenu(null);
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  // Connected integrations — presence only, never the tokens themselves.
+  try {
+    logger.info('import', `integrations: tessie=${loadTessieToken() ? 'yes' : 'no'} teslascope=${loadTeslascopeToken() ? 'yes' : 'no'}`);
+  } catch { /* safeStorage may be unavailable — non-fatal */ }
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
@@ -278,8 +286,10 @@ ipcMain.handle('remove-drive', (_e, { filePath, driveStartTime }) => withDriveDa
 
     data.routes = await routesToWireFormat(data.routes);
     await writeDriveDataJSON(filePath, data);
+    logger.info('main', `removed drive at ${driveStartTime} (${target.routeFiles.length} clip(s))`);
     return { success: true };
   } catch (err) {
+    logger.error('main', 'remove drive failed:', err?.message ?? err);
     return { success: false, error: err.message };
   }
 }));
@@ -428,6 +438,8 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
       delete d.fsdEvents;
     }
 
+    logger.info('main', `loaded ${drives.length} drive(s) from ${totalRoutes} clips` +
+      `${hiddenTessieCount > 0 ? `, ${hiddenTessieCount} imported hidden behind dashcam drives` : ''} — ${filePath}`);
     return {
       success: true,
       drives,
@@ -441,6 +453,7 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
       hiddenTessieDrives,
     };
   } catch (err) {
+    logger.error('main', 'load drives failed:', err?.message ?? err);
     return { success: false, error: err.message };
   }
 });
@@ -470,12 +483,17 @@ ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount
     return { success: false, error: `spawn failed: ${err.message}` };
   }
 
-  logger.info('processing', 'child started:', args.join(' '));
+  logger.info('processing', `${reprocessAll ? 'reprocess-all' : 'process new'} started — workers=${workerCount || 'auto'}, clips=${clipsDir}`);
   activeChild.stderr?.on('data', (chunk) => logger.error('processing', String(chunk).trim()));
   activeChild.on('exit', (code) => logger.info('processing', `child exited with code ${code}`));
 
   activeChild.stdout.on('data', (chunk) => {
-    mainWindow?.webContents.send('processing-output', { type: 'stdout', text: chunk.toString() });
+    const text = chunk.toString();
+    mainWindow?.webContents.send('processing-output', { type: 'stdout', text });
+    // Lift the child's one-line outcome summary into the app log timeline.
+    for (const line of text.split('\n')) {
+      if (line.startsWith('SUMMARY:')) logger.info('processing', line.slice(8).trim());
+    }
   });
 
   activeChild.stderr.on('data', (chunk) => {
@@ -566,7 +584,10 @@ function renameWithRetry(from, to, attempts = 12) {
 // progress bar keeps moving through the otherwise-silent save — reading the
 // current file, then encoding + writing it back can take several seconds on a
 // large drive-data.json and used to look like a freeze.
-function saveImportedClips(filePath, clips, onProgress) {
+// tagsToMerge (optional): a driveTags map { startTime: [tag…] } to fold into the
+// file's driveTags (union with any existing) — used by the drive-data.json
+// import to bring the imported drives' tags along.
+function saveImportedClips(filePath, clips, onProgress, tagsToMerge) {
   logger.info('import', `saving ${clips.length} imported clip(s) → ${filePath}`);
   return withDriveDataLock(async () => {
     let data;
@@ -586,6 +607,15 @@ function saveImportedClips(filePath, clips, onProgress) {
     for (const clip of clips) {
       data.routes.push(clip);
       data.processedFiles.push(clip.file);
+    }
+    if (tagsToMerge && typeof tagsToMerge === 'object') {
+      if (!data.driveTags || typeof data.driveTags !== 'object') data.driveTags = {};
+      for (const [key, tags] of Object.entries(tagsToMerge)) {
+        if (!Array.isArray(tags) || tags.length === 0) continue;
+        const merged = new Set(data.driveTags[key] ?? []);
+        for (const t of tags) merged.add(t);
+        data.driveTags[key] = [...merged];
+      }
     }
     if (onProgress) onProgress({ phase: 'Saving — writing drive data…', current: 0, total: 0 });
     data.routes = await routesToWireFormat(data.routes);
@@ -765,8 +795,10 @@ ipcMain.handle('revert-gps', (_e, filePath) => {
     const bakPath = filePath + '.bak';
     if (!fs.existsSync(bakPath)) return { success: false, error: 'No backup file found.' };
     fs.copyFileSync(bakPath, filePath);
+    logger.info('main', `reverted drive data from backup — ${filePath}`);
     return { success: true };
   } catch (err) {
+    logger.error('main', 'revert failed:', err?.message ?? err);
     return { success: false, error: err.message };
   }
 });
@@ -955,8 +987,10 @@ ipcMain.handle('repair-gps', (_e, { filePath, useRouting }) => withDriveDataLock
 
     data.routes = await routesToWireFormat(routes);
     await writeDriveDataJSON(filePath, data);
+    logger.info('gps', `check drives: ${bridgedGaps} gap(s) bridged (${routedGaps} via routing), ${removedBridges} old bridge(s) rebuilt`);
     return { success: true, bridgedGaps, routedGaps, removedBridges };
   } catch (err) {
+    logger.error('gps', 'check drives failed:', err?.message ?? err);
     return { success: false, error: err.message };
   }
 }));
@@ -1224,6 +1258,74 @@ async function getOverlapIndex(driveDataPath) {
   _overlapIndexCache = { key, ranges, signatures };
   return { ranges, signatures };
 }
+
+// ─── Import from another drive-data.json ─────────────────────────────────────
+// Merge the routes from another Sentry Drive drive-data.json into the current
+// one — a backup, or data from a second device. Dedup is by clip file path
+// (normalized like the grouper); the grouper also dedups duplicate file paths
+// at load time, so a stray duplicate can never produce a doubled drive.
+function sendImportProgress(data) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('import-json-progress', data);
+}
+
+function normFileKey(f) { return String(f || '').replace(/\\/g, '/'); }
+
+async function readSourceAndNewRoutes(driveDataPath, sourcePath, onProgress) {
+  const src = await readDriveData(sourcePath, { wantProcessedFiles: true, onProgress });
+  const srcRoutes = Array.isArray(src.routes) ? src.routes : [];
+  const srcDriveTags = (src.driveTags && typeof src.driveTags === 'object') ? src.driveTags : {};
+  const have = new Set();
+  if (driveDataPath && fs.existsSync(driveDataPath)) {
+    const cur = await readDriveData(driveDataPath, { wantProcessedFiles: true });
+    for (const r of (cur.routes ?? [])) have.add(normFileKey(r.file));
+  }
+  const newRoutes = srcRoutes.filter((r) => r.file && !have.has(normFileKey(r.file)));
+  return { srcRoutes, newRoutes, srcDriveTags };
+}
+
+ipcMain.handle('import-drive-data-file-preview', async (_e, { driveDataPath, sourcePath }) => {
+  try {
+    if (!sourcePath || !fs.existsSync(sourcePath)) return { success: false, error: 'File not found.' };
+    if (driveDataPath && sourcePath === driveDataPath) return { success: false, error: "That's the file you already have loaded." };
+    const { srcRoutes, newRoutes } = await readSourceAndNewRoutes(driveDataPath, sourcePath);
+    const { groupIntoDrives } = await import('../processing/grouper.js');
+    const totalDrives = groupIntoDrives(srcRoutes).drives.length;
+    const toImport = groupIntoDrives(newRoutes).drives.length;
+    logger.info('import', `drive-data file preview: ${srcRoutes.length} clips (${newRoutes.length} new) → ${toImport} new drive(s)`);
+    return { success: true, totalDrives, toImport };
+  } catch (err) {
+    logger.error('import', 'drive-data file preview failed:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('import-drive-data-file', async (_e, { driveDataPath, sourcePath }) => {
+  try {
+    if (!sourcePath || !fs.existsSync(sourcePath)) return { success: false, error: 'File not found.' };
+    if (driveDataPath && sourcePath === driveDataPath) return { success: false, error: "That's the file you already have loaded." };
+    sendImportProgress({ phase: 'Reading file…', current: 0, total: 0 });
+    const { newRoutes, srcDriveTags } = await readSourceAndNewRoutes(driveDataPath, sourcePath,
+      (current, total) => sendImportProgress({ phase: 'Reading file…', current, total }));
+    if (newRoutes.length === 0) return { success: true, imported: 0, clips: 0, tagged: 0 };
+    const { groupIntoDrives } = await import('../processing/grouper.js');
+    const { drives: newDrives } = groupIntoDrives(newRoutes);
+    const imported = newDrives.length;
+    // Bring the source's tags along, but only for the drives we're importing
+    // (matched by startTime — the key loadAndGroupDrives looks tags up by).
+    const newStartTimes = new Set(newDrives.map((d) => d.startTime));
+    const tagsToMerge = {};
+    let tagged = 0;
+    for (const [key, tags] of Object.entries(srcDriveTags)) {
+      if (newStartTimes.has(key) && Array.isArray(tags) && tags.length) { tagsToMerge[key] = tags; tagged++; }
+    }
+    await saveImportedClips(driveDataPath, newRoutes, sendImportProgress, tagsToMerge);
+    logger.info('import', `drive-data file import: ${newRoutes.length} new clip(s) → ${imported} drive(s), ${tagged} tagged`);
+    return { success: true, imported, clips: newRoutes.length, tagged };
+  } catch (err) {
+    logger.error('import', 'drive-data file import failed:', err);
+    return { success: false, error: err.message };
+  }
+});
 
 ipcMain.handle('tessie-api-preview', async (_e, { token, vin, fromSec, toSec, driveDataPath }) => {
   try {

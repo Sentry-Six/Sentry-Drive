@@ -69,6 +69,37 @@ const { MI_TO_KM, M_PER_MILE, MPS_TO_MPH, geodesicM } = window.driveCalc;
   }
 })();
 
+// User-action breadcrumbs → the app log, so a crash report shows what the user
+// was doing (drive opened, tag added, import started). Never throws.
+function logAction(text) {
+  try { window.electronAPI?.appLog({ level: 'info', scope: 'ui', text }); } catch { /* logging must never break the app */ }
+}
+
+// Confirmation before merging another drive-data.json — its drives (and their
+// FSD/Autopilot data) fold into the user's stats, which can shift the FSD
+// score. Resolves true to proceed, false to cancel.
+function confirmMergeDriveData() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('import-json-confirm-overlay');
+    const yes = document.getElementById('btn-import-json-confirm');
+    const no = document.getElementById('btn-import-json-cancel');
+    const done = (result) => {
+      overlay.classList.add('hidden');
+      yes.removeEventListener('click', onYes);
+      no.removeEventListener('click', onNo);
+      overlay.removeEventListener('click', onBackdrop);
+      resolve(result);
+    };
+    const onYes = () => done(true);
+    const onNo = () => done(false);
+    const onBackdrop = (e) => { if (e.target === overlay) done(false); };
+    yes.addEventListener('click', onYes);
+    no.addEventListener('click', onNo);
+    overlay.addEventListener('click', onBackdrop);
+    overlay.classList.remove('hidden');
+  });
+}
+
 // Units
 const UNIT_SYSTEM = {
   imperial: {
@@ -84,13 +115,85 @@ let unitSystem = localStorage.getItem('unitSystem') === 'metric' ? 'metric' : 'i
 let lastDrivesMeta = null;
 let markerType  = localStorage.getItem('markerType')  || 'arrow';
 let markerColor = localStorage.getItem('markerColor') || '#ffffff';
-let model3ColoredUrl = null;
+// Paintable replay-marker vehicles. Each pairs a base texture (_t: black body
+// with specular highlights) with a color mask (_c: bright = glass/tires/trim
+// that stays unpainted). All share the 1320x2118 canvas, hence one 56x90 box.
+// Adding a model = drop the two PNGs in assets/map-ui, add an entry here and
+// an <option> in index.html — options whose texture is missing self-remove at
+// startup (see the probe in initFooter).
+const VEHICLE_MODELS = {
+  // Each box keeps its own art's canvas aspect so nothing warps (3/Y are
+  // 1320x2118, X is 1320x2148); larger vehicles get proportionally larger boxes.
+  model3:     { texture: '../../assets/map-ui/Model3_t.png',     mask: '../../assets/map-ui/Model3_c.png',     w: 56, h: 90  },
+  modelY:     { texture: '../../assets/map-ui/ModelY_t.png',     mask: '../../assets/map-ui/ModelY_c.png',     w: 56, h: 90  },
+  modelS:     { texture: '../../assets/map-ui/ModelS_t.png',     mask: '../../assets/map-ui/ModelS_c.png',     w: 58, h: 93  },
+  modelX:     { texture: '../../assets/map-ui/ModelX_t.png',     mask: '../../assets/map-ui/ModelX_c.png',     w: 58, h: 94  },
+  cybertruck: { texture: '../../assets/map-ui/Cybertruck_t.png', mask: '../../assets/map-ui/Cybertruck_c.png', w: 64, h: 103 },
+};
+let vehicleColoredUrl = null; // tinted texture for the CURRENT vehicle model
 let carColorPicker   = null;
 let markerColorDebounceTimer = null;
 
 function scheduleMarkerColorUpdate(color) {
   clearTimeout(markerColorDebounceTimer);
   markerColorDebounceTimer = setTimeout(() => applyMarkerColor(color), 250);
+}
+
+// Drive line colors — customizable in Settings → Map UI → Customization.
+// The map layers read these values directly; CSS vars (--line-*) keep the
+// legend and FSD share bars in step. Invalid saved values fall back silently.
+const DRIVE_LINE_COLOR_DEFAULTS = {
+  manual:   '#2266cc',
+  fsd:      '#22cc55',
+  imported: '#a855f7',
+  overview: '#3b82f6',
+};
+let driveLineColors = (() => {
+  const colors = { ...DRIVE_LINE_COLOR_DEFAULTS };
+  try {
+    const saved = JSON.parse(localStorage.getItem('driveLineColors') || '{}');
+    for (const k of Object.keys(colors)) {
+      if (/^#[0-9a-fA-F]{6}$/.test(saved[k] || '')) colors[k] = saved[k];
+    }
+  } catch { /* corrupted setting — defaults win */ }
+  return colors;
+})();
+let driveLineColorsDebounceTimer = null;
+
+// Debounced like the marker color: the iro wheel fires per drag frame, and a
+// long selected route re-bakes its GeoJSON on every apply.
+function scheduleDriveLineColorsApply() {
+  clearTimeout(driveLineColorsDebounceTimer);
+  driveLineColorsDebounceTimer = setTimeout(applyDriveLineColors, 250);
+}
+
+// The iro color popup is shared between the car color and the drive line
+// swatches — openColorPopup re-targets which value the wheel edits.
+let colorPopupApply = null;   // active target's onChange(hex)
+let colorPopupAnchor = null;  // swatch the popup is anchored to (for toggling)
+
+function openColorPopup(anchor, title, color, onChange) {
+  const popup = document.getElementById('car-color-popup');
+  if (!popup.classList.contains('hidden') && colorPopupAnchor === anchor) {
+    closeColorPopup(); // clicking the same swatch again toggles it closed
+    return;
+  }
+  colorPopupApply = null; // silence color:change while the wheel syncs
+  carColorPicker.color.hexString = color;
+  document.getElementById('inp-car-hex').value = color;
+  document.querySelector('.car-color-popup-title').textContent = title;
+  colorPopupApply = onChange;
+  colorPopupAnchor = anchor;
+  const rect = anchor.getBoundingClientRect();
+  popup.style.top  = `${rect.bottom + 8}px`;
+  popup.style.left = `${Math.min(rect.left, window.innerWidth - 220)}px`;
+  popup.classList.remove('hidden');
+}
+
+function closeColorPopup() {
+  document.getElementById('car-color-popup').classList.add('hidden');
+  colorPopupApply = null;
+  colorPopupAnchor = null;
 }
 
 function distVal(mi, decimals = 1) {
@@ -112,6 +215,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initFooter();
   initChangelogModal();
   loadDefaultPaths();
+  applyDriveLineColors();
+  logAction(`ui ready — units=${unitSystem}, marker=${markerType}, mapLayer=${localStorage.getItem('mapLayer') || 'Light'}`);
 });
 
 // ─── Map ──────────────────────────────────────────────────────────────────────
@@ -317,13 +422,13 @@ function initMap() {
       id: 'overview-imported', type: 'line', source: 'overview',
       filter: ['==', ['get', 'imported'], true],
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#a855f7', 'line-opacity': 0.25, 'line-width': OVERVIEW_IMPORTED_LINE_WIDTH, 'line-dasharray': [2.4, 1.6] },
+      paint: { 'line-color': driveLineColors.imported, 'line-opacity': 0.25, 'line-width': OVERVIEW_IMPORTED_LINE_WIDTH, 'line-dasharray': [2.4, 1.6] },
     });
     map.addLayer({
       id: 'overview-native', type: 'line', source: 'overview',
       filter: ['!=', ['get', 'imported'], true],
       layout: { 'line-join': 'round', 'line-cap': 'round' },
-      paint: { 'line-color': '#3b82f6', 'line-opacity': 0.5, 'line-width': OVERVIEW_LINE_WIDTH },
+      paint: { 'line-color': driveLineColors.overview, 'line-opacity': 0.5, 'line-width': OVERVIEW_LINE_WIDTH },
     });
     // Selected drive on top: per-segment colors via feature properties;
     // dashes can't be data-driven, hence the solid/dashed layer pair.
@@ -722,15 +827,38 @@ function initFooter() {
   const vehiclePreview  = document.getElementById('vehicle-preview-wrap');
 
   const syncVehicleUI = () => {
-    const isModel3 = markerType === 'model3';
-    vehicleColorRow.classList.toggle('hidden', !isModel3);
-    vehiclePreview.classList.toggle('hidden', !isModel3);
+    const isVehicle = markerType in VEHICLE_MODELS;
+    vehicleColorRow.classList.toggle('hidden', !isVehicle);
+    vehiclePreview.classList.toggle('hidden', !isVehicle);
   };
+
+  // Self-pruning options: a vehicle whose artwork isn't fully shipped (both
+  // the _t texture and the _c paint mask are required) drops out of the
+  // dropdown instead of rendering nothing.
+  for (const [key, model] of Object.entries(VEHICLE_MODELS)) {
+    const prune = (missing) => () => {
+      selMarkerType.querySelector(`option[value="${key}"]`)?.remove();
+      if (markerType === key) {
+        markerType = 'arrow';
+        selMarkerType.value = 'arrow';
+        syncVehicleUI();
+        refreshReplayMarkerIcon();
+      }
+      logAction(`vehicle marker '${key}' unavailable — artwork missing (${missing})`);
+    };
+    for (const src of [model.texture, model.mask]) {
+      const probe = new Image();
+      probe.onerror = prune(src);
+      probe.src = src;
+    }
+  }
 
   selMarkerType.value = markerType;
   syncVehicleUI();
 
-  // Lazy-init iro color wheel — only once
+  // Lazy-init iro color wheel — only once. The popup is shared: each swatch
+  // re-targets it through openColorPopup, and color:change routes to whichever
+  // onChange is active.
   if (!carColorPicker) {
     carColorPicker = new iro.ColorPicker('#car-color-picker', {
       width: 160,
@@ -746,41 +874,60 @@ function initFooter() {
 
     carColorPicker.on('color:change', (color) => {
       hexInput.value = color.hexString;
-      scheduleMarkerColorUpdate(color.hexString);
+      if (colorPopupApply) colorPopupApply(color.hexString);
     });
 
     hexInput.addEventListener('input', () => {
       const val = hexInput.value;
       if (/^#[0-9a-fA-F]{6}$/.test(val)) {
-        carColorPicker.color.hexString = val;
-        scheduleMarkerColorUpdate(val);
+        carColorPicker.color.hexString = val; // fires color:change → active target
       }
     });
 
-    document.getElementById('btn-car-color-close').addEventListener('click', () => {
-      document.getElementById('car-color-popup').classList.add('hidden');
-    });
+    document.getElementById('btn-car-color-close').addEventListener('click', closeColorPopup);
   }
 
   const swatch = document.getElementById('btn-car-color-swatch');
   swatch.style.background = markerColor;
   swatch.addEventListener('click', () => {
-    const popup = document.getElementById('car-color-popup');
-    const rect  = swatch.getBoundingClientRect();
-    popup.style.top  = `${rect.bottom + 8}px`;
-    popup.style.left = `${Math.min(rect.left, window.innerWidth - 220)}px`;
-    popup.classList.toggle('hidden');
+    openColorPopup(swatch, 'Car Color', markerColor, scheduleMarkerColorUpdate);
   });
 
-  if (markerType === 'model3') applyMarkerColor(markerColor);
+  // Drive line colors — one swatch per palette role, sharing the same popup.
+  const LINE_COLOR_TITLES = { manual: 'Manual', fsd: 'Full Self-Driving', imported: 'Imported', overview: 'All Drives' };
+  const lineSwatches = document.querySelectorAll('.line-color-swatch');
+  const syncLineSwatches = () => {
+    lineSwatches.forEach((b) => { b.style.background = driveLineColors[b.dataset.linecolor]; });
+  };
+  syncLineSwatches();
+  lineSwatches.forEach((btn) => {
+    const key = btn.dataset.linecolor;
+    btn.addEventListener('click', () => {
+      openColorPopup(btn, LINE_COLOR_TITLES[key], driveLineColors[key], (hex) => {
+        driveLineColors[key] = hex;
+        localStorage.setItem('driveLineColors', JSON.stringify(driveLineColors));
+        btn.style.background = hex;
+        scheduleDriveLineColorsApply();
+      });
+    });
+  });
+  document.getElementById('btn-line-colors-reset').addEventListener('click', () => {
+    driveLineColors = { ...DRIVE_LINE_COLOR_DEFAULTS };
+    localStorage.removeItem('driveLineColors');
+    syncLineSwatches();
+    closeColorPopup();
+    applyDriveLineColors();
+  });
+
+  if (markerType in VEHICLE_MODELS) applyMarkerColor(markerColor);
 
   selMarkerType.addEventListener('change', async () => {
     markerType = selMarkerType.value;
     localStorage.setItem('markerType', markerType);
     syncVehicleUI();
-    // Ensure the model3 texture is ready before rebuilding the icon — otherwise
+    // Ensure the vehicle texture is ready before rebuilding the icon — otherwise
     // buildMarkerHtml falls back to the arrow.
-    if (markerType === 'model3') await applyMarkerColor(markerColor);
+    if (markerType in VEHICLE_MODELS) await applyMarkerColor(markerColor);
     refreshReplayMarkerIcon();
   });
 
@@ -1540,6 +1687,7 @@ function initViewDrivesTab() {
 let tessieProgressListener = null;
 let tessieDrivesPath = '';
 let tessieStatesPath = '';
+let importJsonPath = '';       // source path for "Drive Data File" import mode
 let tessieImportMode = 'api';
 
 function initTessieImport() {
@@ -1634,11 +1782,15 @@ function initTessieImport() {
     });
   }
 
+  const jsonPathInput = document.getElementById('import-json-path');
+
   const resetModal = () => {
     tessieDrivesPath = '';
     tessieStatesPath = '';
+    importJsonPath = '';
     drivesInput.value = '';
     statesInput.value = '';
+    if (jsonPathInput) jsonPathInput.value = '';
     previewEl.classList.add('hidden');
     previewEl.innerHTML = '';
     progressEl.classList.add('hidden');
@@ -1657,10 +1809,21 @@ function initTessieImport() {
       document.querySelectorAll('.tessie-mode-btn').forEach((x) => x.classList.toggle('active', x === b));
       document.getElementById('tessie-mode-api').classList.toggle('hidden', tessieImportMode !== 'api');
       document.getElementById('tessie-mode-csv').classList.toggle('hidden', tessieImportMode !== 'csv');
+      document.getElementById('tessie-mode-json').classList.toggle('hidden', tessieImportMode !== 'json');
       previewEl.classList.add('hidden');
       previewEl.innerHTML = '';
       refreshConfirmReady();
     });
+  });
+
+  document.getElementById('browse-import-json').addEventListener('click', async () => {
+    const p = await window.electronAPI.selectFile({ filters: [{ name: 'Drive data', extensions: ['json'] }] });
+    if (!p) return;
+    importJsonPath = p;
+    jsonPathInput.value = p;
+    previewEl.classList.add('hidden');
+    previewEl.innerHTML = '';
+    refreshConfirmReady();
   });
 
   // Default date range: last 90 days
@@ -1815,6 +1978,8 @@ function initTessieImport() {
   function refreshConfirmReady() {
     if (tessieImportMode === 'api') {
       confirmBtn.disabled = !(tokenInput.value.trim() && vinSelect.value && !vinSelect.disabled);
+    } else if (tessieImportMode === 'json') {
+      confirmBtn.disabled = !importJsonPath;
     } else {
       confirmBtn.disabled = !(tessieDrivesPath && tessieStatesPath);
     }
@@ -1834,6 +1999,9 @@ function initTessieImport() {
     if (tessieImportMode === 'api') {
       previewEl.innerHTML = `<em>Querying ${escapeHtml(svc().label)} API…</em>`;
       result = await svc().preview(args);
+    } else if (tessieImportMode === 'json') {
+      previewEl.innerHTML = '<em>Scanning file…</em>';
+      result = await window.electronAPI.importDriveDataFilePreview(args);
     } else {
       previewEl.innerHTML = '<em>Scanning CSVs…</em>';
       result = await svc().csvPreview(args);
@@ -1849,6 +2017,15 @@ function initTessieImport() {
 
   function renderPreview(result) {
     const parts = [];
+    if (tessieImportMode === 'json') {
+      parts.push(`Found <span class="tessie-preview-count">${fmt(result.totalDrives)}</span> drive(s) in the file.`);
+      parts.push(`<span class="tessie-preview-count">${fmt(result.toImport)}</span> new drive(s) will be imported.`);
+      if (result.toImport === 0 && result.totalDrives > 0) {
+        parts.push('<em>Nothing new — every drive in that file is already in your data.</em>');
+      }
+      previewEl.innerHTML = parts.join('<br>');
+      return;
+    }
     parts.push(`Found <span class="tessie-preview-count">${fmt(result.totalDrives)}</span> drive(s) on ${escapeHtml(svc().label)}.`);
     parts.push(`<span class="tessie-preview-count">${fmt(result.toImport)}</span> will be imported.`);
     if (result.overlapSkipped > 0) parts.push(`${fmt(result.overlapSkipped)} skipped (overlaps existing SEI data).`);
@@ -1878,6 +2055,9 @@ function initTessieImport() {
         fromSec, toSec,
         driveDataPath: loadedFilePath,
       };
+    } else if (modeAtClick === 'json') {
+      if (!importJsonPath) return;
+      args = { driveDataPath: loadedFilePath, sourcePath: importJsonPath };
     } else {
       if (!tessieDrivesPath || !tessieStatesPath) return;
       args = {
@@ -1901,9 +2081,21 @@ function initTessieImport() {
       return;
     }
 
+    // Merging another drive-data.json folds its FSD/Autopilot data into the
+    // user's stats — confirm before touching their scores.
+    if (modeAtClick === 'json') {
+      const proceed = await confirmMergeDriveData();
+      if (proceed !== true || overlay.classList.contains('hidden')) {
+        confirmBtn.textContent = 'Import';
+        refreshConfirmReady();
+        return;
+      }
+    }
+
     const beforeCount = drives.length;
 
     confirmBtn.textContent = 'Importing…';
+    logAction(`import started (${modeAtClick === 'api' ? selectedService + ' API' : modeAtClick === 'json' ? 'drive-data file' : 'CSV'})`);
     closeBtn.title = 'Cancel import';
     progressEl.classList.remove('hidden');
 
@@ -1917,7 +2109,8 @@ function initTessieImport() {
     barEl.style.width = '0%';
 
     if (tessieProgressListener) tessieProgressListener();
-    tessieProgressListener = svc().onProgress(({ phase, current, total, etaSec }) => {
+    const onProgress = modeAtClick === 'json' ? window.electronAPI.onImportJsonProgress : svc().onProgress;
+    tessieProgressListener = onProgress(({ phase, current, total, etaSec }) => {
       phaseEl.textContent = phase;
       if (total > 0) {
         const pct = Math.round((current / total) * 100);
@@ -1930,14 +2123,26 @@ function initTessieImport() {
         } else {
           etaEl.textContent = '';
         }
+      } else {
+        pctEl.textContent = '';
+        barEl.style.width = '0%';
       }
     });
 
+    // The handlers normally resolve {success:false} on failure, but a rejected
+    // invoke (unexpected main-process throw) must not strand the modal on
+    // "Importing…" with the progress listener attached.
     let result;
-    if (modeAtClick === 'api') {
-      result = await svc().runImport(args);
-    } else {
-      result = await svc().csvImport(args);
+    try {
+      if (modeAtClick === 'api') {
+        result = await svc().runImport(args);
+      } else if (modeAtClick === 'json') {
+        result = await window.electronAPI.importDriveDataFile(args);
+      } else {
+        result = await svc().csvImport(args);
+      }
+    } catch (err) {
+      result = { success: false, error: err?.message || String(err) };
     }
 
     if (tessieProgressListener) { tessieProgressListener(); tessieProgressListener = null; }
@@ -1965,12 +2170,16 @@ function initTessieImport() {
       'fetch-error': 'Tessie API request failed',
       'unknown': 'other',
     };
+    const sourceLabel = modeAtClick === 'json' ? 'imported' : escapeHtml(svc().label);
     const lines = [];
     lines.push(result.canceled
       ? `Import canceled. ${fmt(result.imported)} drive(s) written before cancel.`
-      : `Imported ${fmt(result.imported)} ${escapeHtml(svc().label)} drive(s).`);
+      : `Imported ${fmt(result.imported)} ${sourceLabel} drive(s).`);
     lines.push('');
     lines.push(`Drive count: ${fmt(beforeCount)} → ${fmt(afterCount)} (+${fmt(visibleAdded)})`);
+    if (modeAtClick === 'json' && result.tagged > 0) {
+      lines.push(`${fmt(result.tagged)} imported drive(s) brought their tags along.`);
+    }
     if (hiddenBySei > 0) {
       lines.push('');
       lines.push(`${fmt(hiddenBySei)} drive(s) hidden because they overlap dashcam drives:`);
@@ -2411,7 +2620,7 @@ function renderSelectedDriveStats(drive) {
   `;
 
   const slices = [];
-  if (fsdDistM > 0)    slices.push({ color: '#22cc55',                    pct: (fsdDistM / totalDistM) * 100 });
+  if (fsdDistM > 0)    slices.push({ color: 'var(--line-fsd, #22cc55)',   pct: (fsdDistM / totalDistM) * 100 });
   if (apDistM > 0)     slices.push({ color: 'var(--ap-blue, #3e6ae1)', pct: (apDistM / totalDistM) * 100 });
   if (taccDistM > 0)   slices.push({ color: '#f59e0b',                    pct: (taccDistM / totalDistM) * 100 });
   if (manualDistM > 0) slices.push({ color: 'rgba(148, 163, 184, 0.55)',  pct: (manualDistM / totalDistM) * 100 });
@@ -2605,7 +2814,7 @@ function renderDriveStats(drives, meta) {
 
   // Build the donut chart: cumulative conic-gradient stops using exact percentages.
   const slices = [];
-  if (fsdDistM > 0)    slices.push({ color: '#22cc55',                    pct: (fsdDistM / totalDistM) * 100 });
+  if (fsdDistM > 0)    slices.push({ color: 'var(--line-fsd, #22cc55)',   pct: (fsdDistM / totalDistM) * 100 });
   if (apDistM > 0)     slices.push({ color: 'var(--ap-blue, #3e6ae1)', pct: (apDistM / totalDistM) * 100 });
   if (taccDistM > 0)   slices.push({ color: '#f59e0b',                    pct: (taccDistM / totalDistM) * 100 });
   if (manualDistM > 0) slices.push({ color: 'rgba(148, 163, 184, 0.55)',  pct: (manualDistM / totalDistM) * 100 });
@@ -3019,6 +3228,7 @@ async function selectDrive(drive) {
     selectedEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   selectedDriveId = drive.id;
+  logAction(`opened drive ${drive.startTime}${drive.source && drive.source !== 'sei' ? ` (${drive.source})` : ''}`);
 
   // Context lines: the overview layers dim everything to grey, hide the
   // selected drive's own line, or clear entirely per hideOtherDrives —
@@ -3115,12 +3325,23 @@ function makeDotMarker(latLng, { fill, radius = 7, strokeW = 2, opacity = 1, too
   el.style.border = `${strokeW}px solid #fff`;
   if (opacity !== 1) el.style.opacity = String(opacity);
   if (label) {
-    el.textContent = label;
-    el.style.color = labelColor;
-    el.style.font = `700 ${Math.round(radius * 1.2)}px/1 'Noto Sans', sans-serif`;
     el.style.display = 'flex';
     el.style.alignItems = 'center';
     el.style.justifyContent = 'center';
+    // The letter lives in an inner span: el is anchored to the GPS point, so any
+    // optical nudge has to move the glyph, not the circle.
+    const lbl = document.createElement('span');
+    lbl.textContent = label;
+    lbl.style.color = labelColor;
+    lbl.style.fontFamily = "'Noto Sans', sans-serif";
+    lbl.style.fontWeight = '800';
+    lbl.style.fontSize = `${Math.round(radius * 1.7)}px`; // fill the circle
+    lbl.style.lineHeight = '1';
+    lbl.style.textShadow = '0 1px 2px rgba(0, 0, 0, 0.5)'; // legibility on any fill
+    // Capitals have no descender, so a flex-centered line box sits ~1-2px high;
+    // nudge the glyph down to optically center it in the circle.
+    lbl.style.transform = 'translateY(0.06em)';
+    el.appendChild(lbl);
   }
   if (tooltip) attachMapTooltip(el, tooltip);
   return new maplibregl.Marker({ element: el, anchor: 'center' })
@@ -3281,6 +3502,40 @@ function dimColor(hex, factor = 0.45) {
   return `#${ch(16)}${ch(8)}${ch(0)}`;
 }
 
+// Push the drive-line palette everywhere it appears: CSS vars (legend + FSD
+// share bars follow automatically), the overview layers, and — when a drive
+// is selected — the per-segment colors baked into the route's GeoJSON. The
+// selected route is re-baked from replayTrailCtx.runs (each run knows its
+// palette role) rather than via drawSelectedDrive, which would re-fit the
+// camera and reset the replay position.
+function applyDriveLineColors() {
+  const c = driveLineColors;
+  const root = document.documentElement.style;
+  root.setProperty('--line-manual', c.manual);
+  root.setProperty('--line-fsd', c.fsd);
+  root.setProperty('--line-imported', c.imported);
+  root.setProperty('--line-overview', c.overview);
+  whenMapReady(() => {
+    map.setPaintProperty('overview-native', 'line-color', c.overview);
+    map.setPaintProperty('overview-imported', 'line-color', c.imported);
+    if (!replayTrailCtx) return;
+    const { runs, latLngs, smooth, driveId } = replayTrailCtx;
+    for (const run of runs) run.color = c[run.role] || run.color;
+    const features = runs.map((run) => {
+      let seg = latLngs.slice(run.from, run.to + 1);
+      if (smooth) seg = smoothLatLngsForDisplay(seg);
+      return {
+        type: 'Feature',
+        properties: { driveId, color: run.color, colorDim: dimColor(run.color), dashed: run.dashed, w: run.w },
+        geometry: { type: 'LineString', coordinates: seg.map((p) => [p[1], p[0]]) },
+      };
+    });
+    map.getSource('selected-route').setData({ type: 'FeatureCollection', features });
+    updateReplayTrail(replayIdx); // re-slice the traveled overlay in the new colors
+  });
+  logAction(`drive line colors — manual=${c.manual} fsd=${c.fsd} imported=${c.imported} overview=${c.overview}`);
+}
+
 // Repaint the traveled part of the selected route (everything at or before
 // the replay marker) in its normal colors; the base layers underneath stay
 // dimmed. Runs every replay tick and scrub — slicing plus one small setData
@@ -3339,16 +3594,20 @@ function drawSelectedDrive(drive) {
   // color as the replay marker passes, using the index ranges in trailRuns.
   const features = [];
   const trailRuns = [];
-  const pushSeg = (from, to, color, dashed, w) => {
+  // Segments carry their palette ROLE (manual/fsd/imported) so a Settings
+  // color change can re-bake them via applyDriveLineColors without a full
+  // redraw (which would re-fit the camera and reset the replay).
+  const pushSeg = (from, to, role, dashed, w) => {
     if (to - from < 1) return;
     let seg = latLngs.slice(from, to + 1);
     if (isTessie) seg = smoothLatLngsForDisplay(seg);
+    const color = driveLineColors[role];
     features.push({
       type: 'Feature',
       properties: { driveId: drive.id, color, colorDim: dimColor(color), dashed, w },
       geometry: { type: 'LineString', coordinates: seg.map((p) => [p[1], p[0]]) },
     });
-    trailRuns.push({ from, to, color, dashed, w });
+    trailRuns.push({ from, to, role, color, dashed, w });
   };
 
   if (hasFSD) {
@@ -3362,7 +3621,7 @@ function drawSelectedDrive(drive) {
       pushSeg(
         i,
         Math.min(j, pts.length - 1),
-        engaged ? '#22cc55' : (isTessie ? '#a855f7' : '#2266cc'),
+        engaged ? 'fsd' : (isTessie ? 'imported' : 'manual'),
         isTessie,
         5
       );
@@ -3370,12 +3629,12 @@ function drawSelectedDrive(drive) {
     }
   } else if (isTessie) {
     // Tessie drive with no per-point FSD data (CSV import or missing path).
-    pushSeg(0, latLngs.length - 1, '#a855f7', true, 5);
+    pushSeg(0, latLngs.length - 1, 'imported', true, 5);
   } else {
-    pushSeg(0, latLngs.length - 1, '#2266cc', false, 4);
+    pushSeg(0, latLngs.length - 1, 'manual', false, 4);
   }
 
-  replayTrailCtx = { runs: trailRuns, latLngs, smooth: isTessie };
+  replayTrailCtx = { runs: trailRuns, latLngs, smooth: isTessie, driveId: drive.id };
   whenMapReady(() => {
     map.getSource('selected-route').setData({ type: 'FeatureCollection', features });
     map.getSource('selected-traveled').setData(EMPTY_FC); // nothing traveled yet
@@ -3390,12 +3649,12 @@ function drawSelectedDrive(drive) {
     for (const ev of drive.fsdEvents) {
       const disengage = ev.type === 'disengagement';
       fsdEventMarkers.push(makeDotMarker([ev.lat, ev.lng], {
-        fill: disengage ? '#ef4444' : '#ffdd00',
-        radius: 8,
+        fill: disengage ? '#ef4444' : '#f59e0b',   // accel: yellowish-orange for legible white text
+        radius: 9,
         strokeW: 1.5,
-        opacity: 0.9,
+        opacity: 0.95,
         label: disengage ? 'D' : 'A',
-        labelColor: disengage ? '#fff' : '#1f2937',
+        labelColor: '#fff',
         tooltip: disengage ? 'FSD Disengagement' : 'Accelerator Override',
       }));
     }
@@ -3440,7 +3699,6 @@ function drawSelectedDrive(drive) {
 // ─── Drive Replay ────────────────────────────────────────────────────────────
 const GEAR_LABELS = { 0: 'P', 1: 'D', 2: 'R', 3: 'N' };
 const GEAR_CLASSES = { 0: 'gear-p', 1: 'gear-d', 2: 'gear-r', 3: 'gear-n' };
-const SPEED_FACTORS = [1, 2, 5, 10];
 let replayCurrentBearing = 0;
 
 function initReplay(drive) {
@@ -3482,7 +3740,10 @@ function initReplay(drive) {
   };
 
   document.getElementById('btn-replay-play').onclick = toggleReplay;
-  document.getElementById('btn-replay-speed').onclick = cycleReplaySpeed;
+  document.getElementById('btn-replay-speed').onclick = (e) => { e.stopPropagation(); toggleSpeedMenu(); };
+  document.querySelectorAll('.replay-speed-item').forEach((item) => {
+    item.onclick = (e) => { e.stopPropagation(); setReplaySpeed(Number(item.dataset.speed)); closeSpeedMenu(); };
+  });
 }
 
 function formatReplayTime(ms) {
@@ -3531,15 +3792,41 @@ function stopReplay() {
   document.getElementById('replay-play-icon').textContent = 'play_arrow';
 }
 
-function cycleReplaySpeed() {
-  const curIdx = SPEED_FACTORS.indexOf(replaySpeed);
-  replaySpeed = SPEED_FACTORS[(curIdx + 1) % SPEED_FACTORS.length];
+function setReplaySpeed(speed) {
+  replaySpeed = speed;
   document.getElementById('btn-replay-speed').textContent = `${replaySpeed}x`;
-
   // Restart interval at new speed if playing
   if (replayPlaying) {
     clearInterval(replayInterval);
     replayInterval = setInterval(replayTick, REPLAY_BASE_MS / replaySpeed);
+  }
+}
+
+// Playback-speed pop-up list (replaces click-to-cycle).
+let _closeSpeedMenuOutside = null;
+function toggleSpeedMenu() {
+  const menu = document.getElementById('replay-speed-menu');
+  if (!menu) return;
+  if (menu.classList.contains('hidden')) openSpeedMenu(); else closeSpeedMenu();
+}
+function openSpeedMenu() {
+  const menu = document.getElementById('replay-speed-menu');
+  if (!menu) return;
+  menu.querySelectorAll('.replay-speed-item').forEach((item) => {
+    item.classList.toggle('active', Number(item.dataset.speed) === replaySpeed);
+  });
+  menu.classList.remove('hidden');
+  // Close on any click outside the speed control (deferred so the opening
+  // click doesn't immediately dismiss it).
+  _closeSpeedMenuOutside = (e) => { if (!e.target.closest('.replay-speed-wrap')) closeSpeedMenu(); };
+  setTimeout(() => document.addEventListener('click', _closeSpeedMenuOutside), 0);
+}
+function closeSpeedMenu() {
+  const menu = document.getElementById('replay-speed-menu');
+  if (menu) menu.classList.add('hidden');
+  if (_closeSpeedMenuOutside) {
+    document.removeEventListener('click', _closeSpeedMenuOutside);
+    _closeSpeedMenuOutside = null;
   }
 }
 
@@ -3638,20 +3925,17 @@ function calcBearing(lat1, lon1, lat2, lon2) {
 
 // ─── Marker helpers ──────────────────────────────────────────────────────────
 
-const MARKER_SIZES = {
-  arrow:  { w: 128, h: 128 },
-  model3: { w: 56,  h: 90  },
-};
+const ARROW_MARKER_SIZE = { w: 128, h: 128 };
 
 function getMarkerSize() {
-  return MARKER_SIZES[markerType] ?? MARKER_SIZES.arrow;
+  return VEHICLE_MODELS[markerType] ?? ARROW_MARKER_SIZE;
 }
 
 function buildMarkerHtml(bearing) {
   const shadow = 'filter:drop-shadow(0 0 4px rgba(0,0,0,0.5))';
   const { w, h } = getMarkerSize();
-  if (markerType === 'model3' && model3ColoredUrl) {
-    return `<img id="replay-arrow" src="${model3ColoredUrl}" style="width:${w}px;height:${h}px;transform:rotate(${bearing}deg);transition:transform 60ms linear;${shadow};" />`;
+  if (markerType in VEHICLE_MODELS && vehicleColoredUrl) {
+    return `<img id="replay-arrow" src="${vehicleColoredUrl}" style="width:${w}px;height:${h}px;transform:rotate(${bearing}deg);transition:transform 60ms linear;${shadow};" />`;
   }
   return `<img id="replay-arrow" src="../../assets/map-ui/arrow.png" style="width:${w}px;height:${h}px;transform:rotate(${bearing}deg);transition:transform 60ms linear;${shadow};" />`;
 }
@@ -3675,11 +3959,16 @@ function refreshReplayMarkerIcon() {
   el.innerHTML = buildMarkerHtml(bearing);
 }
 
-function renderModel3Color(color) {
+function renderVehicleColor(color, model) {
   return new Promise((resolve) => {
     const imgT = new Image();
     const imgC = new Image();
     let loaded = 0;
+
+    // Missing artwork (e.g. a model whose PNGs haven't shipped) resolves null
+    // instead of hanging the promise — buildMarkerHtml then falls back to the
+    // arrow and the option probe in initFooter prunes the dropdown.
+    imgT.onerror = imgC.onerror = () => resolve(null);
 
     const onLoad = () => {
       if (++loaded < 2) return;
@@ -3706,16 +3995,53 @@ function renderModel3Color(color) {
       const tg = parseInt(color.slice(3, 5), 16);
       const tb = parseInt(color.slice(5, 7), 16);
 
+      // The art sets differ in body color — Model 3's _t is near-BLACK, Model
+      // Y's WHITE, Model X's RED — so detect the base from the average
+      // paintable luminance instead of hardcoding per model. Hue is always
+      // discarded (only luminance carries shading), so a colored base never
+      // tints the chosen paint.
+      let lumSum = 0;
+      let lumCount = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] < 10) continue;
+        const maskLum = (maskD[i] * 0.299 + maskD[i + 1] * 0.587 + maskD[i + 2] * 0.114) / 255;
+        if (maskLum > 0.5) continue;
+        lumSum += (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255;
+        lumCount++;
+      }
+      const avgLum = lumCount > 0 ? lumSum / lumCount : 0.5;
+      // Three shading regimes by base brightness:
+      //  dark  (<0.20)  black body — lerp toward white (tuned on Model 3)
+      //  light (>0.65)  white body — multiply (pure white = the paint tone,
+      //                 not specular; pivoting here would blotch the body)
+      //  mid            colored body (e.g. red) — pivot at the average: the
+      //                 typical body pixel becomes exactly the chosen color,
+      //                 darker shades it, brighter rolls into specular white
+      const regime = avgLum < 0.2 ? 'dark' : avgLum > 0.65 ? 'light' : 'mid';
+
       for (let i = 0; i < d.length; i += 4) {
         if (d[i + 3] < 10) continue;
         const maskLum = (maskD[i] * 0.299 + maskD[i + 1] * 0.587 + maskD[i + 2] * 0.114) / 255;
         if (maskLum > 0.5) continue; // window / tire / trim — leave untouched
-        // _t has a black body: dark pixels → chosen color, bright specular → white.
-        // lerp(color, white, luminance) gives realistic shading on a dark base.
         const baseLum = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255;
-        d[i]     = Math.round(tr + (255 - tr) * baseLum);
-        d[i + 1] = Math.round(tg + (255 - tg) * baseLum);
-        d[i + 2] = Math.round(tb + (255 - tb) * baseLum);
+        let s; // shadow factor (multiply by paint) …
+        let h; // … or highlight factor (lerp paint toward white)
+        if (regime === 'dark') {
+          s = 1;
+          h = baseLum;
+        } else if (regime === 'light') {
+          s = baseLum;
+          h = 0;
+        } else if (baseLum <= avgLum) {
+          s = baseLum / avgLum;
+          h = 0;
+        } else {
+          s = 1;
+          h = (baseLum - avgLum) / (1 - avgLum);
+        }
+        d[i]     = Math.round(tr * s + (255 - tr * s) * h);
+        d[i + 1] = Math.round(tg * s + (255 - tg * s) * h);
+        d[i + 2] = Math.round(tb * s + (255 - tb * s) * h);
       }
 
       ctx.putImageData(imageData, 0, 0);
@@ -3724,15 +4050,16 @@ function renderModel3Color(color) {
 
     imgT.onload = onLoad;
     imgC.onload = onLoad;
-    imgT.src = '../../assets/map-ui/Model3_t.png';
-    imgC.src = '../../assets/map-ui/Model3_c.png';
+    imgT.src = model.texture;
+    imgC.src = model.mask;
   });
 }
 
 async function applyMarkerColor(color) {
   markerColor = color;
   localStorage.setItem('markerColor', color);
-  model3ColoredUrl = await renderModel3Color(color);
+  const model = VEHICLE_MODELS[markerType];
+  vehicleColoredUrl = model ? await renderVehicleColor(color, model) : null;
 
   // Keep swatch button in sync
   const swatch = document.getElementById('btn-car-color-swatch');
@@ -3740,19 +4067,19 @@ async function applyMarkerColor(color) {
 
   // Update preview canvas in settings
   const previewCanvas = document.getElementById('vehicle-preview-canvas');
-  if (previewCanvas && model3ColoredUrl) {
+  if (previewCanvas && vehicleColoredUrl) {
     const img = new Image();
     img.onload = () => {
       previewCanvas.width  = img.naturalWidth;
       previewCanvas.height = img.naturalHeight;
       previewCanvas.getContext('2d').drawImage(img, 0, 0);
     };
-    img.src = model3ColoredUrl;
+    img.src = vehicleColoredUrl;
   }
 
   // Refresh live replay marker if one is on the map
   const arrowEl = document.getElementById('replay-arrow');
-  if (arrowEl && markerType === 'model3') arrowEl.src = model3ColoredUrl;
+  if (arrowEl && model && vehicleColoredUrl) arrowEl.src = vehicleColoredUrl;
 }
 
 // First confident heading of the drive — where the replay marker points
@@ -3978,6 +4305,7 @@ function updateReplayData(idx) {
 
 function cleanupReplay() {
   stopReplay();
+  closeSpeedMenu();
   replayDrive = null;
   replayMarker = null;
   replayTrailCtx = null;
@@ -4033,6 +4361,7 @@ async function addTag(drive, tagName) {
   if (tags.includes(tagName)) return;
   tags.push(tagName);
   drive.tags = tags;
+  logAction(`tag added: "${tagName}"`);
 
   // Optimistic UI: render immediately so the pill appears without waiting for
   // the (potentially large) drive-data.json write — set-drive-tags rewrites the
@@ -4061,6 +4390,7 @@ async function removeTag(drive, tagName) {
   if (!loadedFilePath) return;
   const prev = [...(drive.tags ?? [])];
   drive.tags = prev.filter((t) => t !== tagName);
+  logAction(`tag removed: "${tagName}"`);
 
   // Optimistic UI (see addTag).
   rebuildAllTagsFromDrives();

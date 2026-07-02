@@ -12,10 +12,10 @@
   --border:      #1e242f;
   --border-light:#2a3140;
 
-  /* Accent — Sentry Drive blue */
-  --accent:      #3b82f6;
-  --accent-hover:#60a5fa;
-  --accent-dim:  #2563eb;
+  /* Accent — Sentry USB green (emerald) */
+  --accent:      #34d399;
+  --accent-hover:#6ee7b7;
+  --accent-dim:  #10b981;
 
   /* Text — slate */
   --text:        #e6e9ef;
@@ -26,11 +26,22 @@
   --log-bg:      #07090c;
   --drive-bg:    #10141b;
   --drive-hover: #161b24;
-  --drive-sel:   rgba(59, 130, 246, 0.1);
-  --blue:        #3b82f6;
-  --blue-light:  #60a5fa;
-  --ap-blue:       #3e6ae1; /* Tesla Blue — Autopilot in the FSD analytics */
+  --drive-sel:   rgba(52, 211, 153, 0.1);
+  /* --blue / --blue-light are the UI accent (now green); kept under these names
+     so the many var(--blue*) call sites don't all need renaming. Both point at
+     the base emerald: Sentry USB renders accent TEXT in the base accent color
+     (its halo/chip/pill classes), and the paler #6ee7b7 read washed-out. */
+  --blue:        #34d399;
+  --blue-light:  #34d399;
+  --ap-blue:       #3e6ae1; /* Tesla Blue — Autopilot in the FSD analytics (stays blue) */
   --ap-blue-light: #8aa4f0; /* same hue, lifted for small text on dark glass */
+
+  /* Drive line colors — defaults; overridden at runtime from Settings →
+     Map UI → Customization (renderer sets these on documentElement). */
+  --line-manual:   #2266cc;
+  --line-fsd:      #22cc55;
+  --line-imported: #a855f7;
+  --line-overview: #3b82f6;
   --fsd-blue:    #3b82f6;
   --fsd-white:   rgba(180, 210, 240, 0.75);
   --success:     #34d399;
@@ -114,11 +125,11 @@ html, body {
   /* Ambient glow spans the full panel — through the (transparent) app-title
      header at the top and the footer at the bottom. */
   background:
-    radial-gradient(660px 480px at 24% -8%, rgba(59, 130, 246, 0.30), transparent 70%),
+    radial-gradient(660px 480px at 24% -8%, rgba(52, 211, 153, 0.30), transparent 70%),
     radial-gradient(560px 440px at 112% 4%, rgba(139, 92, 246, 0.22), transparent 66%),
-    radial-gradient(700px 560px at 50% 48%, rgba(59, 130, 246, 0.07), transparent 70%),
+    radial-gradient(700px 560px at 50% 48%, rgba(52, 211, 153, 0.07), transparent 70%),
     radial-gradient(620px 500px at 12% 112%, rgba(99, 102, 241, 0.26), transparent 68%),
-    radial-gradient(540px 460px at 106% 108%, rgba(59, 130, 246, 0.18), transparent 66%),
+    radial-gradient(540px 460px at 106% 108%, rgba(52, 211, 153, 0.18), transparent 66%),
     var(--panel-bg);
   border-right: 1px solid var(--border);
   flex-shrink: 0;
@@ -138,7 +149,7 @@ html, body {
 #app-logo {
   width: 32px;
   height: 32px;
-  background: rgba(59, 130, 246, 0.18);
+  background: rgba(52, 211, 153, 0.18);
   border-radius: 10px;
   display: flex;
   align-items: center;
@@ -294,27 +305,30 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   width: 100%;
   padding: 10px 14px;
   font-size: 13px;
+  /* Accent text on the accent glass — Sentry USB's accent-chip pattern —
+     instead of the white label, so the toolbar reads as one emerald set. */
+  color: var(--blue-light);
 }
 
 /* Liquid Glass buttons: specular top rim + soft depth, matching --card-bg
-   surfaces. Primary keeps the solid blue identity under a glass highlight;
+   surfaces. Primary keeps the emerald identity under a glass highlight;
    secondary/danger are frosted tiles that pick up color on hover. */
 .btn-primary {
-  background: linear-gradient(150deg, rgba(96, 165, 250, 0.3), rgba(59, 130, 246, 0.14) 55%, rgba(96, 165, 250, 0.2));
+  background: linear-gradient(150deg, rgba(110, 231, 183, 0.3), rgba(52, 211, 153, 0.14) 55%, rgba(110, 231, 183, 0.2));
   color: #fff;
-  border: 1px solid rgba(125, 170, 255, 0.38);
+  border: 1px solid rgba(110, 231, 183, 0.45);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.28),
     inset 0 -1px 1px rgba(255, 255, 255, 0.05),
-    0 6px 18px -6px rgba(59, 130, 246, 0.4);
+    0 6px 18px -6px rgba(52, 211, 153, 0.4);
 }
 .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(150deg, rgba(96, 165, 250, 0.42), rgba(59, 130, 246, 0.22) 55%, rgba(96, 165, 250, 0.3));
-  border-color: rgba(125, 170, 255, 0.55);
+  background: linear-gradient(150deg, rgba(110, 231, 183, 0.42), rgba(52, 211, 153, 0.22) 55%, rgba(110, 231, 183, 0.3));
+  border-color: rgba(110, 231, 183, 0.62);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.35),
     inset 0 -1px 1px rgba(255, 255, 255, 0.05),
-    0 8px 22px -6px rgba(59, 130, 246, 0.55);
+    0 8px 22px -6px rgba(52, 211, 153, 0.55);
 }
 .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
@@ -328,12 +342,12 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
     0 4px 12px rgba(0, 0, 0, 0.28);
 }
 .btn-secondary:hover:not(:disabled) {
-  background: linear-gradient(150deg, rgba(96, 165, 250, 0.18), rgba(59, 130, 246, 0.07) 55%, rgba(96, 165, 250, 0.11));
-  border-color: rgba(96, 165, 250, 0.38);
+  background: linear-gradient(150deg, rgba(110, 231, 183, 0.18), rgba(52, 211, 153, 0.07) 55%, rgba(110, 231, 183, 0.11));
+  border-color: rgba(110, 231, 183, 0.38);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.2),
     inset 0 -1px 1px rgba(255, 255, 255, 0.04),
-    0 4px 14px rgba(59, 130, 246, 0.2);
+    0 4px 14px rgba(52, 211, 153, 0.2);
 }
 
 .btn-danger {
@@ -355,6 +369,14 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
     0 4px 14px rgba(248, 113, 113, 0.18);
 }
 .btn-danger:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Toolbar destructive pair (Revert / Remove Imported Drives): rest GREEN like
+   their siblings once armed — enabled means a backup or imported drives exist.
+   The :not(:hover) guard lets .btn-danger's red hover keep the warning cue;
+   disabled stays the muted faded grey. Confirm-modal danger buttons and the
+   processing Stop button are untouched. */
+#btn-revert-gps:not(:disabled):not(:hover),
+#btn-remove-tessie:not(:disabled):not(:hover) { color: var(--blue-light); }
 
 .btn-icon {
   padding: 7px 10px;
@@ -397,7 +419,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   transition: background 0.15s, border-color 0.15s;
   outline: none;
 }
-.btn-auto:hover { background: rgba(59, 130, 246, 0.1); border-color: var(--accent); }
+.btn-auto:hover { background: rgba(52, 211, 153, 0.1); border-color: var(--accent); }
 
 .slider {
   -webkit-appearance: none;
@@ -416,7 +438,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   border-radius: 50%;
   background: var(--accent);
   cursor: pointer;
-  box-shadow: 0 0 4px rgba(59, 130, 246, 0.4);
+  box-shadow: 0 0 4px rgba(52, 211, 153, 0.4);
 }
 
 /* ── Progress ───────────────────────────────────────────────────────────── */
@@ -575,12 +597,12 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   contain-intrinsic-size: auto 140px;
 }
 .drive-item:hover {
-  border-color: rgba(96, 165, 250, 0.45);
+  border-color: rgba(110, 231, 183, 0.45);
   background: var(--card-hover-bg);
 }
 .drive-item.selected {
-  border-color: rgba(96, 165, 250, 0.55);
-  background: linear-gradient(150deg, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.06) 60%, rgba(59, 130, 246, 0.1));
+  border-color: rgba(110, 231, 183, 0.55);
+  background: linear-gradient(150deg, rgba(52, 211, 153, 0.18), rgba(52, 211, 153, 0.06) 60%, rgba(52, 211, 153, 0.1));
 }
 
 /* Horizontal journey — times (start ─┄─ end) across the top, then the
@@ -599,7 +621,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .journey-track { flex: 1 1 auto; min-width: 16px; display: flex; align-items: center; gap: 5px; }
 .jt-pin { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; }
 .jt-pin--origin { box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.3); }
-.jt-pin--dest { background: var(--blue-light); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3); }
+.jt-pin--dest { background: var(--blue-light); box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.3); }
 .jt-dash { flex: 1 1 auto; height: 0; border-top: 1px dashed rgba(255, 255, 255, 0.22); }
 
 .journey-labels {
@@ -668,7 +690,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 .drive-chip .material-icons { font-size: 12px; }
 .drive-chip--green { background: rgba(16, 185, 129, 0.15); color: #34d399; border-color: rgba(16, 185, 129, 0.22); }
-.drive-chip--blue  { background: rgba(59, 130, 246, 0.15); color: var(--blue-light); border-color: rgba(59, 130, 246, 0.22); }
+.drive-chip--blue  { background: rgba(52, 211, 153, 0.15); color: var(--blue-light); border-color: rgba(52, 211, 153, 0.22); }
 .drive-chip--slate { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); border-color: rgba(255, 255, 255, 0.1); }
 
 .drive-badge {
@@ -681,7 +703,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   flex-shrink: 0;
 }
 .badge-green { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-.badge-blue  { background: rgba(59, 130, 246, 0.15); color: var(--blue-light); }
+.badge-blue  { background: rgba(52, 211, 153, 0.15); color: var(--blue-light); }
 .badge-gray  { background: rgba(255, 255, 255, 0.06); color: var(--text-muted); }
 
 .empty-state {
@@ -731,7 +753,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   gap: 2px;
   padding: 1px 7px;
   border-radius: 10px;
-  background: rgba(59, 130, 246, 0.12);
+  background: rgba(52, 211, 153, 0.12);
   color: var(--blue-light);
   font-size: 10px;
   font-weight: 600;
@@ -746,7 +768,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .tag-remove {
   background: none;
   border: none;
-  color: rgba(96, 165, 250, 0.5);
+  color: rgba(52, 211, 153, 0.5);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
@@ -785,7 +807,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 .tag-filter-btn:hover { color: var(--text); }
 .tag-filter-btn.active {
-  background: rgba(59, 130, 246, 0.15);
+  background: rgba(52, 211, 153, 0.15);
   color: var(--blue-light);
 }
 
@@ -910,7 +932,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   font-size: 32px;
 }
 #btn-back-overview:hover {
-  border-color: rgba(96, 165, 250, 0.5);
+  border-color: rgba(110, 231, 183, 0.5);
 }
 /* The back button replaces the zoom buttons while a drive is open — its
    translucent glass would otherwise show them blurred underneath and
@@ -1011,7 +1033,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   overflow: hidden;
   transition: background 0.15s, border-color 0.15s;
 }
-#map-stats:hover { border-color: rgba(96, 165, 250, 0.35); }
+#map-stats:hover { border-color: rgba(110, 231, 183, 0.35); }
 
 .map-stats-header {
   display: flex;
@@ -1202,7 +1224,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   border-radius: 2px;
   background: currentColor;
 }
-.map-stats-row-label.mode-fsd    { color: #22cc55; }
+.map-stats-row-label.mode-fsd    { color: var(--line-fsd); }
 .map-stats-row-label.mode-ap     { color: var(--ap-blue-light); }
 .map-stats-row-label.mode-tacc   { color: #f59e0b; }
 .map-stats-row-label.mode-manual { color: var(--text-muted); }
@@ -1295,7 +1317,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   height: 32px;
   border-radius: 8px;
   border: none;
-  background: rgba(59, 130, 246, 0.2);
+  background: rgba(52, 211, 153, 0.2);
   color: var(--blue-light);
   display: flex;
   align-items: center;
@@ -1306,7 +1328,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   flex-shrink: 0;
 }
 .replay-play-btn .material-icons { font-size: 20px; }
-.replay-play-btn:hover { background: rgba(59, 130, 246, 0.3); }
+.replay-play-btn:hover { background: rgba(52, 211, 153, 0.3); }
 
 .replay-time {
   font-size: 10px;
@@ -1360,7 +1382,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   border-radius: 50%;
   background: var(--blue);
   cursor: pointer;
-  box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.5);
 }
 
 .replay-speed-btn {
@@ -1378,8 +1400,42 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   min-width: 30px;
   text-align: center;
 }
+
+/* Playback-speed pop-up list (opens above the speed button). */
+.replay-speed-wrap { position: relative; flex-shrink: 0; }
+.replay-speed-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  min-width: 48px;
+  background: var(--map-glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  box-shadow: var(--card-shadow);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+.replay-speed-item {
+  padding: 5px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.replay-speed-item:hover { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+.replay-speed-item.active { background: var(--accent); color: #fff; }
 .replay-speed-btn:hover {
-  background: rgba(59, 130, 246, 0.1);
+  background: rgba(52, 211, 153, 0.1);
   color: var(--blue-light);
 }
 
@@ -1436,8 +1492,8 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   flex-shrink: 0;
 }
 
-.legend-swatch.fsd-on  { background: #22cc55; }
-.legend-swatch.fsd-off { background: var(--blue); }
+.legend-swatch.fsd-on  { background: var(--line-fsd); }
+.legend-swatch.fsd-off { background: var(--line-manual); }
 
 /* ── Panel Footer ──────────────────────────────────────────────────────── */
 #panel-footer {
@@ -1487,7 +1543,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .footer-link:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--accent);
-  background: rgba(59, 130, 246, 0.06);
+  background: rgba(52, 211, 153, 0.06);
 }
 .footer-link:disabled {
   opacity: 0.3;
@@ -1518,8 +1574,10 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 #settings-modal {
   width: 380px;
   max-height: 86vh;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
+  /* Match the FSD Stats panel's glass surface: translucent dark glass + sheen
+     with a white translucent edge (the backdrop blur is on ::before). */
+  background: var(--map-glass-bg);
+  border: 1px solid var(--glass-border);
   border-radius: 16px;
   display: flex;
   flex-direction: column;
@@ -1561,8 +1619,9 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   gap: 2px;
   margin: 2px 14px 0;
   padding: 3px;
-  background: var(--panel-bg);
-  border: 1px solid var(--border);
+  /* Frosted track so the glass shows through instead of an opaque dark bar. */
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
   border-radius: 12px;
   flex-shrink: 0;
 }
@@ -1770,7 +1829,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 
 /* Icon halos (StatusTile) — translucent tint + matching glyph colour */
-.halo-accent { background: rgba(59, 130, 246, 0.15); color: var(--blue-light); }
+.halo-accent { background: rgba(52, 211, 153, 0.15); color: var(--blue-light); }
 .halo-amber  { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
 .halo-red    { background: rgba(248, 113, 113, 0.15); color: #f87171; }
 .halo-sky    { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
@@ -1877,10 +1936,26 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 
 .settings-checkbox-label,
 .settings-row-label {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
   user-select: none;
+}
+
+/* Stacked row: label + hint form a left column that wraps against the button. */
+.settings-row--stacked { align-items: flex-start; }
+.settings-row-main {
+  flex: 1;
+  min-width: 0;              /* allow the hint to wrap instead of pushing the button */
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.settings-row-hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--danger);
 }
 
 .beta-warning {
@@ -1898,6 +1973,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 #revert-overlay,
 #remove-drive-overlay,
 #tessie-overlay,
+#import-json-confirm-overlay,
 #remove-tessie-overlay {
   position: fixed;
   inset: 0;
@@ -1908,6 +1984,8 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   background: rgba(0, 0, 0, 0.7);
   /* blur lives on ::before — see the popup-safe glass section */
 }
+/* Sits above the still-open Import Drives modal (also 9500). */
+#import-json-confirm-overlay { z-index: 9600; }
 
 .reprocess-modal {
   width: 360px;
@@ -2185,6 +2263,28 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   flex-shrink: 0;
 }
 .car-color-swatch:hover { border-color: var(--text-muted); }
+
+/* Drive Line Colors group in Settings → Map UI → Customization */
+.settings-subhead {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.btn-line-colors-reset {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.btn-line-colors-reset:hover { color: var(--text); border-color: var(--text-muted); }
 
 #car-color-popup {
   position: fixed;
@@ -2630,7 +2730,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 
 /* ── Tessie Import ─────────────────────────────────────────────────────── */
 .legend-swatch.legend-swatch-tessie {
-  background: repeating-linear-gradient(90deg, #a855f7 0 6px, transparent 6px 10px);
+  background: repeating-linear-gradient(90deg, var(--line-imported) 0 6px, transparent 6px 10px);
 }
 .legend-tessie:not(.hidden) { display: flex; }
 

@@ -1,6 +1,21 @@
 {
   "versions": [
     {
+      "version": "1.4.0",
+      "date": "2026-07-01",
+      "title": "Green Theme, Vehicle Markers & Customization",
+      "changes": [
+        { "type": "feature", "description": "Import Drives can now merge another Sentry Drive drive-data.json into your current data — a backup, or drives from a second device. Pick \"Drive Data File\" in the Import dialog; clips you already have are skipped and each imported drive brings its tags along. The drives fold in as regular drives — including their FSD and Autopilot data — so the app confirms first, since this can change your FSD score. A backup of your file is written before merging." },
+        { "type": "improvement", "description": "The app's accent color is now Sentry USB green to match the rest of the Sentry ecosystem — buttons, tabs, highlights, and the ambient glow. The Settings panel also picks up the frosted-glass look. Map drive lines keep their existing colors (they indicate drive type)." },
+        { "type": "improvement", "description": "The support log is now a proper activity timeline — it records loads, imports, processing runs (with outcome counts and timing), drive edits, and update checks, tagged by area. Exported logs are automatically scrubbed of GPS coordinates, addresses, and tokens so they're safe to share in bug reports, and the Logs setting carries a short privacy reminder. Settings labels are also larger and easier to read." },
+        { "type": "improvement", "description": "Drive replay polish: pick a playback speed from a pop-up list instead of clicking to cycle through 1x/2x/5x/10x, and the FSD event markers on the map now have bigger, centered white letters (A for accelerator override, D for disengagement) with a more legible amber for accelerator presses." },
+        { "type": "feature", "description": "Drive line colors are now customizable. Settings > Map UI > Customization has color swatches for Manual, Full Self-Driving, Imported, and the all-drives overview, with a reset to defaults. The map legend and FSD share bars follow your chosen colors, and changes apply live — even mid-replay." },
+        { "type": "feature", "description": "The replay marker adds Model Y and Model X as vehicle styles alongside Model 3, with the same custom paint color and preview. Model S and Cybertruck are wired in as well and will appear in the list automatically once their artwork ships." },
+        { "type": "improvement", "description": "Accent text is easier to read: green labels (View Drives, Check Drives, chips, badges, links) now use the same emerald as Sentry USB instead of a paler tint, and Load Drives, Revert, and Remove Imported Drives join the emerald set — the destructive pair still turns red on hover as a warning." },
+        { "type": "fix", "description": "The Import Drives dialog can no longer get stuck on \"Importing…\" if an unexpected error interrupts the import — it now reports the error and re-enables the button." }
+      ]
+    },
+    {
       "version": "1.3.5",
       "date": "2026-06-15",
       "title": "Corruption Hardening, Smoother Imports & Auto-Refresh",
