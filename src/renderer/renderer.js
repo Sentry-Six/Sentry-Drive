@@ -125,7 +125,9 @@ const VEHICLE_MODELS = {
   // Each box keeps its own art's canvas aspect so nothing warps (3/Y are
   // 1320x2118, X is 1320x2148); larger vehicles get proportionally larger boxes.
   model3:     { texture: '../../assets/map-ui/Model3_t.png',     mask: '../../assets/map-ui/Model3_c.png',     w: 56, h: 90  },
+  highland:   { texture: '../../assets/map-ui/Highland_t.png',   mask: '../../assets/map-ui/Highland_c.png',   w: 56, h: 90  },
   modelY:     { texture: '../../assets/map-ui/ModelY_t.png',     mask: '../../assets/map-ui/ModelY_c.png',     w: 56, h: 90  },
+  juniper:    { texture: '../../assets/map-ui/Juniper_t.png',    mask: '../../assets/map-ui/Juniper_c.png',    w: 56, h: 90  },
   modelS:     { texture: '../../assets/map-ui/ModelS_t.png',     mask: '../../assets/map-ui/ModelS_c.png',     w: 58, h: 93  },
   modelX:     { texture: '../../assets/map-ui/ModelX_t.png',     mask: '../../assets/map-ui/ModelX_c.png',     w: 58, h: 94  },
   cybertruck: { texture: '../../assets/map-ui/Cybertruck_t.png', mask: '../../assets/map-ui/Cybertruck_c.png', w: 64, h: 103 },
@@ -1667,19 +1669,30 @@ function initViewDrivesTab() {
     removeDriveOverlay.classList.add('hidden');
     const drive = pendingRemoveDrive;
     pendingRemoveDrive = null;
-    const result = await window.electronAPI.removeDrive({ filePath: loadedFilePath, driveStartTime: drive.startTime });
-    if (!result.success) return;
-    const wasSelected = selectedDriveId === drive.id;
-    drives = drives.filter((d) => d.startTime !== drive.startTime);
-    if (wasSelected) deselectDrive();
-    renderDriveList(drives);
-    // Redraw the map so the deleted drive's polyline is removed immediately —
-    // renderOverviewOnMap() clears all layers and rebuilds from `drives`.
-    // Without this the line lingered until the next map render (e.g. selecting
-    // another drive).
-    renderOverviewOnMap();
-    renderDriveStats(drives, { totalRoutes: 0, processedFileCount: 0 });
-    updateTessieButtonStates();
+    // Removing rewrites the whole drive-data.json — seconds on a large
+    // library — and the re-render afterwards blocks the renderer too. Keep
+    // the spinner overlay up for the whole stretch or the app looks frozen.
+    showLoading('Removing drive…');
+    try {
+      const result = await window.electronAPI.removeDrive({ filePath: loadedFilePath, driveStartTime: drive.startTime });
+      if (!result.success) return;
+      const wasSelected = selectedDriveId === drive.id;
+      drives = drives.filter((d) => d.startTime !== drive.startTime);
+      if (wasSelected) deselectDrive();
+      // Let the overlay paint one frame before the synchronous re-render
+      // briefly blocks the renderer (mirrors reloadDrivesAfterWrite).
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      renderDriveList(drives);
+      // Redraw the map so the deleted drive's polyline is removed immediately —
+      // renderOverviewOnMap() clears all layers and rebuilds from `drives`.
+      // Without this the line lingered until the next map render (e.g. selecting
+      // another drive).
+      renderOverviewOnMap();
+      renderDriveStats(drives, { totalRoutes: 0, processedFileCount: 0 });
+      updateTessieButtonStates();
+    } finally {
+      hideLoading();
+    }
   });
 }
 
@@ -2208,11 +2221,14 @@ function initTessieImport() {
       lines.push('Click OK to delete these hidden drives from the file (recoverable from .bak).');
       lines.push('Click Cancel to keep them stored (they will stay hidden as long as SEI covers the same time).');
       if (confirm(lines.join('\n'))) {
+        // Same full-file rewrite as Remove Imported Drives — show the spinner.
+        showLoading('Removing hidden imported drives…');
         const cleanupResult = await svc().removeHidden();
         if (cleanupResult.success) {
           await reloadDrivesAfterWrite();
           alert(`Removed ${fmt(cleanupResult.removed)} hidden imported drive(s) from the file.`);
         } else {
+          hideLoading();
           alert(`Cleanup failed: ${cleanupResult.error}`);
         }
       }
@@ -2252,6 +2268,10 @@ function initTessieImport() {
     if (!loadedFilePath || (!wantTessie && !wantTeslascope)) return;
     const beforeCount = drives.length;
 
+    // Each removal rewrites the whole drive-data.json — seconds on a large
+    // library, and there can be two in a row. Keep the spinner overlay up so
+    // the app doesn't look frozen; reloadDrivesAfterWrite reuses it after.
+    showLoading('Removing imported drives…');
     let removed = 0;
     const failures = [];
     if (wantTessie) {
@@ -2265,6 +2285,7 @@ function initTessieImport() {
       else failures.push(`Teslascope: ${r.error}`);
     }
     if (failures.length === (wantTessie ? 1 : 0) + (wantTeslascope ? 1 : 0)) {
+      hideLoading();
       alert(`Failed to remove imported drives:\n${failures.join('\n')}`);
       return;
     }
@@ -2342,13 +2363,17 @@ async function updateRevertButton() {
 async function revertGPS() {
   if (!loadedFilePath) return;
 
+  // Restoring the .bak rewrites the whole drive-data.json — keep the spinner
+  // up from the first moment or the app looks frozen while it copies.
+  showLoading('Reverting to backup…');
   const result = await window.electronAPI.revertGPS(loadedFilePath);
   if (!result.success) {
+    hideLoading();
     alert(`Failed to revert:\n${result.error}`);
     return;
   }
 
-  // Reload
+  // Reload (updates the overlay text; hideLoading runs after the re-render)
   showLoading();
   const reloaded = await window.electronAPI.loadAndGroupDrives(loadedFilePath);
   if (reloaded.success) {
@@ -3330,17 +3355,29 @@ function makeDotMarker(latLng, { fill, radius = 7, strokeW = 2, opacity = 1, too
     el.style.justifyContent = 'center';
     // The letter lives in an inner span: el is anchored to the GPS point, so any
     // optical nudge has to move the glyph, not the circle.
+    const px = Math.round(radius * 1.7); // fill the circle
     const lbl = document.createElement('span');
     lbl.textContent = label;
     lbl.style.color = labelColor;
     lbl.style.fontFamily = "'Noto Sans', sans-serif";
     lbl.style.fontWeight = '800';
-    lbl.style.fontSize = `${Math.round(radius * 1.7)}px`; // fill the circle
+    lbl.style.fontSize = `${px}px`;
     lbl.style.lineHeight = '1';
     lbl.style.textShadow = '0 1px 2px rgba(0, 0, 0, 0.5)'; // legibility on any fill
-    // Capitals have no descender, so a flex-centered line box sits ~1-2px high;
-    // nudge the glyph down to optically center it in the circle.
-    lbl.style.transform = 'translateY(0.06em)';
+    // Flex centers the em BOX / advance width, not the ink: where the letter
+    // actually lands depends on the font's ascent/descent split and side
+    // bearings. Measure the real ink bounds on both axes and shift the ink
+    // center onto the box center — exact for whatever font actually loaded.
+    const ctx = (makeDotMarker._mctx ??= document.createElement('canvas').getContext('2d'));
+    ctx.font = `800 ${px}px 'Noto Sans', sans-serif`;
+    const m = ctx.measureText(label);
+    if (m.fontBoundingBoxAscent !== undefined) {
+      const dy = (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2
+               - (m.fontBoundingBoxAscent - m.fontBoundingBoxDescent) / 2;
+      const dx = m.width / 2
+               - (m.actualBoundingBoxRight - m.actualBoundingBoxLeft) / 2;
+      lbl.style.transform = `translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px)`;
+    }
     el.appendChild(lbl);
   }
   if (tooltip) attachMapTooltip(el, tooltip);

@@ -1,6 +1,16 @@
 {
   "versions": [
     {
+      "version": "1.4.1",
+      "date": "2026-07-01",
+      "title": "Removal Feedback & Marker Centering",
+      "changes": [
+        { "type": "improvement", "description": "Removing a drive, removing imported drives, and reverting to a backup no longer look like a freeze — the loading spinner now stays up while the drive data file is rewritten and the list refreshes." },
+        { "type": "fix", "description": "The letters on the FSD event markers (A and D) now sit truly centered in their circles — their position is measured from the font's actual glyph bounds on both axes instead of approximated." },
+        { "type": "improvement", "description": "Location labels on drive cards are more accurate: lookups now only match real addresses and businesses, and a business name or house number is used only when it is verifiably at the drive's coordinates — otherwise the label falls back to the street instead of naming the wrong building. Existing labels refresh automatically over time." }
+      ]
+    },
+    {
       "version": "1.4.0",
       "date": "2026-07-01",
       "title": "Green Theme, Vehicle Markers & Customization",
