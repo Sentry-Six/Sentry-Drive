@@ -1,5 +1,7 @@
 # Sentry Drive
-Sentry Drive is a desktop app for visualizing and analyzing your drive history. Meant to be used in conjunction with Sentry USB or TeslaUSB, you can track your self-driving stats, distance driven, drives made, etc. all on your computer! Simply point it to your TeslaCam folder and start processing. See every drive - where you used Full Self Driving, every disengagement, duration, average and max speed, and more!
+Sentry Drive by Sentry Six is a desktop app for visualizing and analyzing your drive history. Meant to be used in conjunction with Sentry USB or TeslaUSB, you can track your self-driving stats, distance driven, drives made, etc. all on your computer! Simply point it to your TeslaCam folder and start processing. See every drive - where you used Full Self Driving, every disengagement, duration, average and max speed, and more!
+
+Sentry Drive is one of four free tools for Tesla owners from the [Sentry Six](https://sentry-six.com) project, alongside [Sentry Studio](https://github.com/Sentry-Six/Sentry-Six) (desktop TeslaCam viewer), [Sentry USB](https://github.com/Sentry-Six/Sentry-USB-Rusty) (Raspberry Pi smart dashcam drive), and [Sentry Connect](https://sentry-six.com/sentry-connect/) (iPhone companion app for Sentry USB). Not affiliated with Tesla, Inc. Unrelated to the Sentry (sentry.io) error-monitoring service.
 
 <img width="2560" height="1369" alt="electron_HWfDb2Px9G" src="https://github.com/user-attachments/assets/ed8af61f-33b4-4b83-82c3-413977013d15" />
 
@@ -26,7 +28,7 @@ Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam file
 Running Sentry USB? You can import your drive data! Simply locate your drives-data.json and load it! If it's in your TeslaCam folder, it'll automatically locate and load it for you.
 
 ## Platforms
-This application is available for Windows and Mac. [Check the releases tab](https://github.com/Sentry-Six/Sentry-Drive/releases) for the latest version.
+This application is available for Windows, macOS, and Linux (AppImage and .deb). [Check the releases tab](https://github.com/Sentry-Six/Sentry-Drive/releases) for the latest version.
 
 Because this program is unsigned, you will need to follow this step after you run the .dmg for the first time:
 <br> System Settings ? Privacy & Security ? Open Anyway
