@@ -70,10 +70,10 @@
   },
   "devDependencies": {
     "electron": "^42.1.0",
-    "electron-builder": "^26.8.1"
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
-    "electron-updater": "^6.8.3",
+    "electron-updater": "^6.8.9",
     "stream-chain": "^3.6.3",
     "stream-json": "^2.1.0"
   }
