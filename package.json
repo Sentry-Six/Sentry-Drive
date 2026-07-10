@@ -75,6 +75,6 @@
   "dependencies": {
     "electron-updater": "^6.8.9",
     "stream-chain": "^4.2.5",
-    "stream-json": "^2.1.0"
+    "stream-json": "^3.5.0"
   }
 }
