@@ -23,8 +23,11 @@
 
 const fs = require('fs');
 const { chain } = require('stream-chain');
-const parser = require('stream-json/parser.js');
-const Assembler = require('stream-json/assembler.js');
+// stream-json 3.x is ESM-only; require() returns the module namespace, so
+// destructure the factory/class. The root default is parserStream (a Duplex
+// factory), not the chain-stage parser — don't use it here.
+const { parser } = require('stream-json/parser.js');
+const { Assembler } = require('stream-json/assembler.js');
 
 // Safely below V8's ~512 MiB max-string-length, with margin for multi-byte
 // UTF-8 (byte size >= char count, so a 480 MB file is always parseable).

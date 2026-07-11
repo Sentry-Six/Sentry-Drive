@@ -1,0 +1,50 @@
+# Dependency monitoring for Sentry-Drive.
+#
+# Weekly grouped PRs for minor + patch updates to keep noise down.
+# Majors stay ungrouped so Electron/builder/updater bumps are always
+# their own reviewable PR (Electron minors can ship a new Chromium —
+# review them as runtime updates, not routine npm noise). Security
+# advisories fire immediately as separate ungrouped PRs.
+
+version: 2
+
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Edmonton"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "npm"
+    commit-message:
+      prefix: "deps(npm)"
+      include: "scope"
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Edmonton"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "deps(ci)"
+      include: "scope"
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
