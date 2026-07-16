@@ -2,7 +2,9 @@ name: Build and Release
 
 on:
   release:
-    types: [created]
+    # published fires for both direct publishes and draft-then-publish;
+    # created never fires when a saved draft is later published.
+    types: [published]
 
 permissions:
   contents: write
