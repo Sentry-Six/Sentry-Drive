@@ -1,6 +1,16 @@
 {
   "versions": [
     {
+      "version": "1.4.1",
+      "date": "2026-07-15",
+      "title": "Maintenance Update",
+      "changes": [
+        { "type": "improvement", "description": "Updated the app to the latest Electron runtime (newer Chromium and Node under the hood) for up-to-date security and platform fixes." },
+        { "type": "improvement", "description": "Refreshed the libraries that read and process your drive data to their latest versions." },
+        { "type": "improvement", "description": "One small side effect of the runtime update: file-picker dialogs (like the Import browsers) may now start in your Downloads folder instead of the last folder you used." }
+      ]
+    },
+    {
       "version": "1.4.0",
       "date": "2026-07-01",
       "title": "Green Theme, Vehicle Markers & Customization",
