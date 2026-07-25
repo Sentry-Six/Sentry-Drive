@@ -2,7 +2,9 @@ name: Build and Release
 
 on:
   release:
-    types: [created]
+    # published fires for both direct publishes and draft-then-publish;
+    # created never fires when a saved draft is later published.
+    types: [published]
 
 permissions:
   contents: write
@@ -20,7 +22,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm

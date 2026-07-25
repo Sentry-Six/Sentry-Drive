@@ -2,12 +2,12 @@
   "versions": [
     {
       "version": "1.4.1",
-      "date": "2026-07-01",
-      "title": "Removal Feedback & Marker Centering",
+      "date": "2026-07-15",
+      "title": "Maintenance Update",
       "changes": [
-        { "type": "improvement", "description": "Removing a drive, removing imported drives, and reverting to a backup no longer look like a freeze — the loading spinner now stays up while the drive data file is rewritten and the list refreshes." },
-        { "type": "fix", "description": "The letters on the FSD event markers (A and D) now sit truly centered in their circles — their position is measured from the font's actual glyph bounds on both axes instead of approximated." },
-        { "type": "improvement", "description": "Location labels on drive cards are more accurate: lookups now only match real addresses and businesses, and a business name or house number is used only when it is verifiably at the drive's coordinates — otherwise the label falls back to the street instead of naming the wrong building. Existing labels refresh automatically over time." }
+        { "type": "improvement", "description": "Updated the app to the latest Electron runtime (newer Chromium and Node under the hood) for up-to-date security and platform fixes." },
+        { "type": "improvement", "description": "Refreshed the libraries that read and process your drive data to their latest versions." },
+        { "type": "improvement", "description": "One small side effect of the runtime update: file-picker dialogs (like the Import browsers) may now start in your Downloads folder instead of the last folder you used." }
       ]
     },
     {
