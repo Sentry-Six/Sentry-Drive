@@ -218,6 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initChangelogModal();
   loadDefaultPaths();
   applyDriveLineColors();
+  updatePrivacyZoneLayer(); // zone markers are permanent map landmarks
   logAction(`ui ready — units=${unitSystem}, marker=${markerType}, mapLayer=${localStorage.getItem('mapLayer') || 'Light'}`);
 });
 
@@ -461,6 +462,18 @@ function initMap() {
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': ['get', 'color'], 'line-opacity': 0.95, 'line-width': SELECTED_LINE_WIDTH, 'line-dasharray': [1.6, 1] },
     });
+    // Privacy zone circles (Settings → Privacy) — visible only while that
+    // tab is open or a zone is being placed. Amber, distinct from the route
+    // palette.
+    map.addSource('privacy-zones', { type: 'geojson', data: EMPTY_FC });
+    map.addLayer({
+      id: 'privacy-zones-fill', type: 'fill', source: 'privacy-zones',
+      paint: { 'fill-color': '#f59e0b', 'fill-opacity': 0.12 },
+    });
+    map.addLayer({
+      id: 'privacy-zones-line', type: 'line', source: 'privacy-zones',
+      paint: { 'line-color': '#f59e0b', 'line-width': 2, 'line-dasharray': [2, 1.5], 'line-opacity': 0.8 },
+    });
     // City/street labels above every drive line (transparent overlay tiles).
     map.addLayer({ id: 'labels-overlay', type: 'raster', source: 'labels-overlay' });
     mapReady = true;
@@ -497,8 +510,56 @@ function initMap() {
   // features come back topmost-first, so the selected drive's own line wins
   // over dimmed context lines (clicking it toggles the selection off, same
   // as clicking the drive in the list).
+  // Privacy-zone placement. Aim: the preview follows the cursor and dragging
+  // pans the map as normal. Confirm: grabbing the circle's edge (anywhere on
+  // the ring) resizes the zone — preventDefault on that mousedown keeps the
+  // map still for the gesture, everywhere else still pans.
+  map.on('mousemove', (e) => {
+    const p = zonePlacement;
+    if (!p || !mapReady) return;
+    if (p.stage === 'aim') {
+      p.center = { lat: e.lngLat.lat, lng: e.lngLat.lng };
+      zonePlacementPreview();
+    } else if (p.stage === 'confirm') {
+      if (p.ringDrag) {
+        const gm = window.driveCalc?.geodesicM;
+        if (gm) {
+          p.radiusM = Math.min(5000, Math.max(10, gm(p.center.lat, p.center.lng, e.lngLat.lat, e.lngLat.lng)));
+        }
+        zoneConfirmHint();
+        zonePlacementPreview();
+      } else {
+        map.getCanvas().style.cursor = zoneNearRing(e) ? 'ew-resize' : '';
+      }
+    }
+  });
+  map.on('mousedown', (e) => {
+    const p = zonePlacement;
+    if (!p || p.stage !== 'confirm' || !p.center) return;
+    if (zoneNearRing(e)) {
+      p.ringDrag = true;
+      e.preventDefault(); // hold the map still while resizing
+    }
+  });
+  map.on('mouseup', () => {
+    if (zonePlacement?.ringDrag) zonePlacement.ringDrag = false;
+  });
+  document.getElementById('btn-zone-save').addEventListener('click', () => endZonePlacement(true));
+  document.getElementById('btn-zone-cancel').addEventListener('click', () => endZonePlacement(false));
+
   map.on('click', (e) => {
     if (!mapReady) return;
+    // Aim stage: a plain click (never a pan — MapLibre suppresses click after
+    // dragging) drops the pin and opens the editor. Any other placement stage
+    // swallows clicks so they can't select drives underneath the preview.
+    if (zonePlacement) {
+      if (zonePlacement.stage === 'aim') {
+        zonePlacement.center = { lat: e.lngLat.lat, lng: e.lngLat.lng };
+        zonePlacementPreview();
+        enterZoneConfirm();
+      }
+      return;
+    }
     const TOL_PX = 10;
     const box = [
       [e.point.x - TOL_PX, e.point.y - TOL_PX],
@@ -553,13 +614,17 @@ function initFooter() {
   document.getElementById('btn-settings').addEventListener('click', () => {
     document.getElementById('settings-overlay').classList.remove('hidden');
     refreshTessieStatus();
+    renderPrivacyZones();
+    setPrivacyZonesVisible(document.querySelector('.settings-tab-btn.active')?.dataset.stab === 'privacy');
   });
   document.getElementById('btn-close-settings').addEventListener('click', () => {
     document.getElementById('settings-overlay').classList.add('hidden');
+    setPrivacyZonesVisible(false);
   });
   document.getElementById('settings-overlay').addEventListener('click', (e) => {
     if (e.target === e.currentTarget) {
       document.getElementById('settings-overlay').classList.add('hidden');
+      setPrivacyZonesVisible(false);
     }
   });
 
@@ -572,7 +637,40 @@ function initFooter() {
       document.querySelectorAll('.settings-pane').forEach((p) => p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById(`stab-${stab}`).classList.add('active');
+      setPrivacyZonesVisible(stab === 'privacy'); // zone circles preview on the map
     });
+  });
+
+  // Privacy zones: add-custom-location + initial rows
+  document.getElementById('btn-add-zone').addEventListener('click', () => {
+    privacyZones.push({ id: `zone-${Date.now()}`, kind: 'custom', name: 'Custom location', lat: null, lng: null, radiusM: 150 });
+    savePrivacyZones();
+    renderPrivacyZones();
+  });
+  renderPrivacyZones();
+
+  // Zone icon picker: build the Material Symbols grid once; clicks route to
+  // whichever zone opened the popover.
+  const zoneIconGrid = document.querySelector('#zone-icon-popup .zone-icon-grid');
+  zoneIconGrid.innerHTML = ZONE_ICON_CHOICES.map((n) =>
+    `<button class="zone-icon-choice" data-icon="${n}" type="button" title="${n.replace(/_/g, ' ')}"><span class="material-icons">${n}</span></button>`
+  ).join('');
+  zoneIconGrid.addEventListener('click', (e) => {
+    const btn = e.target.closest('.zone-icon-choice');
+    if (!btn || !zoneIconPickerTarget) return;
+    zoneIconPickerTarget.icon = btn.dataset.icon;
+    savePrivacyZones();
+    renderPrivacyZones();
+    updatePrivacyZoneLayer();
+    closeZoneIconPicker();
+  });
+  document.addEventListener('click', (e) => {
+    if (zoneIconPickerTarget && !e.target.closest('#zone-icon-popup') && !e.target.closest('.zone-icon-btn')) {
+      closeZoneIconPicker();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && zoneIconPickerTarget) closeZoneIconPicker();
   });
 
   // ── Integrations tab: Tessie (inline connect/auth) ─────────────────────
@@ -954,6 +1052,15 @@ function initFooter() {
     applyFsdMarkerVisibility();
   });
 
+  // Zone markers setting (default: on; editing sessions always show them)
+  const zoneMarkersChk = document.getElementById('chk-show-zone-markers');
+  zoneMarkersChk.checked = showZoneMarkers;
+  zoneMarkersChk.addEventListener('change', () => {
+    showZoneMarkers = zoneMarkersChk.checked;
+    localStorage.setItem('showZoneMarkers', String(showZoneMarkers));
+    updatePrivacyZoneLayer();
+  });
+
   // Support → Logs: save the main-process log buffer as a .txt via save dialog.
   const logsBtn = document.getElementById('btn-download-logs');
   if (logsBtn) {
@@ -1022,6 +1129,7 @@ function initFooter() {
     localStorage.setItem('unitSystem', unitSystem);
     syncUnitToggleActive();
     refreshUnitDisplay();
+    renderPrivacyZones(); // radius inputs re-label ft/m
   });
 
   // Auto-check on launch
@@ -1217,7 +1325,7 @@ function applyUpdateStatus({ status, version, percent, message }) {
       }
 
       // Show footer download button, flashing yellow until acted on
-      footerBtn.classList.remove('hidden');
+      footerBtn.classList.remove('hidden', 'update-downloading', 'update-ready');
       footerBtn.classList.add('update-attention');
       footerBtn.disabled = false;
       footerBtn.title = `Download v${version}`;
@@ -1233,6 +1341,7 @@ function applyUpdateStatus({ status, version, percent, message }) {
       msg.className = 'settings-update-msg update-current';
 
       footerBtn.classList.add('hidden');
+      footerBtn.classList.remove('update-attention', 'update-downloading', 'update-ready');
       break;
 
     case 'downloading':
@@ -1242,9 +1351,13 @@ function applyUpdateStatus({ status, version, percent, message }) {
       msg.textContent = `Downloading update…`;
       msg.className = 'settings-update-msg update-available';
 
-      footerBtn.classList.remove('update-attention');
+      // Animated download icon while the bytes come in (the % is in the
+      // tooltip — the 26px button has no room for text).
+      footerBtn.classList.remove('hidden', 'update-attention', 'update-ready');
+      footerBtn.classList.add('update-downloading');
       footerBtn.disabled = true;
       footerBtn.title = `Downloading… ${percent}%`;
+      footerBtn.querySelector('.material-icons').textContent = 'download';
       break;
 
     case 'ready':
@@ -1254,6 +1367,9 @@ function applyUpdateStatus({ status, version, percent, message }) {
       msg.textContent = 'Update downloaded. Restart to apply.';
       msg.className = 'settings-update-msg update-available';
 
+      // Orange + flashing until the user restarts.
+      footerBtn.classList.remove('hidden', 'update-attention', 'update-downloading');
+      footerBtn.classList.add('update-ready');
       footerBtn.disabled = false;
       footerBtn.title = 'Restart to Update';
       footerBtn.querySelector('.material-icons').textContent = 'restart_alt';
@@ -1268,6 +1384,7 @@ function applyUpdateStatus({ status, version, percent, message }) {
       msg.className = 'settings-update-msg update-error';
 
       footerBtn.classList.add('hidden');
+      footerBtn.classList.remove('update-attention', 'update-downloading', 'update-ready');
       break;
   }
 }
@@ -1687,6 +1804,60 @@ function initViewDrivesTab() {
       // renderOverviewOnMap() clears all layers and rebuilds from `drives`.
       // Without this the line lingered until the next map render (e.g. selecting
       // another drive).
+      renderOverviewOnMap();
+      renderDriveStats(drives, { totalRoutes: 0, processedFileCount: 0 });
+      updateTessieButtonStates();
+    } finally {
+      hideLoading();
+    }
+  });
+
+  // ── Multi-select action bar + shared bulk-removal confirm ──
+  // The confirm modal is shared with privacy-zone culls: callers queue
+  // targets + message via openBulkRemoveModal, the confirm here executes.
+  const removeDrivesOverlay = document.getElementById('remove-drives-overlay');
+  document.getElementById('btn-multi-clear').addEventListener('click', clearMultiSelect);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && multiSelected.size) clearMultiSelect();
+  });
+  document.getElementById('btn-multi-remove').addEventListener('click', () => {
+    if (!multiSelected.size || !loadedFilePath) return;
+    const byId = new Map(drives.map((d) => [String(d.id), d]));
+    const targets = [...multiSelected].map((id) => byId.get(id)).filter(Boolean);
+    if (!targets.length) { clearMultiSelect(); return; }
+    openBulkRemoveModal(targets,
+      `Remove the ${targets.length} selected drive${targets.length === 1 ? '' : 's'}? This cannot be undone.`);
+  });
+  document.getElementById('btn-remove-drives-cancel').addEventListener('click', () => {
+    pendingBulkRemove = null;
+    removeDrivesOverlay.classList.add('hidden');
+  });
+  removeDrivesOverlay.addEventListener('click', (e) => {
+    if (e.target === removeDrivesOverlay) {
+      pendingBulkRemove = null;
+      removeDrivesOverlay.classList.add('hidden');
+    }
+  });
+  document.getElementById('btn-remove-drives-confirm').addEventListener('click', async () => {
+    removeDrivesOverlay.classList.add('hidden');
+    const targets = pendingBulkRemove ?? [];
+    pendingBulkRemove = null;
+    if (!targets.length || !loadedFilePath) return;
+    // One IPC round-trip removes the whole batch in a single file rewrite;
+    // the overlay covers the rewrite AND the list/map re-render after.
+    showLoading(`Removing ${targets.length} drive${targets.length === 1 ? '' : 's'}…`);
+    try {
+      const result = await window.electronAPI.removeDrives({
+        filePath: loadedFilePath,
+        driveStartTimes: targets.map((d) => d.startTime),
+      });
+      if (!result.success) { alert(`Failed to remove drives:\n${result.error}`); return; }
+      if (targets.some((d) => d.id === selectedDriveId)) deselectDrive();
+      const removed = new Set(targets.map((d) => d.startTime));
+      drives = drives.filter((d) => !removed.has(d.startTime));
+      logAction(`removed ${targets.length} drive(s) via bulk remove`);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      renderDriveList(drives); // also clears any multi-selection
       renderOverviewOnMap();
       renderDriveStats(drives, { totalRoutes: 0, processedFileCount: 0 });
       updateTessieButtonStates();
@@ -2455,9 +2626,9 @@ async function repairGPS() {
     if (result.routedGaps > 0) msgs.push(`Bridged ${result.routedGaps} gap(s) with road routes`);
     const straightGaps = result.bridgedGaps - (result.routedGaps ?? 0);
     if (straightGaps > 0) msgs.push(`Bridged ${straightGaps} gap(s) with straight lines`);
-    alert(msgs.length > 0 ? `Repair complete:\n${msgs.join('\n')}` : 'No issues found.');
 
-    // Reload the repaired file
+    // Reload the repaired file first so the summary can say WHICH drives
+    // carry bridges (they also get a "Bridged" chip in the list).
     showLoading();
     const reloaded = await window.electronAPI.loadAndGroupDrives(loadedFilePath);
     if (reloaded.success) {
@@ -2470,6 +2641,20 @@ async function repairGPS() {
       renderOverviewOnMap();
     }
     hideLoading();
+
+    const bridgedDrives = drives.filter((d) => d.bridged);
+    if (result.bridgedGaps > 0 && bridgedDrives.length > 0) {
+      msgs.push('');
+      msgs.push(`${bridgedDrives.length} drive(s) contain bridges — marked with a "Bridged" chip in the list:`);
+      const sample = bridgedDrives.slice(0, 8);
+      for (const d of sample) {
+        msgs.push(`  • ${new Date(d.startTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`);
+      }
+      if (bridgedDrives.length > sample.length) {
+        msgs.push(`  • …and ${bridgedDrives.length - sample.length} more`);
+      }
+    }
+    alert(msgs.length > 0 ? `Repair complete:\n${msgs.join('\n')}` : 'No issues found.');
   } finally {
     if (removeProgressListener) removeProgressListener();
     btn.textContent = 'Check Drives';
@@ -2825,7 +3010,7 @@ function renderDriveStats(drives, meta) {
     <div class="map-stat"><span class="map-stat-val">${fmt(drives.length)}</span><span class="map-stat-lbl">Drives</span></div>
     <div class="map-stat"><span class="map-stat-val">${fmt(distVal(totalMi, 0))}</span><span class="map-stat-lbl">${distLong()} Driven</span></div>
     <div class="map-stat"><span class="map-stat-val">${durStr}</span><span class="map-stat-lbl">Time Driving</span></div>
-    <div class="map-stat"><span class="map-stat-val" style="color:${fsdScoreColor(fsdScore)}">${fsdScore}%</span><span class="map-stat-lbl">FSD Score</span></div>
+    <div class="map-stat"><span class="map-stat-val" style="color:${seiDistM > 0 ? fsdScoreColor(fsdScore) : 'var(--text-dim)'}">${seiDistM > 0 ? `${fsdScore}%` : '—'}</span><span class="map-stat-lbl">FSD Score</span></div>
   `;
   if (apPct > 0) summary += `<div class="map-stat"><span class="map-stat-val">${apPct}%</span><span class="map-stat-lbl">Autopilot</span></div>`;
 
@@ -2919,10 +3104,408 @@ let _driveListRenderSeq = 0;
 // a frame between them so the UI stays responsive and the list fills in
 // progressively. Small lists (< one batch) still render in a single synchronous
 // pass — no behavior change for the common case.
+// ─── Privacy zones ───────────────────────────────────────────────────────────
+// Circles around Home / Work / custom spots (Settings → Privacy) used to cull
+// drives that start or end inside them. Zones live ONLY in localStorage —
+// drive-data.json is shared/exported between installs and must never carry
+// home coordinates.
+const ZONE_ICONS = { home: 'home', work: 'work', custom: 'place' };
+// Curated Material Symbols a zone can use (the vendored font is the full
+// ligature set, so any of these render). Kept to names that read at 15px.
+const ZONE_ICON_CHOICES = [
+  'home', 'work', 'place', 'school', 'fitness_center', 'restaurant',
+  'local_cafe', 'shopping_cart', 'storefront', 'local_hospital', 'church',
+  'park', 'sports_soccer', 'apartment', 'factory', 'star', 'favorite',
+  'pets', 'directions_car', 'flight',
+];
+const M_PER_FT = 0.3048;
+
+function zoneIcon(zone) {
+  return zone.icon ?? ZONE_ICONS[zone.kind] ?? 'place';
+}
+let privacyZones = loadPrivacyZones();
+let privacyZonesVisible = false;   // circles show while the Privacy tab is open
+// Map UI setting: zone markers as permanent landmarks (they always show while
+// the Privacy tab is open or a zone is being placed, regardless).
+let showZoneMarkers = localStorage.getItem('showZoneMarkers') !== 'false';
+const zoneMarkers = [];            // DOM icon markers at zone centers
+// Placement session ("Set on map"): aim → the preview circle follows the
+// cursor; mousedown locks the center and dragging sizes the radius; mouseup
+// enters confirm, where Save/Cancel in the hint bar completes the edit.
+let zonePlacement = null;          // { zone, stage:'aim'|'drag'|'confirm', center, radiusM, marker }
+// Shared bulk-removal confirm (multi-select bar + zone culls): callers queue
+// targets here, the modal's confirm handler executes them.
+let pendingBulkRemove = null;
+
+function loadPrivacyZones() {
+  let zones = [];
+  try {
+    const saved = JSON.parse(localStorage.getItem('privacyZones') || '[]');
+    if (Array.isArray(saved)) {
+      zones = saved.filter((z) => z && z.id && z.kind && typeof z.radiusM === 'number');
+    }
+  } catch { /* corrupted setting — start clean */ }
+  // Icon names go into innerHTML as ligature text — only accept safe names.
+  for (const z of zones) {
+    if (typeof z.icon !== 'string' || !/^[a-z0-9_]{1,40}$/.test(z.icon)) delete z.icon;
+  }
+  // Home and Work rows always exist, even before a location is set.
+  for (const kind of ['home', 'work']) {
+    if (!zones.some((z) => z.kind === kind)) {
+      zones.push({ id: kind, kind, name: kind === 'home' ? 'Home' : 'Work', lat: null, lng: null, radiusM: 150 });
+    }
+  }
+  const rank = (z) => (z.kind === 'home' ? 0 : z.kind === 'work' ? 1 : 2);
+  zones.sort((a, b) => rank(a) - rank(b));
+  return zones;
+}
+
+function savePrivacyZones() {
+  localStorage.setItem('privacyZones', JSON.stringify(privacyZones));
+}
+
+function openBulkRemoveModal(targets, msg) {
+  if (!targets.length) return;
+  pendingBulkRemove = targets;
+  document.getElementById('remove-drives-modal-msg').textContent = msg;
+  document.getElementById('remove-drives-overlay').classList.remove('hidden');
+}
+
+// Approximate the zone as a 64-gon — plenty round at map scale.
+function zoneCircleFeature(z) {
+  const latR = z.radiusM / 111320;
+  const lngR = z.radiusM / (111320 * Math.max(0.2, Math.cos((z.lat * Math.PI) / 180)));
+  const ring = [];
+  for (let i = 0; i <= 64; i++) {
+    const t = (i / 64) * 2 * Math.PI;
+    ring.push([z.lng + lngR * Math.sin(t), z.lat + latR * Math.cos(t)]);
+  }
+  return { type: 'Feature', properties: { zoneId: z.id }, geometry: { type: 'Polygon', coordinates: [ring] } };
+}
+
+function setPrivacyZonesVisible(v) {
+  privacyZonesVisible = v;
+  updatePrivacyZoneLayer();
+}
+
+function makeZoneMarkerEl(zone) {
+  const el = document.createElement('div');
+  el.className = 'zone-marker';
+  el.innerHTML = `<span class="material-icons">${zoneIcon(zone)}</span>`;
+  return el;
+}
+
+function updatePrivacyZoneLayer() {
+  whenMapReady(() => {
+    for (const m of zoneMarkers) m.remove();
+    zoneMarkers.length = 0;
+    // The zone being placed is drawn by the placement preview instead.
+    const zones = privacyZones.filter((z) => z.lat != null && z !== zonePlacement?.zone);
+    // Markers are permanent landmarks on the map (unless hidden in Map UI
+    // settings — editing sessions always show them); the dashed circles only
+    // show while the Privacy tab is open or a zone is being placed.
+    map.getSource('privacy-zones').setData({
+      type: 'FeatureCollection',
+      features: privacyZonesVisible ? zones.map(zoneCircleFeature) : [],
+    });
+    if (showZoneMarkers || privacyZonesVisible) {
+      for (const z of zones) {
+        zoneMarkers.push(new maplibregl.Marker({ element: makeZoneMarkerEl(z), anchor: 'center' })
+          .setLngLat([z.lng, z.lat])
+          .addTo(map));
+      }
+    }
+  });
+}
+
+function renderPrivacyZones() {
+  const listEl = document.getElementById('privacy-zones-list');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  const imperial = unitSystem === 'imperial';
+  const unitLbl = imperial ? 'ft' : 'm';
+  for (const z of privacyZones) {
+    const set = z.lat != null && z.lng != null;
+    const radiusDisplay = imperial ? Math.round(z.radiusM / M_PER_FT) : Math.round(z.radiusM);
+    const row = document.createElement('div');
+    row.className = 'zone-row';
+    row.innerHTML = `
+      <div class="zone-row-main">
+        <button class="zone-icon-btn" type="button" title="Change icon"><span class="material-icons">${zoneIcon(z)}</span></button>
+        ${z.kind === 'custom'
+          ? `<input class="zone-name-input" type="text" maxlength="24" value="${escapeHtml(z.name)}" />`
+          : `<span class="zone-name">${escapeHtml(z.name)}</span>`}
+        <span class="zone-coords">${set ? `${z.lat.toFixed(5)}, ${z.lng.toFixed(5)}` : 'Not set'}</span>
+      </div>
+      <div class="zone-row-actions">
+        ${set ? `<span class="zone-radius-text">Radius ${radiusDisplay} ${unitLbl}</span>` : ''}
+        <button class="zone-btn zone-set" type="button">${set ? 'Edit on map' : 'Set on map'}</button>
+        <button class="zone-btn zone-cull" type="button" ${set ? '' : 'disabled'}>Cull drives</button>
+        <button class="zone-btn zone-remove" type="button" title="${z.kind === 'custom' ? 'Delete zone' : 'Clear location'}">
+          <span class="material-icons">${z.kind === 'custom' ? 'delete' : 'backspace'}</span>
+        </button>
+      </div>`;
+
+    const nameInput = row.querySelector('.zone-name-input');
+    if (nameInput) {
+      nameInput.addEventListener('change', () => {
+        z.name = nameInput.value.trim() || 'Custom location';
+        nameInput.value = z.name;
+        savePrivacyZones();
+      });
+    }
+    row.querySelector('.zone-icon-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openZoneIconPicker(e.currentTarget, z);
+    });
+    row.querySelector('.zone-set').addEventListener('click', () => beginZoneMapPick(z));
+    row.querySelector('.zone-cull').addEventListener('click', () => cullZoneDrives(z));
+    row.querySelector('.zone-remove').addEventListener('click', () => {
+      if (z.kind === 'custom') privacyZones = privacyZones.filter((x) => x.id !== z.id);
+      else { z.lat = null; z.lng = null; }
+      savePrivacyZones();
+      renderPrivacyZones();
+      updatePrivacyZoneLayer();
+    });
+    listEl.appendChild(row);
+  }
+}
+
+function zoneRadiusLabel(radiusM) {
+  return unitSystem === 'imperial' ? `${Math.round(radiusM / M_PER_FT)} ft` : `${Math.round(radiusM)} m`;
+}
+
+// Small popover with the curated Material Symbols grid; picking one changes
+// the zone's icon in the settings row and on its map marker.
+let zoneIconPickerTarget = null;
+
+function openZoneIconPicker(anchor, zone) {
+  const popup = document.getElementById('zone-icon-popup');
+  if (!popup.classList.contains('hidden') && zoneIconPickerTarget === zone) {
+    closeZoneIconPicker();
+    return;
+  }
+  zoneIconPickerTarget = zone;
+  popup.querySelectorAll('.zone-icon-choice').forEach((b) => {
+    b.classList.toggle('active', b.dataset.icon === zoneIcon(zone));
+  });
+  const rect = anchor.getBoundingClientRect();
+  popup.style.top = `${rect.bottom + 6}px`;
+  popup.style.left = `${Math.min(rect.left, window.innerWidth - 240)}px`;
+  popup.classList.remove('hidden');
+}
+
+function closeZoneIconPicker() {
+  document.getElementById('zone-icon-popup').classList.add('hidden');
+  zoneIconPickerTarget = null;
+}
+
+function setPickHint(text, confirm) {
+  const hint = document.getElementById('map-pick-hint');
+  document.getElementById('map-pick-hint-text').textContent = text;
+  document.getElementById('map-pick-actions').classList.toggle('hidden', !confirm);
+  hint.classList.toggle('confirm', confirm);
+  hint.classList.remove('hidden');
+}
+
+// "Set on map" / "Edit on map": hide the settings modal and start a placement
+// session. In 'aim', the preview follows the cursor, dragging PANS the map
+// (MapLibre suppresses the click after a pan, so panning never places), and a
+// plain click drops the pin. That enters the editable confirm stage: drag the
+// pin to move the zone, drag anywhere on the circle's edge to resize it.
+// Save/Cancel completes; Esc cancels at any point.
+function beginZoneMapPick(zone) {
+  document.getElementById('settings-overlay').classList.add('hidden');
+  const isSet = zone.lat != null && zone.lng != null;
+  zonePlacement = {
+    zone,
+    stage: isSet ? 'confirm' : 'aim',
+    center: isSet ? { lat: zone.lat, lng: zone.lng } : null,
+    radiusM: Math.max(10, zone.radiusM),
+    marker: null,
+    ringDrag: false,
+  };
+  setPrivacyZonesVisible(true); // other zones stay visible for context
+  whenMapReady(() => {
+    if (isSet) {
+      // Bring the zone on screen with breathing room, then hand over the
+      // move/resize handles.
+      const latPad = (zone.radiusM * 1.8) / 111320;
+      const lngPad = (zone.radiusM * 1.8) / (111320 * Math.max(0.2, Math.cos((zone.lat * Math.PI) / 180)));
+      map.fitBounds(
+        [[zone.lng - lngPad, zone.lat - latPad], [zone.lng + lngPad, zone.lat + latPad]],
+        { duration: 500 },
+      );
+      zonePlacementPreview();
+      enterZoneConfirm();
+    } else {
+      map.getCanvas().style.cursor = 'crosshair';
+      setPickHint(`Click to place "${zone.name}" — drag to pan the map. Esc to cancel`, false);
+    }
+  });
+}
+
+// Point on the circle's eastern edge — used to measure the ring's pixel radius.
+function zoneEdgeLngLat(center, radiusM) {
+  const lngR = radiusM / (111320 * Math.max(0.2, Math.cos((center.lat * Math.PI) / 180)));
+  return [center.lng + lngR, center.lat];
+}
+
+// Is the mouse on the zone's edge ring (within a grab tolerance, in pixels)?
+function zoneNearRing(e) {
+  const p = zonePlacement;
+  if (!p?.center) return false;
+  const c = map.project([p.center.lng, p.center.lat]);
+  const edge = map.project(zoneEdgeLngLat(p.center, p.radiusM));
+  const radiusPx = Math.hypot(edge.x - c.x, edge.y - c.y);
+  const distPx = Math.hypot(e.point.x - c.x, e.point.y - c.y);
+  return Math.abs(distPx - radiusPx) <= 8;
+}
+
+function zoneConfirmHint() {
+  const p = zonePlacement;
+  if (!p) return;
+  setPickHint(`"${p.zone.name}" — Radius ${zoneRadiusLabel(p.radiusM)}. Drag the pin to move it, or drag the circle's edge to resize.`, true);
+}
+
+// Editable confirm stage: draggable center pin; the circle's edge itself is
+// the resize handle (see the mousedown/mousemove ring-drag in initMap).
+function enterZoneConfirm() {
+  const p = zonePlacement;
+  if (!p || !p.center) return;
+  p.stage = 'confirm';
+  map.getCanvas().style.cursor = '';
+
+  if (!p.marker) zonePlacementPreview(); // ensures the pin exists
+  p.marker.getElement().classList.add('zone-marker--live');
+  p.marker.setDraggable(true);
+  p.marker.on('drag', () => {
+    const ll = p.marker.getLngLat();
+    p.center = { lat: ll.lat, lng: ll.lng };
+    zonePlacementPreview();
+  });
+
+  zoneConfirmHint();
+}
+
+// Redraw the placement preview (staged circle + marker at the staged center).
+function zonePlacementPreview() {
+  const p = zonePlacement;
+  if (!p || !mapReady || !p.center) return;
+  const others = privacyZones
+    .filter((z) => z.lat != null && z !== p.zone)
+    .map(zoneCircleFeature);
+  others.push(zoneCircleFeature({ radiusM: p.radiusM, lat: p.center.lat, lng: p.center.lng, id: p.zone.id }));
+  map.getSource('privacy-zones').setData({ type: 'FeatureCollection', features: others });
+  if (!p.marker) {
+    const el = makeZoneMarkerEl(p.zone);
+    p.marker = new maplibregl.Marker({ element: el, anchor: 'center' })
+      .setLngLat([p.center.lng, p.center.lat])
+      .addTo(map);
+  } else {
+    p.marker.setLngLat([p.center.lng, p.center.lat]);
+  }
+}
+
+function endZonePlacement(save) {
+  const p = zonePlacement;
+  if (!p) return;
+  if (save && p.center) {
+    p.zone.lat = p.center.lat;
+    p.zone.lng = p.center.lng;
+    p.zone.radiusM = Math.round(p.radiusM);
+    savePrivacyZones();
+    logAction(`privacy zone "${p.zone.name}" placed (radius ${Math.round(p.zone.radiusM)} m)`);
+  }
+  if (p.marker) p.marker.remove();
+  zonePlacement = null;
+  document.getElementById('map-pick-hint').classList.add('hidden');
+  if (mapReady) map.getCanvas().style.cursor = '';
+  renderPrivacyZones();
+  updatePrivacyZoneLayer();
+  document.getElementById('settings-overlay').classList.remove('hidden');
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && zonePlacement) endZonePlacement(false);
+});
+
+// Find drives whose start OR end point falls inside the zone and queue them
+// for the shared bulk-removal confirm. Uses the same WGS-84 geodesic as the
+// drive stats, against the grouper's snapped endpoints.
+function cullZoneDrives(zone) {
+  if (zone.lat == null || zone.lng == null) return;
+  if (!loadedFilePath || !drives.length) {
+    alert('Load a drive data file first.');
+    return;
+  }
+  const gm = window.driveCalc?.geodesicM;
+  if (!gm) { alert('Distance helper unavailable.'); return; }
+  const matches = drives.filter((d) => ['origin', 'dest'].some((role) => {
+    const c = endpointCoord(d, role);
+    return c && gm(zone.lat, zone.lng, c.lat, c.lng) <= zone.radiusM;
+  }));
+  if (!matches.length) {
+    alert(`No drives start or end inside "${zone.name}".`);
+    return;
+  }
+  document.getElementById('settings-overlay').classList.add('hidden');
+  setPrivacyZonesVisible(false);
+  openBulkRemoveModal(matches,
+    `Remove ${matches.length} drive${matches.length === 1 ? '' : 's'} that start or end within "${zone.name}"? This cannot be undone.`);
+}
+
+// ─── Drive list multi-select ─────────────────────────────────────────────────
+// Ctrl/Cmd+click toggles a card; Shift+click selects the range from the last
+// toggle; Esc or the bar's X clears. Selection is cleared on every list
+// re-render (reload, tag filter, removal) so it can never reference stale
+// cards. Ids are kept as strings to match dataset.driveId.
+const multiSelected = new Set();
+let multiAnchorId = null;      // shift-range anchor (last toggled card)
+let lastRenderedOrder = [];    // drive ids in the currently displayed order
+
+function toggleMultiSelect(id) {
+  if (multiSelected.has(id)) multiSelected.delete(id);
+  else multiSelected.add(id);
+  multiAnchorId = id;
+  syncMultiSelectUI();
+}
+
+function rangeMultiSelect(id) {
+  const a = multiAnchorId == null ? -1 : lastRenderedOrder.indexOf(multiAnchorId);
+  const b = lastRenderedOrder.indexOf(id);
+  if (a === -1 || b === -1) { toggleMultiSelect(id); return; }
+  for (let i = Math.min(a, b); i <= Math.max(a, b); i++) multiSelected.add(lastRenderedOrder[i]);
+  syncMultiSelectUI();
+}
+
+function clearMultiSelect() {
+  multiSelected.clear();
+  multiAnchorId = null;
+  syncMultiSelectUI();
+}
+
+function syncMultiSelectUI() {
+  document.querySelectorAll('.drive-item').forEach((el) => {
+    el.classList.toggle('multi-selected', multiSelected.has(el.dataset.driveId));
+  });
+  const bar = document.getElementById('multi-select-bar');
+  if (!bar) return;
+  if (multiSelected.size) {
+    document.getElementById('multi-select-count').textContent =
+      `${multiSelected.size} drive${multiSelected.size === 1 ? '' : 's'} selected`;
+    bar.classList.remove('hidden');
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
 async function renderDriveList(drives) {
   const seq = ++_driveListRenderSeq;
   const list = document.getElementById('drives-list');
   list.innerHTML = '';
+  lastRenderedOrder = [];
+  clearMultiSelect();
 
   if (drives.length === 0) {
     list.innerHTML = '<div class="empty-state">No drives found in this file.</div>';
@@ -2934,6 +3517,7 @@ async function renderDriveList(drives) {
   if (activeTagFilter) {
     sorted = sorted.filter((d) => (d.tags ?? []).includes(activeTagFilter));
   }
+  lastRenderedOrder = sorted.map((d) => String(d.id));
 
   if (sorted.length === 0) {
     list.innerHTML = '<div class="empty-state">No drives match the selected filter.</div>';
@@ -3069,6 +3653,7 @@ function buildDriveItem(drive) {
       <span class="drive-chip"><span class="material-icons">straighten</span>${distVal(drive.distanceMi)} ${distShort()}</span>
       <span class="drive-chip"><span class="material-icons">schedule</span>${durStr}</span>
       ${fsdChip}
+      ${drive.bridged ? '<span class="drive-chip drive-chip--bridged" title="A GPS gap in this drive was bridged by Check Drives"><span class="material-icons">route</span>Bridged</span>' : ''}
     </div>
     <div class="drive-item-tags">
       ${tagPills}
@@ -3133,7 +3718,15 @@ function buildDriveItem(drive) {
     }
   });
 
-  item.addEventListener('click', () => selectDrive(drive));
+  // Shift+click builds a range selection — stop the browser text-selection
+  // that shift-clicking otherwise drags across the cards.
+  item.addEventListener('mousedown', (e) => { if (e.shiftKey) e.preventDefault(); });
+  item.addEventListener('click', (e) => {
+    if (e.ctrlKey || e.metaKey) { toggleMultiSelect(String(drive.id)); return; }
+    if (e.shiftKey) { rangeMultiSelect(String(drive.id)); return; }
+    if (multiSelected.size) clearMultiSelect(); // plain click exits select mode
+    selectDrive(drive);
+  });
 
   // Location pins: resolve start/end place names into the location line under
   // each Departed/Arrived header. Names cache on the drive object so re-renders

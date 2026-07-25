@@ -1,13 +1,61 @@
 {
   "versions": [
     {
+      "version": "1.4.2",
+      "date": "2026-07-25",
+      "title": "Privacy Zones, Multi-Select & Map Polish",
+      "changes": [
+        {
+          "type": "improvement",
+          "description": "Removing a drive, removing imported drives, and reverting to a backup no longer look like a freeze — the loading spinner now stays up while the drive data file is rewritten and the list refreshes."
+        },
+        {
+          "type": "feature",
+          "description": "You can now see which drives were bridged by Check Drives: bridged drives carry an amber \"Bridged\" chip on their card, and the completion summary lists the affected drives."
+        },
+        {
+          "type": "improvement",
+          "description": "The update button in the footer now animates while an update downloads, and turns orange and flashes once the download is finished and a restart is needed — so it's obvious at a glance which stage you're at."
+        },
+        {
+          "type": "improvement",
+          "description": "Privacy zone markers can wear any of 20 icons — click the icon on a zone row in Settings > Privacy to pick from a Material Symbols grid (school, gym, restaurant, church, park, and more). The chosen icon shows on the zone's map marker."
+        },
+        {
+          "type": "fix",
+          "description": "The letters on the FSD event markers (A and D) now sit truly centered in their circles — their position is measured from the font's actual glyph bounds on both axes instead of approximated."
+        },
+        {
+          "type": "improvement",
+          "description": "Location labels on drive cards are more accurate: lookups now only match real addresses and businesses, and a business name or house number is used only when it is verifiably at the drive's coordinates — otherwise the label falls back to the street instead of naming the wrong building. Existing labels refresh automatically over time."
+        },
+        {
+          "type": "feature",
+          "description": "Multi-select in the drive list: Ctrl+click toggles drives, Shift+click selects a range, and Esc clears. A floating bar shows the selection count with Remove — deleting the whole batch in one pass with a single confirmation, instead of one drive at a time."
+        },
+        {
+          "type": "feature",
+          "description": "Privacy zones: the new Settings > Privacy tab lets you draw a circle around Home, Work, or any custom location, then cull every drive that starts or ends inside it in one confirmed sweep. Placement is visual — a preview circle follows your cursor while the map pans normally, a click drops the pin, then drag the pin to move the zone or grab anywhere on the circle's edge to resize it before Save/Cancel confirms. Editing a placed zone reopens the same on-map editor, and zone markers stay visible on the map as landmarks. Zones are stored only on this device, never in your drive data file."
+        }
+      ]
+    },
+    {
       "version": "1.4.1",
       "date": "2026-07-15",
       "title": "Maintenance Update",
       "changes": [
-        { "type": "improvement", "description": "Updated the app to the latest Electron runtime (newer Chromium and Node under the hood) for up-to-date security and platform fixes." },
-        { "type": "improvement", "description": "Refreshed the libraries that read and process your drive data to their latest versions." },
-        { "type": "improvement", "description": "One small side effect of the runtime update: file-picker dialogs (like the Import browsers) may now start in your Downloads folder instead of the last folder you used." }
+        {
+          "type": "improvement",
+          "description": "Updated the app to the latest Electron runtime (newer Chromium and Node under the hood) for up-to-date security and platform fixes."
+        },
+        {
+          "type": "improvement",
+          "description": "Refreshed the libraries that read and process your drive data to their latest versions."
+        },
+        {
+          "type": "improvement",
+          "description": "One small side effect of the runtime update: file-picker dialogs (like the Import browsers) may now start in your Downloads folder instead of the last folder you used."
+        }
       ]
     },
     {
@@ -15,14 +63,38 @@
       "date": "2026-07-01",
       "title": "Green Theme, Vehicle Markers & Customization",
       "changes": [
-        { "type": "feature", "description": "Import Drives can now merge another Sentry Drive drive-data.json into your current data — a backup, or drives from a second device. Pick \"Drive Data File\" in the Import dialog; clips you already have are skipped and each imported drive brings its tags along. The drives fold in as regular drives — including their FSD and Autopilot data — so the app confirms first, since this can change your FSD score. A backup of your file is written before merging." },
-        { "type": "improvement", "description": "The app's accent color is now Sentry USB green to match the rest of the Sentry ecosystem — buttons, tabs, highlights, and the ambient glow. The Settings panel also picks up the frosted-glass look. Map drive lines keep their existing colors (they indicate drive type)." },
-        { "type": "improvement", "description": "The support log is now a proper activity timeline — it records loads, imports, processing runs (with outcome counts and timing), drive edits, and update checks, tagged by area. Exported logs are automatically scrubbed of GPS coordinates, addresses, and tokens so they're safe to share in bug reports, and the Logs setting carries a short privacy reminder. Settings labels are also larger and easier to read." },
-        { "type": "improvement", "description": "Drive replay polish: pick a playback speed from a pop-up list instead of clicking to cycle through 1x/2x/5x/10x, and the FSD event markers on the map now have bigger, centered white letters (A for accelerator override, D for disengagement) with a more legible amber for accelerator presses." },
-        { "type": "feature", "description": "Drive line colors are now customizable. Settings > Map UI > Customization has color swatches for Manual, Full Self-Driving, Imported, and the all-drives overview, with a reset to defaults. The map legend and FSD share bars follow your chosen colors, and changes apply live — even mid-replay." },
-        { "type": "feature", "description": "The replay marker adds Model Y and Model X as vehicle styles alongside Model 3, with the same custom paint color and preview. Model S and Cybertruck are wired in as well and will appear in the list automatically once their artwork ships." },
-        { "type": "improvement", "description": "Accent text is easier to read: green labels (View Drives, Check Drives, chips, badges, links) now use the same emerald as Sentry USB instead of a paler tint, and Load Drives, Revert, and Remove Imported Drives join the emerald set — the destructive pair still turns red on hover as a warning." },
-        { "type": "fix", "description": "The Import Drives dialog can no longer get stuck on \"Importing…\" if an unexpected error interrupts the import — it now reports the error and re-enables the button." }
+        {
+          "type": "feature",
+          "description": "Import Drives can now merge another Sentry Drive drive-data.json into your current data — a backup, or drives from a second device. Pick \"Drive Data File\" in the Import dialog; clips you already have are skipped and each imported drive brings its tags along. The drives fold in as regular drives — including their FSD and Autopilot data — so the app confirms first, since this can change your FSD score. A backup of your file is written before merging."
+        },
+        {
+          "type": "improvement",
+          "description": "The app's accent color is now Sentry USB green to match the rest of the Sentry ecosystem — buttons, tabs, highlights, and the ambient glow. The Settings panel also picks up the frosted-glass look. Map drive lines keep their existing colors (they indicate drive type)."
+        },
+        {
+          "type": "improvement",
+          "description": "The support log is now a proper activity timeline — it records loads, imports, processing runs (with outcome counts and timing), drive edits, and update checks, tagged by area. Exported logs are automatically scrubbed of GPS coordinates, addresses, and tokens so they're safe to share in bug reports, and the Logs setting carries a short privacy reminder. Settings labels are also larger and easier to read."
+        },
+        {
+          "type": "improvement",
+          "description": "Drive replay polish: pick a playback speed from a pop-up list instead of clicking to cycle through 1x/2x/5x/10x, and the FSD event markers on the map now have bigger, centered white letters (A for accelerator override, D for disengagement) with a more legible amber for accelerator presses."
+        },
+        {
+          "type": "feature",
+          "description": "Drive line colors are now customizable. Settings > Map UI > Customization has color swatches for Manual, Full Self-Driving, Imported, and the all-drives overview, with a reset to defaults. The map legend and FSD share bars follow your chosen colors, and changes apply live — even mid-replay."
+        },
+        {
+          "type": "feature",
+          "description": "The replay marker adds Model Y and Model X as vehicle styles alongside Model 3, with the same custom paint color and preview. Model S and Cybertruck are wired in as well and will appear in the list automatically once their artwork ships."
+        },
+        {
+          "type": "improvement",
+          "description": "Accent text is easier to read: green labels (View Drives, Check Drives, chips, badges, links) now use the same emerald as Sentry USB instead of a paler tint, and Load Drives, Revert, and Remove Imported Drives join the emerald set — the destructive pair still turns red on hover as a warning."
+        },
+        {
+          "type": "fix",
+          "description": "The Import Drives dialog can no longer get stuck on \"Importing…\" if an unexpected error interrupts the import — it now reports the error and re-enables the button."
+        }
       ]
     },
     {
@@ -30,12 +102,30 @@
       "date": "2026-06-15",
       "title": "Corruption Hardening, Smoother Imports & Auto-Refresh",
       "changes": [
-        { "type": "feature", "description": "The app now auto-refreshes when drive-data.json changes on disk — for example when Sentry USB re-exports it or processing finishes — so you no longer have to reload manually. It waits politely if you're viewing a drive or processing, then refreshes when you're done." },
-        { "type": "improvement", "description": "Saving your drive data is now hardened against corruption: every write is flushed to disk and integrity-checked before it replaces the real file, so a power loss, full disk, or dropped network drive mid-save can no longer leave you with a truncated drive-data.json — the previous good copy is kept instead." },
-        { "type": "improvement", "description": "Importing drives feels much smoother on large drive libraries: the save step now shows live progress instead of appearing frozen, and the import no longer re-scans your existing drives twice per run." },
-        { "type": "improvement", "description": "The drive list no longer freezes the app while it builds after a large import or reload — it now fills in progressively and the window stays responsive." },
-        { "type": "improvement", "description": "The FSD Score now shows one decimal place and rounds down (e.g. 99.8% instead of 100%), so a near-perfect score is no longer flattered up to a perfect one." },
-        { "type": "fix", "description": "Adding or removing a tag from the drive stats panel now updates the panel right away — it previously saved the tag but didn't show it there until you reselected the drive." }
+        {
+          "type": "feature",
+          "description": "The app now auto-refreshes when drive-data.json changes on disk — for example when Sentry USB re-exports it or processing finishes — so you no longer have to reload manually. It waits politely if you're viewing a drive or processing, then refreshes when you're done."
+        },
+        {
+          "type": "improvement",
+          "description": "Saving your drive data is now hardened against corruption: every write is flushed to disk and integrity-checked before it replaces the real file, so a power loss, full disk, or dropped network drive mid-save can no longer leave you with a truncated drive-data.json — the previous good copy is kept instead."
+        },
+        {
+          "type": "improvement",
+          "description": "Importing drives feels much smoother on large drive libraries: the save step now shows live progress instead of appearing frozen, and the import no longer re-scans your existing drives twice per run."
+        },
+        {
+          "type": "improvement",
+          "description": "The drive list no longer freezes the app while it builds after a large import or reload — it now fills in progressively and the window stays responsive."
+        },
+        {
+          "type": "improvement",
+          "description": "The FSD Score now shows one decimal place and rounds down (e.g. 99.8% instead of 100%), so a near-perfect score is no longer flattered up to a perfect one."
+        },
+        {
+          "type": "fix",
+          "description": "Adding or removing a tag from the drive stats panel now updates the panel right away — it previously saved the tag but didn't show it there until you reselected the drive."
+        }
       ]
     },
     {
@@ -43,9 +133,18 @@
       "date": "2026-06-15",
       "title": "Auto-Refresh, FSD Score Precision & Tag Fix",
       "changes": [
-        { "type": "feature", "description": "The app now auto-refreshes when drive-data.json changes on disk — for example when Sentry USB re-exports it or processing finishes — so you no longer have to reload manually. It waits politely if you're viewing a drive or processing, then refreshes when you're done." },
-        { "type": "improvement", "description": "The FSD Score now shows one decimal place and rounds down (e.g. 99.8% instead of 100%), so a near-perfect score is no longer flattered up to a perfect one." },
-        { "type": "fix", "description": "Adding or removing a tag from the drive stats panel now updates the panel right away — it previously saved the tag but didn't show it there until you reselected the drive." }
+        {
+          "type": "feature",
+          "description": "The app now auto-refreshes when drive-data.json changes on disk — for example when Sentry USB re-exports it or processing finishes — so you no longer have to reload manually. It waits politely if you're viewing a drive or processing, then refreshes when you're done."
+        },
+        {
+          "type": "improvement",
+          "description": "The FSD Score now shows one decimal place and rounds down (e.g. 99.8% instead of 100%), so a near-perfect score is no longer flattered up to a perfect one."
+        },
+        {
+          "type": "fix",
+          "description": "Adding or removing a tag from the drive stats panel now updates the panel right away — it previously saved the tag but didn't show it there until you reselected the drive."
+        }
       ]
     },
     {
@@ -53,9 +152,18 @@
       "date": "2026-06-13",
       "title": "Drive Data Corruption Hardening & Smoother Imports",
       "changes": [
-        { "type": "improvement", "description": "Saving your drive data is now hardened against corruption: every write is flushed to disk and integrity-checked before it replaces the real file, so a power loss, full disk, or dropped network drive mid-save can no longer leave you with a truncated drive-data.json — the previous good copy is kept instead." },
-        { "type": "improvement", "description": "Importing drives feels much smoother on large drive libraries: the save step now shows live progress instead of appearing frozen, and the import no longer re-scans your existing drives twice per run." },
-        { "type": "improvement", "description": "The drive list no longer freezes the app while it builds after a large import or reload — it now fills in progressively and the window stays responsive." }
+        {
+          "type": "improvement",
+          "description": "Saving your drive data is now hardened against corruption: every write is flushed to disk and integrity-checked before it replaces the real file, so a power loss, full disk, or dropped network drive mid-save can no longer leave you with a truncated drive-data.json — the previous good copy is kept instead."
+        },
+        {
+          "type": "improvement",
+          "description": "Importing drives feels much smoother on large drive libraries: the save step now shows live progress instead of appearing frozen, and the import no longer re-scans your existing drives twice per run."
+        },
+        {
+          "type": "improvement",
+          "description": "The drive list no longer freezes the app while it builds after a large import or reload — it now fills in progressively and the window stays responsive."
+        }
       ]
     },
     {
@@ -63,7 +171,10 @@
       "date": "2026-06-13",
       "title": "Universal Drive Stats (Sentry USB Parity)",
       "changes": [
-        { "type": "fix", "description": "A clip where the car only sat parked (no movement) is no longer counted as a zero-mile drive, matching Sentry USB exactly so the two apps report the same lifetime drive count and total time. Your count and time may tick down slightly; distance is unaffected." }
+        {
+          "type": "fix",
+          "description": "A clip where the car only sat parked (no movement) is no longer counted as a zero-mile drive, matching Sentry USB exactly so the two apps report the same lifetime drive count and total time. Your count and time may tick down slightly; distance is unaffected."
+        }
       ]
     },
     {
@@ -71,10 +182,22 @@
       "date": "2026-06-12",
       "title": "Processing Reliability & Hardening",
       "changes": [
-        { "type": "fix", "description": "Fixed a crash at the end of processing (\"ENOENT: no such file or directory, rename ... drive-data.json.tmp\") — a progress checkpoint still writing when processing finished could collide with the final save, killing the run and potentially corrupting drive-data.json. Checkpoints and the final save are now strictly ordered and never share files. If a previous run hit this, simply process again." },
-        { "type": "fix", "description": "Place names and tags are now safely escaped in the drive list — a location label or tag containing HTML characters could break the card layout or be interpreted as markup." },
-        { "type": "improvement", "description": "Processing sweeps leftover temporary files from previously crashed or interrupted runs." },
-        { "type": "fix", "description": "Processing no longer attempts a leftover debug copy of drive-data.json to a developer's local path at the end of every run." }
+        {
+          "type": "fix",
+          "description": "Fixed a crash at the end of processing (\"ENOENT: no such file or directory, rename ... drive-data.json.tmp\") — a progress checkpoint still writing when processing finished could collide with the final save, killing the run and potentially corrupting drive-data.json. Checkpoints and the final save are now strictly ordered and never share files. If a previous run hit this, simply process again."
+        },
+        {
+          "type": "fix",
+          "description": "Place names and tags are now safely escaped in the drive list — a location label or tag containing HTML characters could break the card layout or be interpreted as markup."
+        },
+        {
+          "type": "improvement",
+          "description": "Processing sweeps leftover temporary files from previously crashed or interrupted runs."
+        },
+        {
+          "type": "fix",
+          "description": "Processing no longer attempts a leftover debug copy of drive-data.json to a developer's local path at the end of every run."
+        }
       ]
     },
     {
@@ -82,10 +205,22 @@
       "date": "2026-06-12",
       "title": "Battery on Drive Cards & Replay Progress Trail",
       "changes": [
-        { "type": "feature", "description": "Drive cards now show the battery charge beside Departed and Arrived when your Sentry USB device recorded it — available on drives captured since its BLE vehicle-data update. Older history and imported drives simply omit it." },
-        { "type": "feature", "description": "Drive replay paints progress along the route — the path ahead of the marker is dimmed and takes on its normal color as the marker passes. Scrubbing moves the boundary both ways, and the FSD green/manual blue segments stay distinct in both states." },
-        { "type": "improvement", "description": "Map UI settings: city labels and road labels now have separate toggles, and the old \"Hide other drives\" checkbox is now the clearer \"Show other drives when viewing a drive\"." },
-        { "type": "improvement", "description": "City and street labels now draw above the drive lines, so place names stay readable over dense route areas on every map layer." }
+        {
+          "type": "feature",
+          "description": "Drive cards now show the battery charge beside Departed and Arrived when your Sentry USB device recorded it — available on drives captured since its BLE vehicle-data update. Older history and imported drives simply omit it."
+        },
+        {
+          "type": "feature",
+          "description": "Drive replay paints progress along the route — the path ahead of the marker is dimmed and takes on its normal color as the marker passes. Scrubbing moves the boundary both ways, and the FSD green/manual blue segments stay distinct in both states."
+        },
+        {
+          "type": "improvement",
+          "description": "Map UI settings: city labels and road labels now have separate toggles, and the old \"Hide other drives\" checkbox is now the clearer \"Show other drives when viewing a drive\"."
+        },
+        {
+          "type": "improvement",
+          "description": "City and street labels now draw above the drive lines, so place names stay readable over dense route areas on every map layer."
+        }
       ]
     },
     {
@@ -93,9 +228,18 @@
       "date": "2026-06-11",
       "title": "Map Overview Readability",
       "changes": [
-        { "type": "improvement", "description": "Imported drives no longer drown out dashcam drives on the map overview — they draw underneath, fainter and thinner, so your recorded drive lines stay readable." },
-        { "type": "improvement", "description": "Drive lines on the overview are slightly thicker — easier to see and easier to click." },
-        { "type": "improvement", "description": "Street names are now shown on all map layers — Light, Dark, and Satellite — with a new \"Show road labels\" toggle in Map UI, independent of the city-labels toggle." }
+        {
+          "type": "improvement",
+          "description": "Imported drives no longer drown out dashcam drives on the map overview — they draw underneath, fainter and thinner, so your recorded drive lines stay readable."
+        },
+        {
+          "type": "improvement",
+          "description": "Drive lines on the overview are slightly thicker — easier to see and easier to click."
+        },
+        {
+          "type": "improvement",
+          "description": "Street names are now shown on all map layers — Light, Dark, and Satellite — with a new \"Show road labels\" toggle in Map UI, independent of the city-labels toggle."
+        }
       ]
     },
     {
@@ -103,19 +247,58 @@
       "date": "2026-06-11",
       "title": "GPU Map Engine, Smarter Imports & Replay Accuracy",
       "changes": [
-        { "type": "feature", "description": "The map runs on a new GPU-accelerated engine (MapLibre GL) — panning and zooming stay smooth even with thousands of drive lines on screen. Same Google map styles, layers, and labels; clicking, replay, and the legend all work as before." },
-        { "type": "fix", "description": "Dropdowns work again — the Service and Vehicle pickers in Import Drives and the marker picker in Settings wouldn't open (a Chromium quirk with the frosted-glass blur on modals; the glass look is unchanged)." },
-        { "type": "fix", "description": "Clicking a drive line on the map overview works again — selecting a drive from the map had stopped working — and lines now accept clicks within a comfortable distance instead of needing a pixel-perfect hit." },
-        { "type": "fix", "description": "The replay arrow keeps tracking at parking speeds — below ~5 mph, while reversing, and through back-in maneuvers it no longer freezes or swings to a direction the car never faced. Replaying a finished drive snaps the arrow back to the departure heading." },
-        { "type": "improvement", "description": "Import Drives no longer queries the service in the background — nothing is fetched while you adjust dates or pick a vehicle. Clicking Import runs the check first, shows what was found, and stops safely if there's nothing new." },
-        { "type": "feature", "description": "The replay bar now shows the current gear (P / D / R / N), and speed reads correctly while reversing." },
-        { "type": "feature", "description": "Remove Imported Drives lets you choose which service to clean out — Tessie, Teslascope, or both — and reports the real number of drives removed (it previously counted internal clips, e.g. \"339\" for 25 drives). It also explains when removed drives were hidden behind dashcam drives." },
-        { "type": "improvement", "description": "Drive locations fall back to the city when no street address exists at a spot, instead of showing raw GPS coordinates." },
-        { "type": "improvement", "description": "Buttons across the app now match the Liquid Glass design — translucent blue primary buttons and frosted glass secondary tiles." },
-        { "type": "improvement", "description": "FSD analytics: Autopilot now uses Tesla's signature blue, and the donut chart center is fully transparent so the map shows through." },
-        { "type": "improvement", "description": "The aggregate stats panel always stays on one line, compressing spacing and text on narrow windows instead of wrapping." },
-        { "type": "improvement", "description": "The app now opens on View Drives instead of Processing, with a new route icon next to the title." },
-        { "type": "improvement", "description": "Integration cards have clearer descriptions, both services link with \"Get API key\", and the Teslascope link opens the correct page (Account → Security)." }
+        {
+          "type": "feature",
+          "description": "The map runs on a new GPU-accelerated engine (MapLibre GL) — panning and zooming stay smooth even with thousands of drive lines on screen. Same Google map styles, layers, and labels; clicking, replay, and the legend all work as before."
+        },
+        {
+          "type": "fix",
+          "description": "Dropdowns work again — the Service and Vehicle pickers in Import Drives and the marker picker in Settings wouldn't open (a Chromium quirk with the frosted-glass blur on modals; the glass look is unchanged)."
+        },
+        {
+          "type": "fix",
+          "description": "Clicking a drive line on the map overview works again — selecting a drive from the map had stopped working — and lines now accept clicks within a comfortable distance instead of needing a pixel-perfect hit."
+        },
+        {
+          "type": "fix",
+          "description": "The replay arrow keeps tracking at parking speeds — below ~5 mph, while reversing, and through back-in maneuvers it no longer freezes or swings to a direction the car never faced. Replaying a finished drive snaps the arrow back to the departure heading."
+        },
+        {
+          "type": "improvement",
+          "description": "Import Drives no longer queries the service in the background — nothing is fetched while you adjust dates or pick a vehicle. Clicking Import runs the check first, shows what was found, and stops safely if there's nothing new."
+        },
+        {
+          "type": "feature",
+          "description": "The replay bar now shows the current gear (P / D / R / N), and speed reads correctly while reversing."
+        },
+        {
+          "type": "feature",
+          "description": "Remove Imported Drives lets you choose which service to clean out — Tessie, Teslascope, or both — and reports the real number of drives removed (it previously counted internal clips, e.g. \"339\" for 25 drives). It also explains when removed drives were hidden behind dashcam drives."
+        },
+        {
+          "type": "improvement",
+          "description": "Drive locations fall back to the city when no street address exists at a spot, instead of showing raw GPS coordinates."
+        },
+        {
+          "type": "improvement",
+          "description": "Buttons across the app now match the Liquid Glass design — translucent blue primary buttons and frosted glass secondary tiles."
+        },
+        {
+          "type": "improvement",
+          "description": "FSD analytics: Autopilot now uses Tesla's signature blue, and the donut chart center is fully transparent so the map shows through."
+        },
+        {
+          "type": "improvement",
+          "description": "The aggregate stats panel always stays on one line, compressing spacing and text on narrow windows instead of wrapping."
+        },
+        {
+          "type": "improvement",
+          "description": "The app now opens on View Drives instead of Processing, with a new route icon next to the title."
+        },
+        {
+          "type": "improvement",
+          "description": "Integration cards have clearer descriptions, both services link with \"Get API key\", and the Teslascope link opens the correct page (Account → Security)."
+        }
       ]
     },
     {
@@ -123,16 +306,46 @@
       "date": "2026-06-11",
       "title": "Replay Accuracy, Map Clicks & Liquid Glass Polish",
       "changes": [
-        { "type": "fix", "description": "Clicking a drive line on the map overview works again — selecting a drive from the map had stopped working — and lines now accept clicks within a comfortable distance instead of needing a pixel-perfect hit." },
-        { "type": "fix", "description": "The replay arrow keeps tracking at parking speeds — below ~5 mph, while reversing, and through back-in maneuvers it no longer freezes or swings to a direction the car never faced. Replaying a finished drive snaps the arrow back to the departure heading." },
-        { "type": "feature", "description": "The replay bar now shows the current gear (P / D / R / N), and speed reads correctly while reversing." },
-        { "type": "feature", "description": "Remove Imported Drives lets you choose which service to clean out — Tessie, Teslascope, or both — and reports the real number of drives removed (it previously counted internal clips, e.g. \"339\" for 25 drives). It also explains when removed drives were hidden behind dashcam drives." },
-        { "type": "improvement", "description": "Drive locations fall back to the city when no street address exists at a spot, instead of showing raw GPS coordinates." },
-        { "type": "improvement", "description": "Buttons across the app now match the Liquid Glass design — translucent blue primary buttons and frosted glass secondary tiles." },
-        { "type": "improvement", "description": "FSD analytics: Autopilot now uses Tesla's signature blue, and the donut chart center is fully transparent so the map shows through." },
-        { "type": "improvement", "description": "The aggregate stats panel always stays on one line, compressing spacing and text on narrow windows instead of wrapping." },
-        { "type": "improvement", "description": "The app now opens on View Drives instead of Processing, with a new route icon next to the title." },
-        { "type": "improvement", "description": "Integration cards have clearer descriptions, both services link with \"Get API key\", and the Teslascope link opens the correct page (Account → Security)." }
+        {
+          "type": "fix",
+          "description": "Clicking a drive line on the map overview works again — selecting a drive from the map had stopped working — and lines now accept clicks within a comfortable distance instead of needing a pixel-perfect hit."
+        },
+        {
+          "type": "fix",
+          "description": "The replay arrow keeps tracking at parking speeds — below ~5 mph, while reversing, and through back-in maneuvers it no longer freezes or swings to a direction the car never faced. Replaying a finished drive snaps the arrow back to the departure heading."
+        },
+        {
+          "type": "feature",
+          "description": "The replay bar now shows the current gear (P / D / R / N), and speed reads correctly while reversing."
+        },
+        {
+          "type": "feature",
+          "description": "Remove Imported Drives lets you choose which service to clean out — Tessie, Teslascope, or both — and reports the real number of drives removed (it previously counted internal clips, e.g. \"339\" for 25 drives). It also explains when removed drives were hidden behind dashcam drives."
+        },
+        {
+          "type": "improvement",
+          "description": "Drive locations fall back to the city when no street address exists at a spot, instead of showing raw GPS coordinates."
+        },
+        {
+          "type": "improvement",
+          "description": "Buttons across the app now match the Liquid Glass design — translucent blue primary buttons and frosted glass secondary tiles."
+        },
+        {
+          "type": "improvement",
+          "description": "FSD analytics: Autopilot now uses Tesla's signature blue, and the donut chart center is fully transparent so the map shows through."
+        },
+        {
+          "type": "improvement",
+          "description": "The aggregate stats panel always stays on one line, compressing spacing and text on narrow windows instead of wrapping."
+        },
+        {
+          "type": "improvement",
+          "description": "The app now opens on View Drives instead of Processing, with a new route icon next to the title."
+        },
+        {
+          "type": "improvement",
+          "description": "Integration cards have clearer descriptions, both services link with \"Get API key\", and the Teslascope link opens the correct page (Account → Security)."
+        }
       ]
     },
     {
@@ -140,22 +353,70 @@
       "date": "2026-06-11",
       "title": "Teslascope Import, Linux Support & Major Accuracy Upgrades",
       "changes": [
-        { "type": "fix", "description": "Fixed drives failing to load in 1.2.0 (\"Identifier 'isEventFolderPath' has already been declared\")." },
-        { "type": "feature", "description": "Teslascope import works end-to-end — connect with the API key from Account → Security, and your full drive history imports with route lines, verified against live data." },
-        { "type": "feature", "description": "Linux support — releases now include an AppImage (with the same auto-update as Windows) and a .deb package." },
-        { "type": "feature", "description": "Redesigned map layers — Light and Dark are now both Google Maps, decluttered to show only city and neighborhood labels alongside your drive lines. Dark uses Google's full night palette with parks, buildings, transit, and light-grey highways; Satellite gains the same labels; a Settings toggle hides labels entirely; Light is the new default." },
-        { "type": "feature", "description": "New Support tab in Settings — save app logs as a text file to attach to bug reports. Logs survive crashes and include the previous session." },
-        { "type": "improvement", "description": "Drive data loads dramatically faster — large files that took a minute now open in seconds." },
-        { "type": "improvement", "description": "Drive locations are more accurate — your car's own reported address is used when available, and the GPS-based lookup is much more precise for everything else. Addresses may quietly update once after installing." },
-        { "type": "improvement", "description": "Drive durations are now frame-accurate — a drive that stops partway through its final minute no longer counts the whole minute, matching Sentry USB's totals (expect your lifetime duration to drop slightly)." },
-        { "type": "fix", "description": "The replay arrow now reliably faces the direction of travel — no more random swings while stopped — and scrubbing the timeline always points it the way the car was facing at that moment." },
-        { "type": "improvement", "description": "The selected drive now draws on top of the other drive lines on the map." },
-        { "type": "improvement", "description": "Tessie and Teslascope drive lines render smoothly instead of angular (display only — stats still use the raw recorded points), and the FSD Score now counts only dashcam-recorded drives so imported drives can't dilute it." },
-        { "type": "improvement", "description": "The Import Drives dialog is much more responsive — vehicles appear instantly when switching services, date fields open a calendar picker, and the preview explains exactly why any drives were skipped." },
-        { "type": "improvement", "description": "\"Check for Update\" clearly shows what it's doing, and the corner download button pulses yellow when an update is waiting." },
-        { "type": "improvement", "description": "Processing large clip libraries is faster, an interrupted run can no longer corrupt your drive data, and saving tags or importing no longer fails on very large files." },
-        { "type": "improvement", "description": "The app works fully offline (except live map tiles) — the map framework, fonts, and icons now ship with the app. Typography is unified on Noto Sans." },
-        { "type": "improvement", "description": "Scrolling and map panning stay smooth with histories of thousands of drives." }
+        {
+          "type": "fix",
+          "description": "Fixed drives failing to load in 1.2.0 (\"Identifier 'isEventFolderPath' has already been declared\")."
+        },
+        {
+          "type": "feature",
+          "description": "Teslascope import works end-to-end — connect with the API key from Account → Security, and your full drive history imports with route lines, verified against live data."
+        },
+        {
+          "type": "feature",
+          "description": "Linux support — releases now include an AppImage (with the same auto-update as Windows) and a .deb package."
+        },
+        {
+          "type": "feature",
+          "description": "Redesigned map layers — Light and Dark are now both Google Maps, decluttered to show only city and neighborhood labels alongside your drive lines. Dark uses Google's full night palette with parks, buildings, transit, and light-grey highways; Satellite gains the same labels; a Settings toggle hides labels entirely; Light is the new default."
+        },
+        {
+          "type": "feature",
+          "description": "New Support tab in Settings — save app logs as a text file to attach to bug reports. Logs survive crashes and include the previous session."
+        },
+        {
+          "type": "improvement",
+          "description": "Drive data loads dramatically faster — large files that took a minute now open in seconds."
+        },
+        {
+          "type": "improvement",
+          "description": "Drive locations are more accurate — your car's own reported address is used when available, and the GPS-based lookup is much more precise for everything else. Addresses may quietly update once after installing."
+        },
+        {
+          "type": "improvement",
+          "description": "Drive durations are now frame-accurate — a drive that stops partway through its final minute no longer counts the whole minute, matching Sentry USB's totals (expect your lifetime duration to drop slightly)."
+        },
+        {
+          "type": "fix",
+          "description": "The replay arrow now reliably faces the direction of travel — no more random swings while stopped — and scrubbing the timeline always points it the way the car was facing at that moment."
+        },
+        {
+          "type": "improvement",
+          "description": "The selected drive now draws on top of the other drive lines on the map."
+        },
+        {
+          "type": "improvement",
+          "description": "Tessie and Teslascope drive lines render smoothly instead of angular (display only — stats still use the raw recorded points), and the FSD Score now counts only dashcam-recorded drives so imported drives can't dilute it."
+        },
+        {
+          "type": "improvement",
+          "description": "The Import Drives dialog is much more responsive — vehicles appear instantly when switching services, date fields open a calendar picker, and the preview explains exactly why any drives were skipped."
+        },
+        {
+          "type": "improvement",
+          "description": "\"Check for Update\" clearly shows what it's doing, and the corner download button pulses yellow when an update is waiting."
+        },
+        {
+          "type": "improvement",
+          "description": "Processing large clip libraries is faster, an interrupted run can no longer corrupt your drive data, and saving tags or importing no longer fails on very large files."
+        },
+        {
+          "type": "improvement",
+          "description": "The app works fully offline (except live map tiles) — the map framework, fonts, and icons now ship with the app. Typography is unified on Noto Sans."
+        },
+        {
+          "type": "improvement",
+          "description": "Scrolling and map panning stay smooth with histories of thousands of drives."
+        }
       ]
     },
     {
@@ -163,13 +424,34 @@
       "date": "2026-06-10",
       "title": "Import Polish, Offline Mode & Accurate Durations",
       "changes": [
-        { "type": "fix", "description": "Import Drives — the Import button can no longer be tricked into starting an import the preview said would do nothing (re-clicking the active tab used to enable it), and the preview now explains why drives were skipped instead of just showing \"0 will be imported\"." },
-        { "type": "improvement", "description": "Drive durations are now frame-accurate — a drive that stops partway through its final minute no longer counts the whole minute, matching Sentry USB's totals (expect your lifetime duration to drop slightly)." },
-        { "type": "improvement", "description": "The app now works fully offline (except live map tiles) — the map framework, fonts, and icons ship with the app instead of loading from the internet at launch. Faster startup, no more blank map without a connection, and fewer third-party requests." },
-        { "type": "improvement", "description": "Unified typography — the interface now uses Noto Sans throughout, with Noto Sans Mono for numbers and stats." },
-        { "type": "fix", "description": "Dark map polish — highways are now light grey and stay visible at every zoom (they previously lost their color when zoomed in), and map labels are white for better readability." },
-        { "type": "improvement", "description": "Tessie and Teslascope drive lines render smoothly instead of angular — their sparse GPS breadcrumbs are visually rounded on the map (display only; distances and stats still use the raw recorded points)." },
-        { "type": "fix", "description": "The FSD Score now ignores Teslascope-imported drives, like it already did for Tessie — imported drives carry coarse or missing autopilot data and were diluting the score. Mileage and duration totals still include them." }
+        {
+          "type": "fix",
+          "description": "Import Drives — the Import button can no longer be tricked into starting an import the preview said would do nothing (re-clicking the active tab used to enable it), and the preview now explains why drives were skipped instead of just showing \"0 will be imported\"."
+        },
+        {
+          "type": "improvement",
+          "description": "Drive durations are now frame-accurate — a drive that stops partway through its final minute no longer counts the whole minute, matching Sentry USB's totals (expect your lifetime duration to drop slightly)."
+        },
+        {
+          "type": "improvement",
+          "description": "The app now works fully offline (except live map tiles) — the map framework, fonts, and icons ship with the app instead of loading from the internet at launch. Faster startup, no more blank map without a connection, and fewer third-party requests."
+        },
+        {
+          "type": "improvement",
+          "description": "Unified typography — the interface now uses Noto Sans throughout, with Noto Sans Mono for numbers and stats."
+        },
+        {
+          "type": "fix",
+          "description": "Dark map polish — highways are now light grey and stay visible at every zoom (they previously lost their color when zoomed in), and map labels are white for better readability."
+        },
+        {
+          "type": "improvement",
+          "description": "Tessie and Teslascope drive lines render smoothly instead of angular — their sparse GPS breadcrumbs are visually rounded on the map (display only; distances and stats still use the raw recorded points)."
+        },
+        {
+          "type": "fix",
+          "description": "The FSD Score now ignores Teslascope-imported drives, like it already did for Tessie — imported drives carry coarse or missing autopilot data and were diluting the score. Mileage and duration totals still include them."
+        }
       ]
     },
     {
@@ -177,9 +459,18 @@
       "date": "2026-06-10",
       "title": "Teslascope Import — For Real This Time",
       "changes": [
-        { "type": "fix", "description": "Teslascope drives now actually import — the app now reads Teslascope's real drive format (timestamps, coordinates, distance), verified against live data. Previously every drive was skipped as unreadable." },
-        { "type": "improvement", "description": "Logs now survive crashes — they're written to disk as they happen, and the log export includes the previous session, so whatever happened right before a crash is always recoverable." },
-        { "type": "improvement", "description": "The Dark map now distinguishes more detail — parks render dark green, buildings and built-up areas are distinct at street zooms, transit lines are visible, and highways are distinguished from local roads." }
+        {
+          "type": "fix",
+          "description": "Teslascope drives now actually import — the app now reads Teslascope's real drive format (timestamps, coordinates, distance), verified against live data. Previously every drive was skipped as unreadable."
+        },
+        {
+          "type": "improvement",
+          "description": "Logs now survive crashes — they're written to disk as they happen, and the log export includes the previous session, so whatever happened right before a crash is always recoverable."
+        },
+        {
+          "type": "improvement",
+          "description": "The Dark map now distinguishes more detail — parks render dark green, buildings and built-up areas are distinct at street zooms, transit lines are visible, and highways are distinguished from local roads."
+        }
       ]
     },
     {
@@ -187,7 +478,10 @@
       "date": "2026-06-10",
       "title": "Teslascope Import Fix",
       "changes": [
-        { "type": "fix", "description": "Teslascope import no longer fails with \"The limit may not be greater than 100\" — drives are now fetched 100 at a time through your full history." }
+        {
+          "type": "fix",
+          "description": "Teslascope import no longer fails with \"The limit may not be greater than 100\" — drives are now fetched 100 at a time through your full history."
+        }
       ]
     },
     {
@@ -195,20 +489,62 @@
       "date": "2026-06-10",
       "title": "Location Accuracy, Faster Loading & Linux Support",
       "changes": [
-        { "type": "fix", "description": "Fixed drives failing to load in 1.2.0 (\"Identifier 'isEventFolderPath' has already been declared\")." },
-        { "type": "feature", "description": "Linux support — releases now include an AppImage (with the same auto-update as Windows) and a .deb package." },
-        { "type": "feature", "description": "Redesigned map layers — Light and Dark are now both Google Maps (Dark in Google's night-mode colors), decluttered to show only city and neighborhood labels alongside your drive lines. Satellite gains the same labels. A toggle in Settings → Map UI hides labels entirely, and Light is the new default." },
-        { "type": "feature", "description": "New Support tab in Settings — save recent app errors and events as a text file to attach to bug reports." },
-        { "type": "improvement", "description": "Drive data loads dramatically faster — large files that took a minute now open in seconds." },
-        { "type": "improvement", "description": "Drive locations are more accurate — your car's own reported address is used when available, and the GPS-based lookup is much more precise for everything else. Drives in unmapped areas show the nearest city instead of raw coordinates. Addresses may quietly update once after installing." },
-        { "type": "fix", "description": "Connecting Teslascope now works with the API key from Account → Security — it was previously rejected with \"Unauthorized (HTTP 401)\". The \"Get an API token\" link also opens the correct page now." },
-        { "type": "fix", "description": "The replay arrow now reliably faces the direction of travel — no more random swings while stopped in parking lots or stale headings at low speed." },
-        { "type": "improvement", "description": "Scrubbing the replay timeline always points the arrow the way the car was facing at that moment." },
-        { "type": "improvement", "description": "The selected drive now draws on top of the other drive lines on the map, instead of disappearing under them where routes cross." },
-        { "type": "improvement", "description": "The Import Drives dialog is much more responsive — switching services shows your vehicles instantly, changing dates no longer fires a query per click, and date fields open a calendar picker." },
-        { "type": "improvement", "description": "\"Check for Update\" now clearly shows what it's doing — a visible checking state, then a clear answer: update found, you're up to date, or what went wrong. When an update is available, the download button in the corner pulses yellow." },
-        { "type": "improvement", "description": "Processing large clip libraries is faster, and an interrupted run can no longer corrupt your drive data." },
-        { "type": "fix", "description": "Saving tags and importing drives no longer fails on very large drive-data files." }
+        {
+          "type": "fix",
+          "description": "Fixed drives failing to load in 1.2.0 (\"Identifier 'isEventFolderPath' has already been declared\")."
+        },
+        {
+          "type": "feature",
+          "description": "Linux support — releases now include an AppImage (with the same auto-update as Windows) and a .deb package."
+        },
+        {
+          "type": "feature",
+          "description": "Redesigned map layers — Light and Dark are now both Google Maps (Dark in Google's night-mode colors), decluttered to show only city and neighborhood labels alongside your drive lines. Satellite gains the same labels. A toggle in Settings → Map UI hides labels entirely, and Light is the new default."
+        },
+        {
+          "type": "feature",
+          "description": "New Support tab in Settings — save recent app errors and events as a text file to attach to bug reports."
+        },
+        {
+          "type": "improvement",
+          "description": "Drive data loads dramatically faster — large files that took a minute now open in seconds."
+        },
+        {
+          "type": "improvement",
+          "description": "Drive locations are more accurate — your car's own reported address is used when available, and the GPS-based lookup is much more precise for everything else. Drives in unmapped areas show the nearest city instead of raw coordinates. Addresses may quietly update once after installing."
+        },
+        {
+          "type": "fix",
+          "description": "Connecting Teslascope now works with the API key from Account → Security — it was previously rejected with \"Unauthorized (HTTP 401)\". The \"Get an API token\" link also opens the correct page now."
+        },
+        {
+          "type": "fix",
+          "description": "The replay arrow now reliably faces the direction of travel — no more random swings while stopped in parking lots or stale headings at low speed."
+        },
+        {
+          "type": "improvement",
+          "description": "Scrubbing the replay timeline always points the arrow the way the car was facing at that moment."
+        },
+        {
+          "type": "improvement",
+          "description": "The selected drive now draws on top of the other drive lines on the map, instead of disappearing under them where routes cross."
+        },
+        {
+          "type": "improvement",
+          "description": "The Import Drives dialog is much more responsive — switching services shows your vehicles instantly, changing dates no longer fires a query per click, and date fields open a calendar picker."
+        },
+        {
+          "type": "improvement",
+          "description": "\"Check for Update\" now clearly shows what it's doing — a visible checking state, then a clear answer: update found, you're up to date, or what went wrong. When an update is available, the download button in the corner pulses yellow."
+        },
+        {
+          "type": "improvement",
+          "description": "Processing large clip libraries is faster, and an interrupted run can no longer corrupt your drive data."
+        },
+        {
+          "type": "fix",
+          "description": "Saving tags and importing drives no longer fails on very large drive-data files."
+        }
       ]
     },
     {
@@ -216,12 +552,26 @@
       "date": "2026-06-07",
       "title": "Settings Redesign & Multi-Service Drive Import",
       "changes": [
-        { "type": "feature", "description": "Teslascope import — connect your Teslascope account and import your drives directly, alongside Tessie. NOTE: Untested. Feedback requested." },
-        { "type": "improvement", "description": "Improved drive tag handling." },
-        { "type": "improvement", "description": "Unified UI design with the rest of the Sentry Six product line." },
-		{ "type": "improvement", "description": "More accurate mileage — drive distances are now computed on the WGS-84 ellipsoid instead of a spherical Earth model. Displayed distances may shift by up to ~0.3%; the new figures are the more accurate ones." },
-        { "type": "fix", "description": "Deleting a drive now removes it from the map immediately, instead of lingering until you switch to another drive." }
-        
+        {
+          "type": "feature",
+          "description": "Teslascope import — connect your Teslascope account and import your drives directly, alongside Tessie. NOTE: Untested. Feedback requested."
+        },
+        {
+          "type": "improvement",
+          "description": "Improved drive tag handling."
+        },
+        {
+          "type": "improvement",
+          "description": "Unified UI design with the rest of the Sentry Six product line."
+        },
+        {
+          "type": "improvement",
+          "description": "More accurate mileage — drive distances are now computed on the WGS-84 ellipsoid instead of a spherical Earth model. Displayed distances may shift by up to ~0.3%; the new figures are the more accurate ones."
+        },
+        {
+          "type": "fix",
+          "description": "Deleting a drive now removes it from the map immediately, instead of lingering until you switch to another drive."
+        }
       ]
     },
     {
@@ -229,8 +579,14 @@
       "date": "2026-05-18",
       "title": "Large File Support",
       "changes": [
-        { "type": "improvement", "description": "Sentry Drive can now open drive-data.json files in the hundreds-of-MB to ~1GB range without crashing. The file is read incrementally with a streaming JSON parser instead of being loaded into memory all at once, and the main process is given more heap headroom — files that previously triggered an out-of-memory crash on load should now open successfully." },
-        { "type": "improvement", "description": "The loading screen now shows a progress bar with MB read / total so large files don't look like the app is frozen." }
+        {
+          "type": "improvement",
+          "description": "Sentry Drive can now open drive-data.json files in the hundreds-of-MB to ~1GB range without crashing. The file is read incrementally with a streaming JSON parser instead of being loaded into memory all at once, and the main process is given more heap headroom — files that previously triggered an out-of-memory crash on load should now open successfully."
+        },
+        {
+          "type": "improvement",
+          "description": "The loading screen now shows a progress bar with MB read / total so large files don't look like the app is frozen."
+        }
       ]
     },
     {
@@ -238,7 +594,10 @@
       "date": "2026-05-18",
       "title": "Memory Leak Fix",
       "changes": [
-        { "type": "fix", "description": "Fixed a memory leak that caused the app to crash after viewing many drives in a single session — full drive GPS data is now released when switching to another drive or returning to the overview, keeping memory usage stable over long sessions." }
+        {
+          "type": "fix",
+          "description": "Fixed a memory leak that caused the app to crash after viewing many drives in a single session — full drive GPS data is now released when switching to another drive or returning to the overview, keeping memory usage stable over long sessions."
+        }
       ]
     },
     {
@@ -246,9 +605,18 @@
       "date": "2026-05-18",
       "title": "GPS Accuracy & UI Fixes",
       "changes": [
-        { "type": "improvement", "description": "GPS distance calculation now removes null-island points and applies group-level outlier filtering (matching Sentry USB Rusty) before computing drive distance — mileage figures are more accurate on drives with GPS noise or a slow satellite lock." },
-        { "type": "fix", "description": "The \"What's New\" modal no longer appears over the loading spinner on startup — it now waits until drive data has finished loading." },
-        { "type": "fix", "description": "Tessie-imported drive lines now appear grey like native drives when viewing a specific drive, instead of remaining purple." }
+        {
+          "type": "improvement",
+          "description": "GPS distance calculation now removes null-island points and applies group-level outlier filtering (matching Sentry USB Rusty) before computing drive distance — mileage figures are more accurate on drives with GPS noise or a slow satellite lock."
+        },
+        {
+          "type": "fix",
+          "description": "The \"What's New\" modal no longer appears over the loading spinner on startup — it now waits until drive data has finished loading."
+        },
+        {
+          "type": "fix",
+          "description": "Tessie-imported drive lines now appear grey like native drives when viewing a specific drive, instead of remaining purple."
+        }
       ]
     },
     {
@@ -256,16 +624,46 @@
       "date": "2026-05-17",
       "title": "Custom Markers, Tessie Import & Analytics Polish",
       "changes": [
-        { "type": "feature", "description": "Delete drives — remove any drive from your drive list directly from the app." },
-        { "type": "feature", "description": "Revert to stable — if you're on a beta build, you can roll back to the last stable release from Settings." },
-        { "type": "feature", "description": "Tessie API import — enter your Tessie access token, select your vehicle, set a date range, preview the import count, and confirm to pull drives directly from the Tessie API." },
-        { "type": "feature", "description": "Tessie CSV import — alternatively, import drives from a Tessie CSV export (drives + driving states files)." },
-        { "type": "feature", "description": "Choose your replay marker in Settings — pick between the classic Arrow or a Model 3 top-down view." },
-        { "type": "feature", "description": "Added ability to change map replay marker from arrow to car (only legacy Model 3 at the moment)." },
-        { "type": "improvement", "description": "FSD analytics donut chart center now shows a rating label (Great / Good / Okay / Bad) based on FSD usage, with the percentage shown below it." },
-        { "type": "improvement", "description": "Time with FSD is now shown in the drive analytics legend." },
-        { "type": "improvement", "description": "Aggregate analytics now include average disengagements and average accelerator overrides per drive." },
-        { "type": "fix", "description": "Scrubbing the timeline now snaps the direction arrow immediately instead of animating from its previous position." }
+        {
+          "type": "feature",
+          "description": "Delete drives — remove any drive from your drive list directly from the app."
+        },
+        {
+          "type": "feature",
+          "description": "Revert to stable — if you're on a beta build, you can roll back to the last stable release from Settings."
+        },
+        {
+          "type": "feature",
+          "description": "Tessie API import — enter your Tessie access token, select your vehicle, set a date range, preview the import count, and confirm to pull drives directly from the Tessie API."
+        },
+        {
+          "type": "feature",
+          "description": "Tessie CSV import — alternatively, import drives from a Tessie CSV export (drives + driving states files)."
+        },
+        {
+          "type": "feature",
+          "description": "Choose your replay marker in Settings — pick between the classic Arrow or a Model 3 top-down view."
+        },
+        {
+          "type": "feature",
+          "description": "Added ability to change map replay marker from arrow to car (only legacy Model 3 at the moment)."
+        },
+        {
+          "type": "improvement",
+          "description": "FSD analytics donut chart center now shows a rating label (Great / Good / Okay / Bad) based on FSD usage, with the percentage shown below it."
+        },
+        {
+          "type": "improvement",
+          "description": "Time with FSD is now shown in the drive analytics legend."
+        },
+        {
+          "type": "improvement",
+          "description": "Aggregate analytics now include average disengagements and average accelerator overrides per drive."
+        },
+        {
+          "type": "fix",
+          "description": "Scrubbing the timeline now snaps the direction arrow immediately instead of animating from its previous position."
+        }
       ]
     },
     {
@@ -273,13 +671,34 @@
       "date": "2026-04-25",
       "title": "Tessie Import & Analytics Polish",
       "changes": [
-        { "type": "feature", "description": "Import drives directly from the Tessie API — enter your access token, select your vehicle, pick a date range, preview how many drives will be imported, then confirm." },
-        { "type": "feature", "description": "Import drives from Tessie CSV exports (drives + driving states files) as an alternative to the API." },
-        { "type": "improvement", "description": "Tessie drives that overlap with real dashcam drives are automatically hidden to avoid duplicates." },
-        { "type": "improvement", "description": "FSD analytics donut chart center now shows a rating label (Great / Good / Okay / Bad) based on FSD usage, with the percentage shown below it." },
-        { "type": "improvement", "description": "Time with FSD is now shown in the drive analytics legend." },
-        { "type": "improvement", "description": "Aggregate analytics now show average disengagements and average accelerator overrides per drive." },
-        { "type": "fix", "description": "Scrubbing the timeline now snaps the direction arrow immediately instead of animating from its previous position." }
+        {
+          "type": "feature",
+          "description": "Import drives directly from the Tessie API — enter your access token, select your vehicle, pick a date range, preview how many drives will be imported, then confirm."
+        },
+        {
+          "type": "feature",
+          "description": "Import drives from Tessie CSV exports (drives + driving states files) as an alternative to the API."
+        },
+        {
+          "type": "improvement",
+          "description": "Tessie drives that overlap with real dashcam drives are automatically hidden to avoid duplicates."
+        },
+        {
+          "type": "improvement",
+          "description": "FSD analytics donut chart center now shows a rating label (Great / Good / Okay / Bad) based on FSD usage, with the percentage shown below it."
+        },
+        {
+          "type": "improvement",
+          "description": "Time with FSD is now shown in the drive analytics legend."
+        },
+        {
+          "type": "improvement",
+          "description": "Aggregate analytics now show average disengagements and average accelerator overrides per drive."
+        },
+        {
+          "type": "fix",
+          "description": "Scrubbing the timeline now snaps the direction arrow immediately instead of animating from its previous position."
+        }
       ]
     },
     {
@@ -287,16 +706,25 @@
       "date": "2026-04-25",
       "title": "Drive Removal & Revert to Stable",
       "changes": [
-        { "type": "feature", "description": "You can now delete drives from your drive list." },
-        { "type": "feature", "description": "Added option to revert to the last stable build from Settings when on a beta version." }
+        {
+          "type": "feature",
+          "description": "You can now delete drives from your drive list."
+        },
+        {
+          "type": "feature",
+          "description": "Added option to revert to the last stable build from Settings when on a beta version."
+        }
       ]
     },
-	{
+    {
       "version": "1.1.1",
       "date": "2026-04-23",
       "title": "Sentry USB Drive Data Fix",
       "changes": [
-        { "type": "fix", "description": "Fixed an issue where Sentry Drive did not properly read the drive-data.json from Sentry USB." }
+        {
+          "type": "fix",
+          "description": "Fixed an issue where Sentry Drive did not properly read the drive-data.json from Sentry USB."
+        }
       ]
     },
     {
@@ -304,24 +732,78 @@
       "date": "2026-04-23",
       "title": "Drive Analytics, Map Layers & Unit Support",
       "changes": [
-        { "type": "feature", "description": "FSD Analytics panel — click the stats panel to see a more detailed view of Full Self-Driving, Autopilot, TACC, and Manual miles, plus total disengagements and accelerator overrides." },
-        { "type": "feature", "description": "Color-coded FSD Score in the stats panel — red for low, green for high, with a smooth gradient between." },
-        { "type": "feature", "description": "Drive Timeline for browsing drives chronologically." },
-        { "type": "feature", "description": "Google Maps and Satellite base layers — switch from the layer control in the top-right of the map." },
-        { "type": "feature", "description": "Imperial / Metric unit toggle in Settings." },
-        { "type": "feature", "description": "Added toggle for showing FSD markers (disengagements and accelerator overrides) on drives." },
-        { "type": "improvement", "description": "Added stats for specific drives." },
-        { "type": "improvement", "description": "Added drive timeline with scrubbing." },
-        { "type": "improvement", "description": "Confirmation dialogs added to Check Drives and Revert Drives to avoid accidental triggers." },
-		{ "type": "fix", "description": "Processing runs on the app's bundled Node runtime — no separate Node.js install required." },
-        { "type": "fix", "description": "Process New Drives no longer fails silently on installed builds." },
-        { "type": "fix", "description": "Direction arrow no longer spins full circles when switching between drive and reverse." },
-        { "type": "fix", "description": "Clicking the map while viewing a specific drive no longer returns you to the overview." },
-        { "type": "fix", "description": "Dismissing the Changelog modal no longer closes the Settings modal behind it." },
-        { "type": "fix", "description": "Switching drives during playback no longer leaves the previous replay running, which could cause the new drive to continue playing through a pause." },
-        { "type": "fix", "description": "FSD, Autopilot, and Manual percentages are now rounded to whole numbers." },
-        { "type": "fix", "description": "Selecting a drive from the list no longer scrolls it behind the sticky date header." },
-        { "type": "fix", "description": "Tag edits inside the stats panel no longer collapse the FSD Analytics view." }
+        {
+          "type": "feature",
+          "description": "FSD Analytics panel — click the stats panel to see a more detailed view of Full Self-Driving, Autopilot, TACC, and Manual miles, plus total disengagements and accelerator overrides."
+        },
+        {
+          "type": "feature",
+          "description": "Color-coded FSD Score in the stats panel — red for low, green for high, with a smooth gradient between."
+        },
+        {
+          "type": "feature",
+          "description": "Drive Timeline for browsing drives chronologically."
+        },
+        {
+          "type": "feature",
+          "description": "Google Maps and Satellite base layers — switch from the layer control in the top-right of the map."
+        },
+        {
+          "type": "feature",
+          "description": "Imperial / Metric unit toggle in Settings."
+        },
+        {
+          "type": "feature",
+          "description": "Added toggle for showing FSD markers (disengagements and accelerator overrides) on drives."
+        },
+        {
+          "type": "improvement",
+          "description": "Added stats for specific drives."
+        },
+        {
+          "type": "improvement",
+          "description": "Added drive timeline with scrubbing."
+        },
+        {
+          "type": "improvement",
+          "description": "Confirmation dialogs added to Check Drives and Revert Drives to avoid accidental triggers."
+        },
+        {
+          "type": "fix",
+          "description": "Processing runs on the app's bundled Node runtime — no separate Node.js install required."
+        },
+        {
+          "type": "fix",
+          "description": "Process New Drives no longer fails silently on installed builds."
+        },
+        {
+          "type": "fix",
+          "description": "Direction arrow no longer spins full circles when switching between drive and reverse."
+        },
+        {
+          "type": "fix",
+          "description": "Clicking the map while viewing a specific drive no longer returns you to the overview."
+        },
+        {
+          "type": "fix",
+          "description": "Dismissing the Changelog modal no longer closes the Settings modal behind it."
+        },
+        {
+          "type": "fix",
+          "description": "Switching drives during playback no longer leaves the previous replay running, which could cause the new drive to continue playing through a pause."
+        },
+        {
+          "type": "fix",
+          "description": "FSD, Autopilot, and Manual percentages are now rounded to whole numbers."
+        },
+        {
+          "type": "fix",
+          "description": "Selecting a drive from the list no longer scrolls it behind the sticky date header."
+        },
+        {
+          "type": "fix",
+          "description": "Tag edits inside the stats panel no longer collapse the FSD Analytics view."
+        }
       ]
     },
     {
@@ -329,10 +811,22 @@
       "date": "2026-04-22",
       "title": "Update Modal Preview and Confirmation Modals",
       "changes": [
-        { "type": "improvement", "description": "Update Available modal now previews the incoming version's changelog entry." },
-        { "type": "improvement", "description": "ALPHA status appended to Check Drives confirmation." },
-        { "type": "improvement", "description": "Replay play/pause button restyled as a rounded square to match the rest of the UI." },
-        { "type": "fix", "description": "Switching drives during playback no longer leaves the previous replay interval running, which could cause the new drive to continue playing through a pause." }
+        {
+          "type": "improvement",
+          "description": "Update Available modal now previews the incoming version's changelog entry."
+        },
+        {
+          "type": "improvement",
+          "description": "ALPHA status appended to Check Drives confirmation."
+        },
+        {
+          "type": "improvement",
+          "description": "Replay play/pause button restyled as a rounded square to match the rest of the UI."
+        },
+        {
+          "type": "fix",
+          "description": "Switching drives during playback no longer leaves the previous replay interval running, which could cause the new drive to continue playing through a pause."
+        }
       ]
     },
     {
@@ -340,19 +834,58 @@
       "date": "2026-04-22",
       "title": "Drive Stats Panel & FSD Analytics",
       "changes": [
-        { "type": "feature", "description": "Color-coded FSD Score in the stats panel — red for low, green for high, with a smooth gradient between." },
-        { "type": "feature", "description": "Click the stats panel to expand an FSD Analytics view — donut chart breaking down Full Self-Driving, Autopilot, TACC, and Manual miles, plus total disengagements and accelerator overrides." },
-        { "type": "improvement", "description": "Selecting a specific drive swaps the aggregate stats panel for that drive's own stats and breakdown; back to overview restores the aggregate view." },
-        { "type": "improvement", "description": "Drive date/time header and tags moved into the stats panel — sidebar is cleaner, editing stays in place as you switch drives." },
-        { "type": "improvement", "description": "Timeline is now visually merged with the bottom edge of the stats panel as a single dock at the bottom of the map." },
-        { "type": "improvement", "description": "Current-time label floats directly above the timeline thumb and tracks with it as you scrub or play." },
-        { "type": "improvement", "description": "Stats panel cleanup — removed the Clips count, renamed “Miles” to “Miles Driven”." },
-        { "type": "improvement", "description": "Confirmation dialog icons are now filled rounded squares instead of outlined circles, matching the rest of the UI." },
-        { "type": "improvement", "description": "Settings → Map → new toggle for showing FSD markers (disengagements and accelerator overrides) on drives." },
-        { "type": "improvement", "description": "Renamed “Accel Overrides” to “Accelerator Overrides” in the stats panel." },
-        { "type": "fix", "description": "FSD, Autopilot, and Manual percentages are rounded to whole numbers." },
-        { "type": "fix", "description": "Selecting a drive from the list no longer scrolls it behind the sticky date header." },
-        { "type": "fix", "description": "Tag edits inside the stats panel no longer toggle the expanded view." }
+        {
+          "type": "feature",
+          "description": "Color-coded FSD Score in the stats panel — red for low, green for high, with a smooth gradient between."
+        },
+        {
+          "type": "feature",
+          "description": "Click the stats panel to expand an FSD Analytics view — donut chart breaking down Full Self-Driving, Autopilot, TACC, and Manual miles, plus total disengagements and accelerator overrides."
+        },
+        {
+          "type": "improvement",
+          "description": "Selecting a specific drive swaps the aggregate stats panel for that drive's own stats and breakdown; back to overview restores the aggregate view."
+        },
+        {
+          "type": "improvement",
+          "description": "Drive date/time header and tags moved into the stats panel — sidebar is cleaner, editing stays in place as you switch drives."
+        },
+        {
+          "type": "improvement",
+          "description": "Timeline is now visually merged with the bottom edge of the stats panel as a single dock at the bottom of the map."
+        },
+        {
+          "type": "improvement",
+          "description": "Current-time label floats directly above the timeline thumb and tracks with it as you scrub or play."
+        },
+        {
+          "type": "improvement",
+          "description": "Stats panel cleanup — removed the Clips count, renamed “Miles” to “Miles Driven”."
+        },
+        {
+          "type": "improvement",
+          "description": "Confirmation dialog icons are now filled rounded squares instead of outlined circles, matching the rest of the UI."
+        },
+        {
+          "type": "improvement",
+          "description": "Settings → Map → new toggle for showing FSD markers (disengagements and accelerator overrides) on drives."
+        },
+        {
+          "type": "improvement",
+          "description": "Renamed “Accel Overrides” to “Accelerator Overrides” in the stats panel."
+        },
+        {
+          "type": "fix",
+          "description": "FSD, Autopilot, and Manual percentages are rounded to whole numbers."
+        },
+        {
+          "type": "fix",
+          "description": "Selecting a drive from the list no longer scrolls it behind the sticky date header."
+        },
+        {
+          "type": "fix",
+          "description": "Tag edits inside the stats panel no longer toggle the expanded view."
+        }
       ]
     },
     {
@@ -360,17 +893,50 @@
       "date": "2026-04-22",
       "title": "Map Layers, Units, and Polish",
       "changes": [
-        { "type": "feature", "description": "Added Google Maps and Satellite base layers — switch from the new layer control in the top-right of the map." },
-        { "type": "feature", "description": "Imperial / Metric unit toggle in Settings." },
-        { "type": "improvement", "description": "Window size and maximized state are remembered across launches." },
-        { "type": "improvement", "description": "Relocated drive timeline to above the overall drive stats." },
-        { "type": "improvement", "description": "Added confirmation checks to Check Drives and Revert Drives buttons to avoid accidental triggers." },
-        { "type": "improvement", "description": "Settings restyled — toggle pills, compact Imperial/Metric switch." },
-        { "type": "improvement", "description": "Overview drive lines are now smoothed out." },
-        { "type": "fix", "description": "Fixed bug related to Play/Pause button not working." },
-        { "type": "fix", "description": "Arrow no longer spins full circles at certain points or when switching between drive and reverse." },
-        { "type": "fix", "description": "Clicking on the map while viewing a specific drive no longer kicks you back to the overview." },
-        { "type": "fix", "description": "Dismissing the Change Log modal no longer also closes the Settings modal behind it." }
+        {
+          "type": "feature",
+          "description": "Added Google Maps and Satellite base layers — switch from the new layer control in the top-right of the map."
+        },
+        {
+          "type": "feature",
+          "description": "Imperial / Metric unit toggle in Settings."
+        },
+        {
+          "type": "improvement",
+          "description": "Window size and maximized state are remembered across launches."
+        },
+        {
+          "type": "improvement",
+          "description": "Relocated drive timeline to above the overall drive stats."
+        },
+        {
+          "type": "improvement",
+          "description": "Added confirmation checks to Check Drives and Revert Drives buttons to avoid accidental triggers."
+        },
+        {
+          "type": "improvement",
+          "description": "Settings restyled — toggle pills, compact Imperial/Metric switch."
+        },
+        {
+          "type": "improvement",
+          "description": "Overview drive lines are now smoothed out."
+        },
+        {
+          "type": "fix",
+          "description": "Fixed bug related to Play/Pause button not working."
+        },
+        {
+          "type": "fix",
+          "description": "Arrow no longer spins full circles at certain points or when switching between drive and reverse."
+        },
+        {
+          "type": "fix",
+          "description": "Clicking on the map while viewing a specific drive no longer kicks you back to the overview."
+        },
+        {
+          "type": "fix",
+          "description": "Dismissing the Change Log modal no longer also closes the Settings modal behind it."
+        }
       ]
     },
     {
@@ -378,8 +944,14 @@
       "date": "2026-04-22",
       "title": "Processing Fix",
       "changes": [
-        { "type": "fix", "description": "Process New Drives no longer fails silently on installed builds." },
-        { "type": "improvement", "description": "Processing runs on the app’s bundled Node runtime — no separate Node.js install required." }
+        {
+          "type": "fix",
+          "description": "Process New Drives no longer fails silently on installed builds."
+        },
+        {
+          "type": "improvement",
+          "description": "Processing runs on the app’s bundled Node runtime — no separate Node.js install required."
+        }
       ]
     },
     {
@@ -387,9 +959,18 @@
       "date": "2026-04-22",
       "title": "Drive Timeline & Beta Channel",
       "changes": [
-        { "type": "feature", "description": "Drive Timeline view for browsing drives chronologically." },
-        { "type": "feature", "description": "Beta update channel — enroll in Settings to receive pre-release builds." },
-        { "type": "improvement", "description": "Processing pipeline split into separate, reusable functions." }
+        {
+          "type": "feature",
+          "description": "Drive Timeline view for browsing drives chronologically."
+        },
+        {
+          "type": "feature",
+          "description": "Beta update channel — enroll in Settings to receive pre-release builds."
+        },
+        {
+          "type": "improvement",
+          "description": "Processing pipeline split into separate, reusable functions."
+        }
       ]
     },
     {
@@ -397,10 +978,22 @@
       "date": "2026-04-17",
       "title": "Initial Release",
       "changes": [
-        { "type": "feature", "description": "Process Tesla dashcam clips into drive-data.json." },
-        { "type": "feature", "description": "View drives on an interactive map with route overlays." },
-        { "type": "feature", "description": "GPS repair for gaps in dashcam logs using OSRM routing." },
-        { "type": "feature", "description": "Drive tagging for organization and filtering." }
+        {
+          "type": "feature",
+          "description": "Process Tesla dashcam clips into drive-data.json."
+        },
+        {
+          "type": "feature",
+          "description": "View drives on an interactive map with route overlays."
+        },
+        {
+          "type": "feature",
+          "description": "GPS repair for gaps in dashcam logs using OSRM routing."
+        },
+        {
+          "type": "feature",
+          "description": "Drive tagging for organization and filtering."
+        }
       ]
     }
   ]

@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setAllowPrerelease: (allow) => ipcRenderer.invoke('set-allow-prerelease', allow),
   revertToStable: () => ipcRenderer.invoke('revert-to-stable'),
   removeDrive: (args) => ipcRenderer.invoke('remove-drive', args),
+  removeDrives: (args) => ipcRenderer.invoke('remove-drives', args),
   checkForUpdate: () => ipcRenderer.invoke('check-for-update'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
   installUpdate: () => ipcRenderer.invoke('install-update'),

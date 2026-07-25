@@ -294,6 +294,34 @@ ipcMain.handle('remove-drive', (_e, { filePath, driveStartTime }) => withDriveDa
   }
 }));
 
+// Bulk removal for the drive list's multi-select: same semantics as
+// remove-drive, but one read → one filter pass → one atomic write for the
+// whole batch (a rewrite per drive would grind on large libraries).
+ipcMain.handle('remove-drives', (_e, { filePath, driveStartTimes }) => withDriveDataLock(async () => {
+  try {
+    const wanted = new Set(driveStartTimes ?? []);
+    if (wanted.size === 0) return { success: false, error: 'No drives given' };
+    const data = await readDriveData(filePath, { wantProcessedFiles: true });
+    const { groupIntoDrives } = await import('../processing/grouper.js');
+    const { drives } = groupIntoDrives(data.routes ?? []);
+    const targets = drives.filter((d) => wanted.has(d.startTime));
+    if (targets.length === 0) return { success: false, error: 'Drives not found' };
+
+    const removeSet = new Set(targets.flatMap((t) => t.routeFiles.map((f) => f.replace(/\\/g, '/'))));
+    data.routes = (data.routes ?? []).filter((r) => !removeSet.has(r.file.replace(/\\/g, '/')));
+    data.processedFiles = (data.processedFiles ?? []).filter((f) => !removeSet.has(f.replace(/\\/g, '/')));
+    if (data.driveTags) for (const t of targets) delete data.driveTags[t.startTime];
+
+    data.routes = await routesToWireFormat(data.routes);
+    await writeDriveDataJSON(filePath, data);
+    logger.info('main', `removed ${targets.length} drive(s) (${removeSet.size} clip(s)) via multi-select`);
+    return { success: true, removed: targets.length };
+  } catch (err) {
+    logger.error('main', 'remove drives failed:', err?.message ?? err);
+    return { success: false, error: err.message };
+  }
+}));
+
 ipcMain.handle('revert-to-stable', () => {
   autoUpdater.allowPrerelease = false;
   autoUpdater.allowDowngrade = true;
@@ -423,6 +451,10 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
     // context bridge (the main cause of the V8 heap OOM on large files).
     driveDetailCache = new Map();
     for (const d of drives) {
+      // Bridge routes are the synthetic `-front-bridge.mp4` entries Check
+      // Drives writes into GPS gaps — flag drives containing one so the UI
+      // can show which drives were bridged.
+      d.bridged = (d.routeFiles ?? []).some((f) => f.includes('-front-bridge.mp4'));
       driveDetailCache.set(d.id, {
         points: d.points,
         fsdStates: d.fsdStates,

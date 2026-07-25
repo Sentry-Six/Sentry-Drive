@@ -113,6 +113,13 @@
 
         <div id="drives-list"></div>
 
+        <!-- Floating action bar for multi-selected drives (Ctrl/Shift+click) -->
+        <div id="multi-select-bar" class="hidden">
+          <span id="multi-select-count">0 drives selected</span>
+          <button id="btn-multi-remove" class="btn-danger" type="button"><span class="material-icons">delete_sweep</span>Remove</button>
+          <button id="btn-multi-clear" type="button" title="Clear selection"><span class="material-icons">close</span></button>
+        </div>
+
       </div>
 
       <!-- ── Panel Footer (always visible) ──────────────────────────── -->
@@ -149,6 +156,7 @@
         </div>
         <div class="settings-tabs" role="tablist">
           <button class="settings-tab-btn active" data-stab="general" type="button" role="tab">General</button>
+          <button class="settings-tab-btn" data-stab="privacy" type="button" role="tab">Privacy</button>
           <button class="settings-tab-btn" data-stab="mapui" type="button" role="tab">Map UI</button>
           <button class="settings-tab-btn" data-stab="integrations" type="button" role="tab">Integrations</button>
           <button class="settings-tab-btn" data-stab="support" type="button" role="tab">Support</button>
@@ -198,6 +206,19 @@
               </div>
             </div>
           </div>
+          <div class="settings-pane" id="stab-privacy">
+            <div class="settings-section">
+              <div class="settings-section-header">
+                <span class="settings-section-icon halo-accent"><span class="material-icons">shield</span></span>
+                <span class="settings-section-title">Privacy Zones</span>
+              </div>
+              <div class="settings-section-body">
+                <div class="privacy-zones-hint">Draw a circle around Home, Work, or any custom spot, then cull the drives that start or end inside it. Zones are stored only on this device — never in your drive data file.</div>
+                <div id="privacy-zones-list"></div>
+                <button id="btn-add-zone" class="btn-add-zone" type="button"><span class="material-icons">add_location_alt</span>Add custom location</button>
+              </div>
+            </div>
+          </div>
           <div class="settings-pane" id="stab-mapui">
             <div class="settings-section">
               <div class="settings-section-header">
@@ -212,6 +233,10 @@
                 <label class="settings-checkbox-row" title="Disengagements and accelerator overrides">
                   <span class="settings-checkbox-label">Show FSD markers</span>
                   <input type="checkbox" id="chk-show-fsd-markers" class="settings-checkbox" />
+                </label>
+                <label class="settings-checkbox-row" title="Home, Work, and custom privacy zone pins">
+                  <span class="settings-checkbox-label">Show zone markers</span>
+                  <input type="checkbox" id="chk-show-zone-markers" class="settings-checkbox" />
                 </label>
                 <label class="settings-checkbox-row" title="City and neighborhood names on the map">
                   <span class="settings-checkbox-label">Show city labels</span>
@@ -405,6 +430,19 @@
       </div>
     </div>
 
+    <!-- ── Remove Selected Drives Confirm Modal (multi-select) ─────────── -->
+    <div id="remove-drives-overlay" class="hidden">
+      <div class="reprocess-modal">
+        <div class="reprocess-modal-icon halo-red"><span class="material-icons">delete_sweep</span></div>
+        <div class="reprocess-modal-title">Remove Selected Drives?</div>
+        <div id="remove-drives-modal-msg" class="reprocess-modal-msg"></div>
+        <div class="reprocess-modal-actions">
+          <button id="btn-remove-drives-confirm" class="btn-danger btn-update-full">Remove Drives</button>
+          <button id="btn-remove-drives-cancel" class="update-skip-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Tessie Import Modal ─────────────────────────────────────── -->
     <div id="tessie-overlay" class="hidden">
       <div id="tessie-modal">
@@ -580,6 +618,13 @@
     <!-- ── Map Panel ────────────────────────────────────────────────── -->
     <div id="map-container">
       <div id="map"></div>
+      <div id="map-pick-hint" class="hidden">
+        <span id="map-pick-hint-text"></span>
+        <span id="map-pick-actions" class="hidden">
+          <button id="btn-zone-save" type="button">Save zone</button>
+          <button id="btn-zone-cancel" type="button">Cancel</button>
+        </span>
+      </div>
       <div id="loading-overlay" class="hidden">
         <div class="loading-content">
           <div class="loading-spinner"></div>
@@ -632,6 +677,10 @@
   </div>
 
   <!-- ── Car Color Picker Popup ────────────────────────────────────────── -->
+  <div id="zone-icon-popup" class="hidden">
+    <div class="zone-icon-grid"></div>
+  </div>
+
   <div id="car-color-popup" class="hidden">
     <div class="car-color-popup-header">
       <span class="car-color-popup-title">Car Color</span>

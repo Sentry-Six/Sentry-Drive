@@ -27,7 +27,12 @@ const { chain } = require('stream-chain');
 // destructure the factory/class. The root default is parserStream (a Duplex
 // factory), not the chain-stage parser — don't use it here.
 const { parser } = require('stream-json/parser.js');
-const { Assembler } = require('stream-json/assembler.js');
+// The Assembler export shape changed across stream-json releases: newer
+// builds export the class as the module itself (with an `assembler` factory
+// attached), older ones as a named export. Accept both so a dependency bump
+// can't silently break the streaming fallback again.
+const AssemblerModule = require('stream-json/assembler.js');
+const Assembler = AssemblerModule.Assembler ?? AssemblerModule;
 
 // Safely below V8's ~512 MiB max-string-length, with margin for multi-byte
 // UTF-8 (byte size >= char count, so a 480 MB file is always parseable).

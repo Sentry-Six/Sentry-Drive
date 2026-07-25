@@ -376,7 +376,8 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
    disabled stays the muted faded grey. Confirm-modal danger buttons and the
    processing Stop button are untouched. */
 #btn-revert-gps:not(:disabled):not(:hover),
-#btn-remove-tessie:not(:disabled):not(:hover) { color: var(--blue-light); }
+#btn-remove-tessie:not(:disabled):not(:hover),
+#btn-multi-remove:not(:hover) { color: var(--blue-light); }
 
 .btn-icon {
   padding: 7px 10px;
@@ -605,6 +606,61 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   background: linear-gradient(150deg, rgba(52, 211, 153, 0.18), rgba(52, 211, 153, 0.06) 60%, rgba(52, 211, 153, 0.1));
 }
 
+/* ── Drive multi-select (Ctrl/Shift+click) ─────────────────────────────── */
+/* Distinct from .selected (the single open drive): a solid accent ring
+   instead of the tinted wash, so both states can coexist readably. */
+.drive-item.multi-selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: rgba(52, 211, 153, 0.07);
+}
+
+#tab-drives { position: relative; }
+
+#multi-select-bar {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 12px;
+  border-radius: 12px;
+  background: var(--map-glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+}
+#multi-select-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+#multi-select-bar .btn-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 9px;
+}
+#multi-select-bar .btn-danger .material-icons { font-size: 15px; }
+#btn-multi-clear {
+  display: inline-flex;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px;
+  line-height: 1;
+}
+#btn-multi-clear:hover { color: var(--text); }
+#btn-multi-clear .material-icons { font-size: 16px; }
+
 /* Horizontal journey — times (start ─┄─ end) across the top, then the
    Departed/Arrived labels, then the location names, each left ↔ right. */
 .drive-journey { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -692,6 +748,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .drive-chip--green { background: rgba(16, 185, 129, 0.15); color: #34d399; border-color: rgba(16, 185, 129, 0.22); }
 .drive-chip--blue  { background: rgba(52, 211, 153, 0.15); color: var(--blue-light); border-color: rgba(52, 211, 153, 0.22); }
 .drive-chip--slate { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); border-color: rgba(255, 255, 255, 0.1); }
+.drive-chip--bridged { background: rgba(251, 191, 36, 0.12); color: var(--warn); border-color: rgba(251, 191, 36, 0.25); }
 
 .drive-badge {
   display: inline-block;
@@ -1572,7 +1629,9 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 
 #settings-modal {
-  width: 380px;
+  /* Wide enough for the five tab labels (General/Privacy/Map UI/Integrations/
+     Support) to sit comfortably on one row. */
+  width: 500px;
   max-height: 86vh;
   /* Match the FSD Stats panel's glass surface: translucent dark glass + sheen
      with a white translucent edge (the backdrop blur is on ::before). */
@@ -1628,7 +1687,8 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 
 .settings-tab-btn {
   flex: 1;
-  padding: 7px 12px;
+  padding: 7px 10px;
+  white-space: nowrap;
   background: transparent;
   border: none;
   border-radius: 9px;
@@ -1972,6 +2032,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 #check-drives-overlay,
 #revert-overlay,
 #remove-drive-overlay,
+#remove-drives-overlay,
 #tessie-overlay,
 #import-json-confirm-overlay,
 #remove-tessie-overlay {
@@ -2263,6 +2324,221 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   flex-shrink: 0;
 }
 .car-color-swatch:hover { border-color: var(--text-muted); }
+
+/* ── Privacy zones (Settings → Privacy) ─────────────────────────────────── */
+.privacy-zones-hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.zone-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+}
+.zone-row + .zone-row { margin-top: 8px; }
+
+.zone-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.zone-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  cursor: pointer;
+}
+.zone-icon-btn:hover { border-color: var(--glass-border); background: rgba(255, 255, 255, 0.06); }
+.zone-icon-btn .material-icons { font-size: 17px; }
+
+/* Icon picker popover (shared, anchored to the clicked zone row icon).
+   Dark-tinted glass + the ::before backdrop blur (popup-safe glass group) —
+   plain --card-bg let the settings text underneath bleed through. */
+#zone-icon-popup {
+  position: fixed;
+  z-index: 9600;
+  padding: 8px;
+  background: var(--map-glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  box-shadow: var(--modal-shadow);
+}
+.zone-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 34px);
+  gap: 4px;
+}
+.zone-icon-choice {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.zone-icon-choice:hover { color: var(--text); background: rgba(255, 255, 255, 0.08); }
+.zone-icon-choice.active { color: var(--accent); border-color: var(--accent); background: rgba(52, 211, 153, 0.12); }
+.zone-icon-choice .material-icons { font-size: 18px; }
+.zone-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.zone-name-input {
+  flex: 0 1 130px;
+  min-width: 0;
+  padding: 3px 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.zone-coords {
+  margin-left: auto;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.zone-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.zone-radius-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.zone-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.zone-btn:hover:not(:disabled) { color: var(--text); border-color: var(--text-muted); }
+.zone-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.zone-btn.zone-cull:hover:not(:disabled) { color: var(--danger); border-color: rgba(248, 113, 113, 0.45); }
+.zone-btn.zone-remove {
+  margin-left: auto;
+  padding: 4px 6px;
+  display: inline-flex;
+  border: none;
+}
+.zone-btn.zone-remove .material-icons { font-size: 15px; }
+.zone-btn.zone-remove:hover { color: var(--danger); }
+
+.btn-add-zone {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.btn-add-zone:hover { color: var(--accent); border-color: var(--accent); }
+.btn-add-zone .material-icons { font-size: 16px; }
+
+/* Zone center markers — amber disc with the zone's icon. pointer-events off
+   so the preview marker gliding under the cursor never swallows the map's
+   mousemove/mousedown during placement. */
+.zone-marker {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.zone-marker .material-icons {
+  font-size: 15px;
+  color: #fff;
+}
+/* During the confirm/edit stage the pin becomes draggable. */
+.zone-marker--live {
+  pointer-events: auto;
+  cursor: grab;
+}
+.zone-marker--live:active { cursor: grabbing; }
+
+/* Floating hint bar while placing a zone center (text + Save/Cancel) */
+#map-pick-hint {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fbbf24;
+  background: var(--map-glass-bg);
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  border-radius: 10px;
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+  pointer-events: none;
+}
+#map-pick-hint.confirm { pointer-events: auto; }
+#map-pick-actions { display: inline-flex; gap: 6px; }
+#map-pick-actions button {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 7px;
+  cursor: pointer;
+}
+#btn-zone-save {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #06281c;
+}
+#btn-zone-save:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+#btn-zone-cancel {
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  color: var(--text-muted);
+}
+#btn-zone-cancel:hover { color: var(--text); border-color: var(--text-muted); }
 
 /* Drive Line Colors group in Settings → Map UI → Customization */
 .settings-subhead {
@@ -2609,6 +2885,51 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   50%      { opacity: 0.55; box-shadow: 0 0 6px 2px rgba(250, 204, 21, 0.25); }
 }
 
+/* Downloading: the arrow travels down and fades, so the button reads as
+   active work rather than a static icon (the % stays in the tooltip). */
+.footer-update-btn.update-downloading {
+  border-color: var(--accent);
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--accent);
+  opacity: 1; /* override the :disabled dimming — this state is live */
+  cursor: progress;
+}
+.footer-update-btn.update-downloading .material-icons {
+  animation: update-download-bob 1.15s ease-in-out infinite;
+}
+@keyframes update-download-bob {
+  0%   { transform: translateY(-5px); opacity: 0.15; }
+  45%  { transform: translateY(2px);  opacity: 1; }
+  70%  { transform: translateY(2px);  opacity: 1; }
+  100% { transform: translateY(-5px); opacity: 0.15; }
+}
+
+/* Ready to install: orange, flashing, until the user restarts. */
+.footer-update-btn.update-ready {
+  border-color: #fb923c;
+  background: rgba(251, 146, 60, 0.14);
+  color: #fb923c;
+  animation: update-ready-flash 1.1s ease-in-out infinite;
+}
+.footer-update-btn.update-ready:hover {
+  background: rgba(251, 146, 60, 0.28);
+  animation-play-state: paused;
+  opacity: 1;
+}
+@keyframes update-ready-flash {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(251, 146, 60, 0.5); }
+  50%      { opacity: 0.55; box-shadow: 0 0 7px 2px rgba(251, 146, 60, 0.3); }
+}
+
+/* Respect reduced-motion: keep the colour cues, drop the animation. */
+@media (prefers-reduced-motion: reduce) {
+  .footer-update-btn.update-attention,
+  .footer-update-btn.update-ready,
+  .footer-update-btn.update-downloading .material-icons {
+    animation: none;
+  }
+}
+
 /* ── Loading Overlay ───────────────────────────────────────────────────── */
 #loading-overlay {
   position: absolute;
@@ -2883,7 +3204,8 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .reprocess-modal,
 #update-modal,
 #changelog-modal,
-#car-color-popup {
+#car-color-popup,
+#zone-icon-popup {
   isolation: isolate;
 }
 #settings-overlay::before,
@@ -2894,7 +3216,8 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .reprocess-modal::before,
 #update-modal::before,
 #changelog-modal::before,
-#car-color-popup::before {
+#car-color-popup::before,
+#zone-icon-popup::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -2916,7 +3239,8 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .reprocess-modal::before,
 #update-modal::before,
 #changelog-modal::before,
-#car-color-popup::before {
+#car-color-popup::before,
+#zone-icon-popup::before {
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
 }
