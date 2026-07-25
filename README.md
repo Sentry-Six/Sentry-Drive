@@ -1,4 +1,18 @@
-# Sentry Drive
+<h1 align="center">Sentry Drive</h1>
+
+<p align="center">
+  <strong>Your drives, visualized.</strong><br>
+  Drive routes. FSD tracking. All local. Privacy-first.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Sentry-Six/Sentry-Drive/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Sentry-Six/Sentry-Drive"></a>
+  <a href="https://discord.gg/9QZEzVwdnt"><img alt="Discord" src="https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-MIT-yellow.svg"></a>
+</p>
+
+---
+
 Sentry Drive by Sentry Six is a desktop app for visualizing and analyzing your drive history. Meant to be used in conjunction with Sentry USB or TeslaUSB, you can track your self-driving stats, distance driven, drives made, etc. all on your computer! Simply point it to your TeslaCam folder and start processing. See every drive - where you used Full Self Driving, every disengagement, duration, average and max speed, and more!
 
 Sentry Drive is one of four free tools for Tesla owners from the [Sentry Six](https://sentry-six.com) project, alongside [Sentry Studio](https://github.com/Sentry-Six/Sentry-Six) (desktop TeslaCam viewer), [Sentry USB](https://github.com/Sentry-Six/Sentry-USB-Rusty) (Raspberry Pi smart dashcam drive), and [Sentry Connect](https://sentry-six.com/sentry-connect/) (iPhone companion app for Sentry USB). Not affiliated with Tesla, Inc. Unrelated to the Sentry (sentry.io) error-monitoring service.
@@ -25,18 +39,19 @@ Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam file
 <br> **Note:** _Imported drives do not affect FSD score._
 
 ### Sentry USB-Compatible
-Running Sentry USB? You can import your drive data! Simply locate your drives-data.json and load it! If it's in your TeslaCam folder, it'll automatically locate and load it for you.
+Running Sentry USB? You can import your drive data! Simply locate your drives-data.json and load it! If it's in your TeslaCam folder, it'll automatically locate and load it for you. Any telemetry included in your drive-data.json is also loaded, such as location and state of charge!
 
 ## Platforms
 This application is available for Windows, macOS, and Linux (AppImage and .deb). [Check the releases tab](https://github.com/Sentry-Six/Sentry-Drive/releases) for the latest version.
 
 Because this program is unsigned, you will need to follow this step after you run the .dmg for the first time:
-<br> System Settings ? Privacy & Security ? Open Anyway
+<br> System Settings -> Privacy & Security -> Open Anyway
 
 ## Privacy & Data
 Sentry Drive is local-first: your TeslaCam footage, SEI telemetry, GPS data, tags, and analytics live only on your computer and are never uploaded to us. The following features do communicate with third parties, and only as described:
 
 - **Map tiles** — Drives are drawn on a map using tiles from third-party providers (OpenStreetMap/CARTO and Google Maps, depending on the map style you pick). Because the tiles requested depend on where your drives took place, your approximate drive locations are shared with the selected tile provider as part of normal map rendering.
+- **Reverse Geocoding** — Your departure and arrival locations are determined using GPS points from your drive data OR from your Tesla's own geocoding. Geocoding is determined via [Nominatim](nominatim.openstreetmap.org), OSM's geocoder.
 - **Fix Broken Drives (OSRM)** — When you use this feature, drive coordinates are sent to the public [OSRM](https://project-osrm.org/) (Open Source Routing Machine) routing service to reconstruct missing route segments.
 - **3rd Party Import** — When you import from Tessie or Teslascope, the app connects to the respective service using an API token you provide to fetch your drive history. That data is governed by your relationship with [Tessie](https://tessie.com/privacy) and [Teslascope](https://teslascope.com/legalese/privacy).
 - **Updates** — The app checks GitHub Releases for new versions. It does **not** send any hashed device identifier or telemetry on update checks.
@@ -44,4 +59,4 @@ Sentry Drive is local-first: your TeslaCam footage, SEI telemetry, GPS data, tag
 This is a summary; the full Sentry-Six Privacy Policy is at [sentry-six.com/privacy](https://sentry-six.com/privacy).
 
 ## Credits
-Originally created by [Scottmg1](https://github.com/Scottmg1), derived from his [Sentry USB project](https://github.com/Scottmg1/Sentry-USB). UI made with the help of Claude.
+Originally created by [Scottmg1](https://github.com/Scottmg1), derived from his [Sentry USB project](https://github.com/Sentry-Six/Sentry-USB-Rusty). UI made with the help of Claude.
