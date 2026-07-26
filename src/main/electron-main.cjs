@@ -238,7 +238,14 @@ ipcMain.handle('find-drive-data', async (_e, dir) => {
   return fs.existsSync(filePath) ? filePath : null;
 });
 
-ipcMain.handle('get-default-output-dir', () => path.join(__dirname, '..', '..'));
+// Packaged builds run from inside the read-only app.asar, so a __dirname-
+// relative default isn't writable — use a dedicated Documents folder instead
+// (repo root in dev). Created by start-processing, not here, so merely opening
+// the app never touches the user's Documents.
+ipcMain.handle('get-default-output-dir', () =>
+  app.isPackaged
+    ? path.join(app.getPath('documents'), 'Sentry Six', 'Sentry Drive')
+    : path.join(__dirname, '..', '..'));
 
 ipcMain.handle('check-drive-data', (_e, dir) =>
   fs.existsSync(path.join(dir, 'drive-data.json'))
@@ -502,6 +509,18 @@ ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount
 
   const scriptPath = path.join(__dirname, '..', 'processing', 'process.js');
   const outputPath = path.join(outputDir, 'drive-data.json');
+
+  // The default output dir under Documents doesn't exist until first use, and
+  // an uncreatable path (read-only asar, dead drive letter) would otherwise
+  // only surface at the end of the run as a cryptic ENOENT from the atomic
+  // writer's temp-file open. Create it now and fail fast if we can't.
+  try {
+    fs.mkdirSync(outputDir, { recursive: true });
+  } catch (err) {
+    logger.error('processing', `output dir not usable: ${outputDir} — ${err.message}`);
+    return { success: false, error: `Cannot create output folder "${outputDir}": ${err.message}` };
+  }
+
   const args = [scriptPath, clipsDir, outputPath];
   if (workerCount && workerCount > 0) args.push(String(workerCount));
   if (reprocessAll) args.push('--reprocess-all');
