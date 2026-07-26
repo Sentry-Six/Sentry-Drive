@@ -115,22 +115,31 @@ let unitSystem = localStorage.getItem('unitSystem') === 'metric' ? 'metric' : 'i
 let lastDrivesMeta = null;
 let markerType  = localStorage.getItem('markerType')  || 'arrow';
 let markerColor = localStorage.getItem('markerColor') || '#ffffff';
-// Paintable replay-marker vehicles. Each pairs a base texture (_t: black body
-// with specular highlights) with a color mask (_c: bright = glass/tires/trim
-// that stays unpainted). All share the 1320x2118 canvas, hence one 56x90 box.
-// Adding a model = drop the two PNGs in assets/map-ui, add an entry here and
-// an <option> in index.html — options whose texture is missing self-remove at
-// startup (see the probe in initFooter).
+// Paintable replay-marker vehicles. Each pairs a base texture (_t: the car
+// render) with a paint mask (_c: WHITE = paintable bodywork, BLACK = masked
+// off — glass, tyres, trim). Bodies are white on every render except the
+// Cybertruck's steel; renderVehicleColor detects that per texture, so the
+// paint reads true either way.
+// Adding a model = drop the two PNGs in assets/map-ui (lowercase names, both
+// files the same pixel size), add an entry here and an <option> in
+// index.html — options whose artwork is missing self-remove at startup (see
+// the probe in initFooter).
 const VEHICLE_MODELS = {
-  // Each box keeps its own art's canvas aspect so nothing warps (3/Y are
-  // 1320x2118, X is 1320x2148); larger vehicles get proportionally larger boxes.
-  model3:     { texture: '../../assets/map-ui/Model3_t.png',     mask: '../../assets/map-ui/Model3_c.png',     w: 56, h: 90  },
-  highland:   { texture: '../../assets/map-ui/Highland_t.png',   mask: '../../assets/map-ui/Highland_c.png',   w: 56, h: 90  },
-  modelY:     { texture: '../../assets/map-ui/ModelY_t.png',     mask: '../../assets/map-ui/ModelY_c.png',     w: 56, h: 90  },
-  juniper:    { texture: '../../assets/map-ui/Juniper_t.png',    mask: '../../assets/map-ui/Juniper_c.png',    w: 56, h: 90  },
-  modelS:     { texture: '../../assets/map-ui/ModelS_t.png',     mask: '../../assets/map-ui/ModelS_c.png',     w: 58, h: 93  },
-  modelX:     { texture: '../../assets/map-ui/ModelX_t.png',     mask: '../../assets/map-ui/ModelX_c.png',     w: 58, h: 94  },
-  cybertruck: { texture: '../../assets/map-ui/Cybertruck_t.png', mask: '../../assets/map-ui/Cybertruck_c.png', w: 64, h: 103 },
+  // Marker boxes are one shared scale over each render's canvas (model3 = 90px
+  // tall), so the fleet stays proportional to each other — the art's canvas
+  // heights already track real vehicle length — and nothing warps.
+  // Keys are stable: renaming one would orphan a saved markerType setting.
+  model3:      { texture: '../../assets/map-ui/model3_t.png',        mask: '../../assets/map-ui/model3_c.png',        w: 47, h: 90  },
+  highland:    { texture: '../../assets/map-ui/highland_t.png',      mask: '../../assets/map-ui/highland_c.png',      w: 46, h: 90  },
+  highlandPerf:{ texture: '../../assets/map-ui/highland-perf_t.png', mask: '../../assets/map-ui/highland-perf_c.png', w: 46, h: 90  },
+  modelY:      { texture: '../../assets/map-ui/modely_t.png',        mask: '../../assets/map-ui/modely_c.png',        w: 48, h: 92  },
+  juniper:     { texture: '../../assets/map-ui/juniper_t.png',       mask: '../../assets/map-ui/juniper_c.png',       w: 48, h: 92  },
+  juniperPerf: { texture: '../../assets/map-ui/juniper-perf_t.png',  mask: '../../assets/map-ui/juniper-perf_c.png',  w: 47, h: 92  },
+  modelYL:     { texture: '../../assets/map-ui/modelyL_t.png',       mask: '../../assets/map-ui/modelyL_c.png',       w: 48, h: 96  },
+  modelS:      { texture: '../../assets/map-ui/models_t.png',        mask: '../../assets/map-ui/models_c.png',        w: 49, h: 95  },
+  modelSPlaid: { texture: '../../assets/map-ui/models-plaid_t.png',  mask: '../../assets/map-ui/models-plaid_c.png',  w: 49, h: 96  },
+  modelX:      { texture: '../../assets/map-ui/modelx_t.png',        mask: '../../assets/map-ui/modelx_c.png',        w: 50, h: 98  },
+  cybertruck:  { texture: '../../assets/map-ui/cybertruck_t.png',    mask: '../../assets/map-ui/cybertruck_c.png',    w: 54, h: 111 },
 };
 let vehicleColoredUrl = null; // tinted texture for the CURRENT vehicle model
 let carColorPicker   = null;
@@ -1442,6 +1451,10 @@ function hideLoading() {
 }
 
 // ─── Processing Tab ───────────────────────────────────────────────────────────
+// True for any path inside an Electron app.asar — a read-only virtual FS where
+// nothing can be written. Older builds defaulted the output dir to one.
+const isAsarPath = (p) => /\.asar([\\/]|$)/i.test(p || '');
+
 function initProcessingTab() {
   const clipsDirInput = document.getElementById('clips-dir');
 
@@ -1449,8 +1462,14 @@ function initProcessingTab() {
   const savedClipsDir = localStorage.getItem('lastClipsDir');
   if (savedClipsDir) clipsDirInput.value = savedClipsDir;
 
+  // Drop a saved output dir left behind by older builds' bad app.asar default
+  // so loadDefaultPaths() refills the field with the corrected default.
   const savedOutputDir = localStorage.getItem('lastOutputDir');
-  if (savedOutputDir) document.getElementById('output-path').value = savedOutputDir;
+  if (isAsarPath(savedOutputDir)) {
+    localStorage.removeItem('lastOutputDir');
+  } else if (savedOutputDir) {
+    document.getElementById('output-path').value = savedOutputDir;
+  }
 
   document.getElementById('browse-clips').addEventListener('click', async () => {
     const dir = await window.electronAPI.selectDirectory({
@@ -1571,10 +1590,20 @@ async function autoLoadDriveData(filePath) {
 
 async function startProcessing({ reprocessAll = false } = {}) {
   const clipsDir   = document.getElementById('clips-dir').value.trim();
-  const outputDir  = document.getElementById('output-path').value.trim();
+  let outputDir    = document.getElementById('output-path').value.trim();
 
   if (!clipsDir)  { alert('Please select a clips directory.'); return; }
   if (!outputDir) { alert('Please select an output directory.'); return; }
+
+  // A dir inside the read-only app.asar would only fail at the end of the run,
+  // at the final save — explain and prompt for a real folder instead.
+  if (isAsarPath(outputDir)) {
+    alert('The output folder points inside the app installation (app.asar), which is read-only.\nPlease choose a different output folder.');
+    outputDir = await window.electronAPI.selectDirectory({});
+    if (!outputDir || isAsarPath(outputDir)) return;
+    document.getElementById('output-path').value = outputDir;
+  }
+
   localStorage.setItem('lastClipsDir', clipsDir);
   localStorage.setItem('lastOutputDir', outputDir);
 
@@ -4635,7 +4664,7 @@ function renderVehicleColor(color, model) {
       for (let i = 0; i < d.length; i += 4) {
         if (d[i + 3] < 10) continue;
         const maskLum = (maskD[i] * 0.299 + maskD[i + 1] * 0.587 + maskD[i + 2] * 0.114) / 255;
-        if (maskLum > 0.5) continue;
+        if (maskLum < 0.5) continue;
         lumSum += (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255;
         lumCount++;
       }
@@ -4652,7 +4681,7 @@ function renderVehicleColor(color, model) {
       for (let i = 0; i < d.length; i += 4) {
         if (d[i + 3] < 10) continue;
         const maskLum = (maskD[i] * 0.299 + maskD[i + 1] * 0.587 + maskD[i + 2] * 0.114) / 255;
-        if (maskLum > 0.5) continue; // window / tire / trim — leave untouched
+        if (maskLum < 0.5) continue; // black in _c = masked off (glass, tyres, trim)
         const baseLum = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255;
         let s; // shadow factor (multiply by paint) …
         let h; // … or highlight factor (lerp paint toward white)

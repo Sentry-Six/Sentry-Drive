@@ -36,6 +36,10 @@
         {
           "type": "feature",
           "description": "Privacy zones: the new Settings > Privacy tab lets you draw a circle around Home, Work, or any custom location, then cull every drive that starts or ends inside it in one confirmed sweep. Placement is visual — a preview circle follows your cursor while the map pans normally, a click drops the pin, then drag the pin to move the zone or grab anywhere on the circle's edge to resize it before Save/Cancel confirms. Editing a placed zone reopens the same on-map editor, and zone markers stay visible on the map as landmarks. Zones are stored only on this device, never in your drive data file."
+        },
+        {
+          "type": "feature",
+          "description": "The replay marker now covers the whole lineup — Model 3, Highland (and Performance), Model Y, Juniper (and Performance), Model Y L, Model S (and Plaid), Model X, and Cybertruck. Each is drawn to scale with the others and takes your chosen paint color, with glass, wheels, and trim left alone."
         }
       ]
     },

@@ -2626,10 +2626,15 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   overflow: hidden;
 }
 
+/* Height only — the width follows the canvas's intrinsic ratio, so vehicles
+   with different render aspects (0.49 Cybertruck … 0.52 Model 3) preview
+   undistorted. A fixed width here squashed everything into the old art's
+   0.625 box. Rotated 90deg, so the wrap's height bounds the car's LENGTH. */
 .vehicle-preview-canvas {
   display: block;
-  width: 110px;
+  width: auto;
   height: 176px;
+  max-width: none;
   border-radius: var(--radius-sm);
   transform: rotate(90deg);
 }
