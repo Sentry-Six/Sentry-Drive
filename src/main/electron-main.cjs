@@ -1,20 +1,15 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, safeStorage, utilityProcess } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const { geodesicM, GEAR_PARK, CLIP_DURATION_MS, DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
 
-// Give V8 more old-space headroom so the main process can parse large
-// drive-data.json files (hundreds of MB to ~1GB). Must be set before
-// app.whenReady(). The renderer inherits the same flag.
-app.commandLine.appendSwitch('js-flags', '--max-old-space-size=8192');
-
 let mainWindow;
 let activeChild = null;
-let driveDetailCache = null;
+let driveLoaderClient = null;
 
 // ─── drive-data.json reading ─────────────────────────────────────────────────
 // All reads go through src/main/drive-data-reader.cjs: native JSON.parse for
@@ -40,6 +35,7 @@ require('../processing/teslascope-api.cjs').setLogger(logger);
 require('../processing/tessie-api.cjs').setLogger?.(logger);
 
 app.on('before-quit', () => {
+  driveLoaderClient?.close().catch(() => {});
   logger.info('main', 'app quitting');
   logger.flushNow();
 });
@@ -97,16 +93,16 @@ ipcMain.handle('download-logs', async () => {
   }
 });
 
-function downsampleForIPC(pts, maxPts) {
-  if (!pts || pts.length === 0) return [];
-  if (pts.length <= maxPts) return pts.map((p) => [p[0], p[1]]);
-  const result = [];
-  const step = (pts.length - 1) / (maxPts - 1);
-  for (let i = 0; i < maxPts; i++) {
-    const p = pts[Math.round(i * step)];
-    result.push([p[0], p[1]]);
-  }
-  return result;
+function getDriveLoaderClient() {
+  if (driveLoaderClient) return driveLoaderClient;
+  const { createDriveLoaderClient } = require('./drive-loader-client.cjs');
+  driveLoaderClient = createDriveLoaderClient({
+    fork: utilityProcess.fork.bind(utilityProcess),
+    workerPath: path.join(__dirname, 'drive-loader-worker.cjs'),
+    cacheRoot: path.join(app.getPath('temp'), 'sentry-drive', 'load-cache'),
+    logger,
+  });
+  return driveLoaderClient;
 }
 
 // ─── Window State Persistence ────────────────────────────────────────────────
@@ -389,6 +385,14 @@ ipcMain.handle('get-changelog', () => {
 
 ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
   try {
+    const loaderResult = await getDriveLoaderClient().load(filePath, (progress) => {
+      mainWindow?.webContents.send('load-progress', progress);
+    });
+    logger.info('main', `loaded ${loaderResult.totalDriveCount} drive(s) from ${loaderResult.totalRoutes} clips — ${filePath}`);
+    return loaderResult;
+
+    /* Legacy in-main loader retained below temporarily while the disk-backed
+       loader is exercised; unreachable by design. */
     const sendProgress = (phase, current, total) => {
       mainWindow?.webContents.send('load-progress', { phase, current, total });
     };
@@ -497,11 +501,21 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
   }
 });
 
-ipcMain.handle('get-drive-detail', (_e, driveId) => {
-  if (!driveDetailCache) return { success: false, error: 'No drives loaded' };
-  const detail = driveDetailCache.get(driveId);
-  if (!detail) return { success: false, error: 'Drive not found' };
-  return { success: true, ...detail };
+ipcMain.handle('list-drive-summaries', async (_e, query) => {
+  try {
+    return { success: true, ...(await getDriveLoaderClient().list(query ?? {})) };
+  } catch (err) {
+    return { success: false, error: err.message, code: err.code };
+  }
+});
+
+ipcMain.handle('get-drive-detail', async (_e, driveId) => {
+  try {
+    const detail = await getDriveLoaderClient().detail(driveId);
+    return detail ? { success: true, ...detail } : { success: false, error: 'Drive not found' };
+  } catch (err) {
+    return { success: false, error: err.message, code: err.code };
+  }
 });
 
 ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount, reprocessAll }) => {
