@@ -1,0 +1,254 @@
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const v8 = require('node:v8');
+const { DatabaseSync } = require('node:sqlite');
+const { chain } = require('stream-chain');
+const { parser } = require('stream-json/parser.js');
+const AssemblerModule = require('stream-json/assembler.js');
+const Assembler = AssemblerModule.Assembler ?? AssemblerModule;
+const { DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
+
+const FILE_TIMESTAMP_RE = /(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/;
+
+function abortError() {
+  const err = new Error('Drive data indexing canceled');
+  err.name = 'AbortError';
+  err.code = 'ABORT_ERR';
+  return err;
+}
+
+function parseFileTimestampMs(filePath) {
+  const match = FILE_TIMESTAMP_RE.exec(String(filePath ?? ''));
+  if (!match) return null;
+  const value = new Date(`${match[1]}T${match[2]}:${match[3]}:${match[4]}`).getTime();
+  return Number.isFinite(value) ? value : null;
+}
+
+function normalizeFile(file) {
+  return String(file ?? '').replace(/\\/g, '/');
+}
+
+function isEventFolder(file) {
+  return file.startsWith('SavedClips/') || file.startsWith('SentryClips/');
+}
+
+class DriveIndex {
+  constructor({ dbPath, sourcePath }) {
+    if (!dbPath || !sourcePath) throw new TypeError('dbPath and sourcePath are required');
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    this.dbPath = dbPath;
+    this.sourcePath = sourcePath;
+    this.db = new DatabaseSync(dbPath);
+    this.closed = false;
+    this.db.exec(`
+      PRAGMA journal_mode=OFF;
+      PRAGMA synchronous=OFF;
+      PRAGMA temp_store=FILE;
+      PRAGMA cache_size=-32768;
+      CREATE TABLE IF NOT EXISTS routes (
+        id INTEGER PRIMARY KEY,
+        sequence INTEGER NOT NULL,
+        normalized_file TEXT NOT NULL UNIQUE,
+        timestamp_ms INTEGER NOT NULL,
+        payload BLOB NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS routes_timestamp
+        ON routes(timestamp_ms, sequence);
+      CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value BLOB NOT NULL
+      );
+    `);
+    this.insertRouteStmt = this.db.prepare(`
+      INSERT OR IGNORE INTO routes
+        (sequence, normalized_file, timestamp_ms, payload)
+      VALUES (?, ?, ?, ?)
+    `);
+    this.setMetaStmt = this.db.prepare(`
+      INSERT INTO meta(key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    `);
+    this.getMetaStmt = this.db.prepare('SELECT value FROM meta WHERE key = ?');
+  }
+
+  insertRoute(route, sequence) {
+    const normalizedFile = normalizeFile(route?.file);
+    if (!normalizedFile || isEventFolder(normalizedFile)) return 'dropped';
+    const timestampMs = parseFileTimestampMs(normalizedFile);
+    if (timestampMs == null) return 'dropped';
+    const result = this.insertRouteStmt.run(
+      sequence,
+      normalizedFile,
+      timestampMs,
+      v8.serialize({ ...route, file: normalizedFile }),
+    );
+    return result.changes === 1 ? 'inserted' : 'duplicate';
+  }
+
+  setMeta(key, value) {
+    this.setMetaStmt.run(key, v8.serialize(value));
+  }
+
+  getMetaValue(key, fallback) {
+    const row = this.getMetaStmt.get(key);
+    return row ? v8.deserialize(row.value) : fallback;
+  }
+
+  getMeta() {
+    return this.getMetaValue('counts', {
+      processedFileCount: 0,
+      routeCount: 0,
+      droppedCount: 0,
+      duplicateCount: 0,
+    });
+  }
+
+  getDriveTags() {
+    return this.getMetaValue('driveTags', {});
+  }
+
+  *iterateTimeWindows() {
+    const rows = this.db.prepare(`
+      SELECT timestamp_ms, payload
+      FROM routes
+      ORDER BY timestamp_ms, sequence
+    `).iterate();
+    let window = [];
+    let previousMs = null;
+    for (const row of rows) {
+      if (previousMs != null && row.timestamp_ms - previousMs > DRIVE_GAP_MS) {
+        yield window;
+        window = [];
+      }
+      window.push(v8.deserialize(row.payload));
+      previousMs = row.timestamp_ms;
+    }
+    if (window.length > 0) yield window;
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.db.close();
+  }
+}
+
+function createDriveIndex(options) {
+  return new DriveIndex(options);
+}
+
+function indexDriveData(index, options = {}) {
+  const { onProgress, signal } = options;
+  if (signal?.aborted) return Promise.reject(abortError());
+  const totalBytes = fs.statSync(index.sourcePath).size;
+
+  return new Promise((resolve, reject) => {
+    let processedFileCount = 0;
+    let routeCount = 0;
+    let droppedCount = 0;
+    let duplicateCount = 0;
+    let routeSequence = 0;
+    let driveTags = {};
+
+    let depth = 0;
+    let currentTopKey = null;
+    let assembler = null;
+    let assemblerExitDepth = -1;
+    let bytesRead = 0;
+    let lastEmit = 0;
+    let settled = false;
+
+    const readStream = fs.createReadStream(index.sourcePath);
+    const pipeline = chain([
+      readStream,
+      parser({ packKeys: true, packStrings: true, packNumbers: true }),
+    ]);
+
+    const finishReject = (err) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      reject(err);
+    };
+    const onAbort = () => pipeline.destroy(abortError());
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    readStream.on('data', (chunk) => {
+      bytesRead += chunk.length;
+      if (!onProgress) return;
+      const now = Date.now();
+      if (now - lastEmit >= 100 || bytesRead === totalBytes) {
+        lastEmit = now;
+        onProgress(bytesRead, totalBytes);
+      }
+    });
+
+    pipeline.on('data', (token) => {
+      if (signal?.aborted) {
+        pipeline.destroy(abortError());
+        return;
+      }
+      const name = token.name;
+      if (assembler) {
+        assembler.consume(token);
+        if (name === 'startObject' || name === 'startArray') depth++;
+        else if (name === 'endObject' || name === 'endArray') {
+          depth--;
+          if (depth === assemblerExitDepth) {
+            if (currentTopKey === 'routes') {
+              const disposition = index.insertRoute(assembler.current, routeSequence++);
+              if (disposition === 'inserted') routeCount++;
+              else if (disposition === 'duplicate') duplicateCount++;
+              else droppedCount++;
+            } else if (currentTopKey === 'driveTags') {
+              driveTags = assembler.current;
+            }
+            assembler = null;
+          }
+        }
+        return;
+      }
+
+      if (name === 'startObject' || name === 'startArray') {
+        const before = depth;
+        depth++;
+        if (before === 2 && name === 'startObject' && currentTopKey === 'routes') {
+          assembler = new Assembler();
+          assemblerExitDepth = before;
+          assembler.consume(token);
+        } else if (before === 1 && name === 'startObject' && currentTopKey === 'driveTags') {
+          assembler = new Assembler();
+          assemblerExitDepth = before;
+          assembler.consume(token);
+        }
+      } else if (name === 'endObject' || name === 'endArray') {
+        depth--;
+        if (depth === 1) currentTopKey = null;
+      } else if (name === 'keyValue' && depth === 1) {
+        currentTopKey = token.value;
+      } else if (name === 'stringValue' && depth === 2 && currentTopKey === 'processedFiles') {
+        processedFileCount++;
+      }
+    });
+
+    pipeline.once('end', () => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      const counts = { processedFileCount, routeCount, droppedCount, duplicateCount };
+      index.setMeta('counts', counts);
+      index.setMeta('driveTags', driveTags);
+      if (onProgress && totalBytes > 0) onProgress(totalBytes, totalBytes);
+      resolve(counts);
+    });
+    pipeline.once('error', finishReject);
+  });
+}
+
+module.exports = {
+  createDriveIndex,
+  indexDriveData,
+  parseFileTimestampMs,
+};
