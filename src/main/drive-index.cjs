@@ -60,6 +60,15 @@ class DriveIndex {
         key TEXT PRIMARY KEY,
         value BLOB NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS drives (
+        id INTEGER PRIMARY KEY,
+        start_time TEXT NOT NULL,
+        source TEXT NOT NULL,
+        summary BLOB NOT NULL,
+        detail BLOB NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS drives_start_time
+        ON drives(start_time DESC, id DESC);
     `);
     this.insertRouteStmt = this.db.prepare(`
       INSERT OR IGNORE INTO routes
@@ -71,6 +80,11 @@ class DriveIndex {
       ON CONFLICT(key) DO UPDATE SET value=excluded.value
     `);
     this.getMetaStmt = this.db.prepare('SELECT value FROM meta WHERE key = ?');
+    this.insertDriveStmt = this.db.prepare(`
+      INSERT INTO drives(id, start_time, source, summary, detail)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    this.getDriveDetailStmt = this.db.prepare('SELECT detail FROM drives WHERE id = ?');
   }
 
   insertRoute(route, sequence) {
@@ -109,6 +123,61 @@ class DriveIndex {
     return this.getMetaValue('driveTags', {});
   }
 
+  clearDrives() {
+    this.db.exec('DELETE FROM drives');
+  }
+
+  putDrive(summary, detail) {
+    this.insertDriveStmt.run(
+      summary.id,
+      summary.startTime,
+      summary.source ?? 'sei',
+      v8.serialize(summary),
+      v8.serialize(detail),
+    );
+  }
+
+  listDriveSummaries({ offset = 0, limit = 250 } = {}) {
+    const boundedLimit = Math.max(1, Math.min(Number(limit) || 250, 1000));
+    const boundedOffset = Math.max(0, Number(offset) || 0);
+    const total = Number(this.db.prepare('SELECT COUNT(*) AS total FROM drives').get().total);
+    const rows = this.db.prepare(`
+      SELECT summary
+      FROM drives
+      ORDER BY start_time DESC, id DESC
+      LIMIT ? OFFSET ?
+    `).all(boundedLimit, boundedOffset);
+    return {
+      total,
+      offset: boundedOffset,
+      limit: boundedLimit,
+      drives: rows.map((row) => v8.deserialize(row.summary)),
+    };
+  }
+
+  getDriveDetail(id, maxPoints = 200_000) {
+    const row = this.getDriveDetailStmt.get(id);
+    if (!row) return null;
+    const detail = v8.deserialize(row.detail);
+    const fullPoints = detail.points ?? [];
+    const fullPointCount = fullPoints.length;
+    const budget = Math.max(2, Math.min(Number(maxPoints) || 200_000, 200_000));
+    if (fullPointCount <= budget) {
+      return { ...detail, fullPointCount, displayPointCount: fullPointCount, downsampled: false };
+    }
+    const indices = evenlySpacedIndices(fullPointCount, budget);
+    const pick = (values) => values ? indices.map((index) => values[index]) : undefined;
+    return {
+      ...detail,
+      points: pick(fullPoints),
+      fsdStates: pick(detail.fsdStates),
+      gearStates: pick(detail.gearStates),
+      fullPointCount,
+      displayPointCount: indices.length,
+      downsampled: true,
+    };
+  }
+
   *iterateTimeWindows() {
     const rows = this.db.prepare(`
       SELECT timestamp_ms, payload
@@ -137,6 +206,16 @@ class DriveIndex {
 
 function createDriveIndex(options) {
   return new DriveIndex(options);
+}
+
+function evenlySpacedIndices(length, budget) {
+  if (length <= budget) return Array.from({ length }, (_, index) => index);
+  const indices = [];
+  const step = (length - 1) / (budget - 1);
+  for (let index = 0; index < budget; index++) {
+    indices.push(Math.round(index * step));
+  }
+  return indices;
 }
 
 function indexDriveData(index, options = {}) {
