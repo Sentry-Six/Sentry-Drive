@@ -8,6 +8,8 @@ let mapReady = false;          // style 'load' fired — sources/layers exist
 let pendingMapTasks = [];      // deferred until style load (source data, filters)
 let selectedMarkers = [];      // DOM markers for the selected drive (start/end/replay)
 let drives = [];
+let drivePageModel = null;
+let drivePageState = { offset: 0, limit: 250, total: 0, drives: [] };
 let overviewRoutes = [];   // raw route points for overview map (one per clip)
 let loadedFilePath = null;
 let pendingExternalReload = false; // drive-data.json changed on disk while busy
@@ -1554,26 +1556,77 @@ async function loadDefaultPaths() {
   pendingChangelogShow = null;
 }
 
+function updateDrivePager() {
+  const pager = document.getElementById('drive-pager');
+  if (!pager) return;
+  const { offset, limit, total } = drivePageState;
+  const pages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(pages, Math.floor(offset / limit) + 1);
+  document.getElementById('drive-page-label').textContent =
+    `Page ${fmt(page)} of ${fmt(pages)} · ${fmt(total)} drives`;
+  document.getElementById('drive-page-prev').disabled = offset <= 0;
+  document.getElementById('drive-page-next').disabled = offset + limit >= total;
+  pager.classList.toggle('hidden', total <= limit);
+}
+
+async function applyDrivePageState(state) {
+  for (const drive of drives) {
+    delete drive.points;
+    delete drive.fsdStates;
+    delete drive.gearStates;
+    delete drive.fsdEvents;
+  }
+  if (selectedDriveId !== null) deselectDrive();
+  drivePageState = state;
+  drives = state.drives;
+  updateDrivePager();
+  await renderDriveList(drives);
+  renderOverviewOnMap();
+}
+
+async function changeDrivePage(direction) {
+  if (!drivePageModel) return;
+  const pager = document.getElementById('drive-pager');
+  pager?.classList.add('is-loading');
+  try {
+    const state = direction === 'previous'
+      ? await drivePageModel.previous()
+      : await drivePageModel.next();
+    await applyDrivePageState(state);
+  } catch (error) {
+    alert(`Couldn't load that drive page: ${error.message}`);
+  } finally {
+    pager?.classList.remove('is-loading');
+  }
+}
+
+async function applyLoadedDriveData(result, filePath) {
+  loadedFilePath = filePath;
+  localStorage.setItem('lastDriveDataPath', filePath);
+  pendingExternalReload = false;
+  window.electronAPI.watchDriveData(filePath);
+  const state = await drivePageModel.load();
+  drivePageState = state;
+  drives = state.drives;
+  overviewRoutes = result.overviewRoutes ?? [];
+  refreshAllTags(result.driveTags ?? {});
+  renderTagFilter();
+  renderDriveStats(drives, result);
+  await renderDriveList(drives);
+  renderOverviewOnMap();
+  updateDrivePager();
+  document.getElementById('btn-repair-gps').disabled = false;
+  updateRevertButton();
+  updateTessieButtonStates();
+}
+
 async function autoLoadDriveData(filePath) {
   showLoading();
   try {
     const result = await window.electronAPI.loadAndGroupDrives(filePath);
     if (!result.success) { hideLoading(); return; }
 
-    loadedFilePath = filePath;
-    localStorage.setItem('lastDriveDataPath', filePath);
-    pendingExternalReload = false;
-    window.electronAPI.watchDriveData(filePath);
-    drives = result.drives;
-    overviewRoutes = result.overviewRoutes ?? [];
-    refreshAllTags(result.driveTags ?? {});
-    renderTagFilter();
-    renderDriveStats(drives, result);
-    renderDriveList(drives);
-    renderOverviewOnMap();
-    document.getElementById('btn-repair-gps').disabled = false;
-    updateRevertButton();
-    updateTessieButtonStates();
+    await applyLoadedDriveData(result, filePath);
 
     // Switch to drives tab
     document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
@@ -1750,6 +1803,12 @@ function fmtDuration(sec) {
 // ─── View Drives Tab ──────────────────────────────────────────────────────────
 function initViewDrivesTab() {
   document.getElementById('btn-load-drives').addEventListener('click', loadDrives);
+  drivePageModel = window.DrivePageModel.createDrivePageModel({
+    pageSize: 250,
+    fetchPage: (query) => window.electronAPI.listDriveSummaries(query),
+  });
+  document.getElementById('drive-page-prev').addEventListener('click', () => changeDrivePage('previous'));
+  document.getElementById('drive-page-next').addEventListener('click', () => changeDrivePage('next'));
   initTessieImport();
 
   // Auto-refresh when drive-data.json changes on disk (e.g. Sentry USB
@@ -2714,20 +2773,7 @@ async function loadDrives() {
       return;
     }
 
-    loadedFilePath = filePath;
-    localStorage.setItem('lastDriveDataPath', filePath);
-    pendingExternalReload = false;
-    window.electronAPI.watchDriveData(filePath);
-    drives = result.drives;
-    overviewRoutes = result.overviewRoutes ?? [];
-    refreshAllTags(result.driveTags ?? {});
-    renderTagFilter();
-    renderDriveStats(drives, result);
-    renderDriveList(drives);
-    renderOverviewOnMap();
-    document.getElementById('btn-repair-gps').disabled = false;
-    updateRevertButton();
-    updateTessieButtonStates();
+    await applyLoadedDriveData(result, filePath);
   } finally {
     btn.textContent = 'Load Drives';
     btn.disabled = false;
@@ -3000,10 +3046,13 @@ function renderDriveStats(drives, meta) {
   // fuzzier than the dashcam's SEI telemetry (Teslascope's is often absent
   // entirely) — mixing them would dilute the score.
   const seiDrives = drives.filter((d) => !isImportedSource(d.source));
-  const tessieCount = drives.length - seiDrives.length;
+  const aggregate = meta?.aggregates;
+  const driveCount = aggregate?.totalDriveCount ?? drives.length;
+  const seiDriveCount = aggregate?.seiDriveCount ?? seiDrives.length;
+  const tessieCount = aggregate?.importedDriveCount ?? (drives.length - seiDrives.length);
 
-  const totalMi = drives.reduce((s, d) => s + d.distanceMi, 0);
-  const totalMs = drives.reduce((s, d) => s + d.durationMs, 0);
+  const totalMi = aggregate?.totalDistanceMi ?? drives.reduce((s, d) => s + d.distanceMi, 0);
+  const totalMs = aggregate?.totalDurationMs ?? drives.reduce((s, d) => s + d.durationMs, 0);
   // D H M — lifetime totals routinely exceed 24h, so days carry the size.
   const totalDays = Math.floor(totalMs / 86_400_000);
   const totalHrs = Math.floor((totalMs % 86_400_000) / 3_600_000);
@@ -3013,10 +3062,10 @@ function renderDriveStats(drives, meta) {
     : (totalHrs > 0 ? `${totalHrs}H ${totalMin}M` : `${totalMin}M`);
 
   // FSD analytics denominator: SEI-only distance.
-  const seiDistM = seiDrives.reduce((s, d) => s + (d.distanceKm ?? d.distanceMi * MI_TO_KM) * 1000, 0);
-  const fsdDistM = seiDrives.reduce((s, d) => s + (d.fsdDistanceKm ?? d.fsdDistanceMi * MI_TO_KM) * 1000, 0);
-  const apDistM = seiDrives.reduce((s, d) => s + (d.autosteerDistanceKm ?? (d.autosteerDistanceMi ?? 0) * MI_TO_KM) * 1000, 0);
-  const taccDistM = seiDrives.reduce((s, d) => s + (d.taccDistanceKm ?? (d.taccDistanceMi ?? 0) * MI_TO_KM) * 1000, 0);
+  const seiDistM = aggregate?.seiDistanceM ?? seiDrives.reduce((s, d) => s + (d.distanceKm ?? d.distanceMi * MI_TO_KM) * 1000, 0);
+  const fsdDistM = aggregate?.fsdDistanceM ?? seiDrives.reduce((s, d) => s + (d.fsdDistanceKm ?? d.fsdDistanceMi * MI_TO_KM) * 1000, 0);
+  const apDistM = aggregate?.autosteerDistanceM ?? seiDrives.reduce((s, d) => s + (d.autosteerDistanceKm ?? (d.autosteerDistanceMi ?? 0) * MI_TO_KM) * 1000, 0);
+  const taccDistM = aggregate?.taccDistanceM ?? seiDrives.reduce((s, d) => s + (d.taccDistanceKm ?? (d.taccDistanceMi ?? 0) * MI_TO_KM) * 1000, 0);
   const fsdPct = seiDistM > 0 ? Math.round((fsdDistM / seiDistM) * 100) : 0;
   const fsdScore = seiDistM > 0 ? floorPct1((fsdDistM / seiDistM) * 100) : 0;
   const apPct = seiDistM > 0 ? Math.round((apDistM / seiDistM) * 100) : 0;
@@ -3027,16 +3076,16 @@ function renderDriveStats(drives, meta) {
   // For the donut chart denominator (locally rebound for clarity below).
   const totalDistM = seiDistM;
 
-  const disengagements = seiDrives.reduce((s, d) => s + (d.fsdDisengagements ?? 0), 0);
-  const accelOverrides = seiDrives.reduce((s, d) => s + (d.fsdAccelPushes ?? 0), 0);
-  const fsdTimeMs = seiDrives.reduce((s, d) => s + (d.fsdEngagedMs ?? 0), 0);
-  const avgDisengagements = seiDrives.length > 0 ? (disengagements / seiDrives.length).toFixed(1) : '—';
-  const avgAccelOverrides = seiDrives.length > 0 ? (accelOverrides / seiDrives.length).toFixed(1) : '—';
+  const disengagements = aggregate?.fsdDisengagements ?? seiDrives.reduce((s, d) => s + (d.fsdDisengagements ?? 0), 0);
+  const accelOverrides = aggregate?.fsdAccelPushes ?? seiDrives.reduce((s, d) => s + (d.fsdAccelPushes ?? 0), 0);
+  const fsdTimeMs = aggregate?.fsdEngagedMs ?? seiDrives.reduce((s, d) => s + (d.fsdEngagedMs ?? 0), 0);
+  const avgDisengagements = seiDriveCount > 0 ? (disengagements / seiDriveCount).toFixed(1) : '—';
+  const avgAccelOverrides = seiDriveCount > 0 ? (accelOverrides / seiDriveCount).toFixed(1) : '—';
 
   const metersToDistStr = (m) => fmt(distVal(m / M_PER_MILE, 0));
 
   let summary = `
-    <div class="map-stat"><span class="map-stat-val">${fmt(drives.length)}</span><span class="map-stat-lbl">Drives</span></div>
+    <div class="map-stat"><span class="map-stat-val">${fmt(driveCount)}</span><span class="map-stat-lbl">Drives</span></div>
     <div class="map-stat"><span class="map-stat-val">${fmt(distVal(totalMi, 0))}</span><span class="map-stat-lbl">${distLong()} Driven</span></div>
     <div class="map-stat"><span class="map-stat-val">${durStr}</span><span class="map-stat-lbl">Time Driving</span></div>
     <div class="map-stat"><span class="map-stat-val" style="color:${seiDistM > 0 ? fsdScoreColor(fsdScore) : 'var(--text-dim)'}">${seiDistM > 0 ? `${fsdScore}%` : '—'}</span><span class="map-stat-lbl">FSD Score</span></div>
@@ -3099,7 +3148,9 @@ function renderDriveStats(drives, meta) {
       </div>
     `;
   }
-  const avgFsdPct = seiDrives.length > 0 ? floorPct1(seiDrives.reduce((s, d) => s + (d.fsdPercent ?? 0), 0) / seiDrives.length) : 0;
+  const avgFsdPct = seiDriveCount > 0
+    ? floorPct1((aggregate?.fsdPercentSum ?? seiDrives.reduce((s, d) => s + (d.fsdPercent ?? 0), 0)) / seiDriveCount)
+    : 0;
   if (disengagements > 0 || accelOverrides > 0) {
     details += `
       <div class="map-stats-extras">

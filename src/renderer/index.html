@@ -112,6 +112,11 @@
         <div id="tag-filter" class="hidden"></div>
 
         <div id="drives-list"></div>
+        <div id="drive-pager" class="hidden">
+          <button id="drive-page-prev" type="button" title="Previous drives"><span class="material-icons">chevron_left</span></button>
+          <span id="drive-page-label">Page 1 of 1</span>
+          <button id="drive-page-next" type="button" title="Next drives"><span class="material-icons">chevron_right</span></button>
+        </div>
 
         <!-- Floating action bar for multi-selected drives (Ctrl/Shift+click) -->
         <div id="multi-select-bar" class="hidden">
@@ -699,6 +704,7 @@
 
   <script src="../../assets/vendor/maplibre/maplibre-gl.js"></script>
   <script src="../../assets/vendor/iro.min.js"></script>
+  <script src="drive-page-model.cjs"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

@@ -101,6 +101,22 @@ class DriveIndex {
     return result.changes === 1 ? 'inserted' : 'duplicate';
   }
 
+  beginIndexing() {
+    this.db.exec('BEGIN IMMEDIATE');
+  }
+
+  commitIndexing() {
+    this.db.exec('COMMIT');
+  }
+
+  rollbackIndexing() {
+    try {
+      this.db.exec('ROLLBACK');
+    } catch {
+      // No active transaction (for example, parsing failed before BEGIN).
+    }
+  }
+
   setMeta(key, value) {
     this.setMetaStmt.run(key, v8.serialize(value));
   }
@@ -224,6 +240,7 @@ function indexDriveData(index, options = {}) {
   const totalBytes = fs.statSync(index.sourcePath).size;
 
   return new Promise((resolve, reject) => {
+    index.beginIndexing();
     let processedFileCount = 0;
     let routeCount = 0;
     let droppedCount = 0;
@@ -249,6 +266,7 @@ function indexDriveData(index, options = {}) {
       if (settled) return;
       settled = true;
       signal?.removeEventListener('abort', onAbort);
+      index.rollbackIndexing();
       reject(err);
     };
     const onAbort = () => pipeline.destroy(abortError());
@@ -314,13 +332,18 @@ function indexDriveData(index, options = {}) {
 
     pipeline.once('end', () => {
       if (settled) return;
-      settled = true;
-      signal?.removeEventListener('abort', onAbort);
-      const counts = { processedFileCount, routeCount, droppedCount, duplicateCount };
-      index.setMeta('counts', counts);
-      index.setMeta('driveTags', driveTags);
-      if (onProgress && totalBytes > 0) onProgress(totalBytes, totalBytes);
-      resolve(counts);
+      try {
+        const counts = { processedFileCount, routeCount, droppedCount, duplicateCount };
+        index.setMeta('counts', counts);
+        index.setMeta('driveTags', driveTags);
+        index.commitIndexing();
+        if (onProgress && totalBytes > 0) onProgress(totalBytes, totalBytes);
+        settled = true;
+        signal?.removeEventListener('abort', onAbort);
+        resolve(counts);
+      } catch (error) {
+        finishReject(error);
+      }
     });
     pipeline.once('error', finishReject);
   });

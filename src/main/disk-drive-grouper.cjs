@@ -79,6 +79,7 @@ async function groupIndexedDrives(index, options = {}) {
     fsdDisengagements: 0,
     fsdAccelPushes: 0,
     fsdEngagedMs: 0,
+    fsdPercentSum: 0,
     seiDriveCount: 0,
     importedDriveCount: 0,
   };
@@ -97,6 +98,7 @@ async function groupIndexedDrives(index, options = {}) {
         aggregates.fsdDisengagements += drive.fsdDisengagements ?? 0;
         aggregates.fsdAccelPushes += drive.fsdAccelPushes ?? 0;
         aggregates.fsdEngagedMs += drive.fsdEngagedMs ?? 0;
+        aggregates.fsdPercentSum += drive.fsdPercent ?? 0;
       } else {
         aggregates.importedDriveCount++;
       }
