@@ -1,5 +1,6 @@
 ﻿.claude
 node_modules/
+.worktrees/
 docs/superpowers/
 dist/
 drive-data.json
