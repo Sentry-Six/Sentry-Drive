@@ -25,7 +25,7 @@ function makeFixture() {
     routes: [
       route('RecentClips/2026-07-28_10-00-00-front.mp4', 39.1),
       route('RecentClips\\2026-07-28_10-00-00-front.mp4', 39.2),
-      route('SavedClips/2026-07-28_10-01-00-front.mp4', 39.3),
+      route('SavedClips/2026-07-28_10-30-00/2026-07-28_10-01-00-front.mp4', 39.3),
       route('RecentClips/2026-07-28_11-00-00-front.mp4', 39.4),
     ],
     processedFiles: ['one.mp4', 'two.mp4'],
@@ -44,15 +44,19 @@ test('indexes routes on disk with normalized deduplication and bounded time wind
 
   assert.deepEqual(meta, {
     processedFileCount: 2,
-    routeCount: 2,
-    droppedCount: 1,
+    routeCount: 3,
+    droppedCount: 0,
     duplicateCount: 1,
   });
   const windows = [...index.iterateTimeWindows()];
   assert.equal(windows.length, 2);
-  assert.equal(windows[0].length, 1);
+  assert.equal(windows[0].length, 2);
   assert.equal(windows[1].length, 1);
   assert.equal(windows[0][0].file, 'RecentClips/2026-07-28_10-00-00-front.mp4');
+  assert.equal(
+    windows[0][1].file,
+    'SavedClips/2026-07-28_10-30-00/2026-07-28_10-01-00-front.mp4',
+  );
   assert.deepEqual(index.getDriveTags(), {
     '2026-07-28T10:00:00': ['Work', 'Unicode ✓'],
   });
