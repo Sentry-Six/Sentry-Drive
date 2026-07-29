@@ -83,6 +83,7 @@ async function groupIndexedDrives(index, options = {}) {
     seiDriveCount: 0,
     importedDriveCount: 0,
   };
+  const seiRanges = [];
   let offset = 0;
   while (offset < nextDriveId) {
     const page = index.listDriveSummaries({ offset, limit: 1000 });
@@ -90,6 +91,11 @@ async function groupIndexedDrives(index, options = {}) {
       aggregates.totalDistanceMi += drive.distanceMi ?? 0;
       aggregates.totalDurationMs += drive.durationMs ?? 0;
       if (drive.source === 'sei') {
+        const start = Date.parse(drive.startTime);
+        const end = Date.parse(drive.endTime);
+        if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+          seiRanges.push({ start, end });
+        }
         aggregates.seiDriveCount++;
         aggregates.seiDistanceM += (drive.distanceKm ?? 0) * 1000;
         aggregates.fsdDistanceM += (drive.fsdDistanceKm ?? 0) * 1000;
@@ -106,16 +112,58 @@ async function groupIndexedDrives(index, options = {}) {
     offset += page.drives.length;
     if (page.drives.length === 0) break;
   }
+  seiRanges.sort((a, b) => a.start - b.start);
   index.setMeta('aggregates', aggregates);
 
+  const hiddenIds = [];
+  const hiddenTessieDrives = [];
+  offset = 0;
+  while (offset < nextDriveId) {
+    const page = index.listDriveSummaries({ offset, limit: 1000 });
+    for (const drive of page.drives) {
+      if (drive.source === 'sei') continue;
+      const importedStart = Date.parse(drive.startTime);
+      const importedEnd = Date.parse(drive.endTime);
+      if (
+        !Number.isFinite(importedStart)
+        || !Number.isFinite(importedEnd)
+        || importedEnd <= importedStart
+      ) {
+        continue;
+      }
+      let overlaps = false;
+      for (const range of seiRanges) {
+        if (range.end <= importedStart) continue;
+        if (range.start >= importedEnd) break;
+        overlaps = true;
+        break;
+      }
+      if (!overlaps) continue;
+      hiddenIds.push(drive.id);
+      hiddenTessieDrives.push({
+        startTime: drive.startTime,
+        endTime: drive.endTime,
+        distanceMi: drive.distanceMi,
+        source: drive.source,
+      });
+    }
+    offset += page.drives.length;
+    if (page.drives.length === 0) break;
+  }
+  for (const id of hiddenIds) index.deleteDrive(id);
+
+  const groupedDriveCount = nextDriveId;
   return {
     ...counts,
     totalRoutes: counts.routeCount,
-    totalDriveCount: nextDriveId,
+    totalDriveCount: groupedDriveCount - hiddenIds.length,
+    groupedDriveCount,
     timeGroupCount,
     routeCount,
     droppedCount: counts.droppedCount + grouperDroppedCount,
     driveTags,
+    hiddenTessieCount: hiddenIds.length,
+    hiddenTessieDrives,
     aggregates,
   };
 }

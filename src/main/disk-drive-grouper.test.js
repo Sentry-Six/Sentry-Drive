@@ -124,6 +124,53 @@ test('disk grouping preserves driving SavedClips that fill a manual-save gap', a
   );
 });
 
+test('disk grouping hides imported drives overlapping SEI while preserving stable IDs', async (t) => {
+  const routes = [
+    route('RecentClips/2026-07-28_10-00-00-front.mp4', 39.1),
+    route('Imported/2026-07-28_10-00-00-front.mp4', 39.2, {
+      source: 'tessie',
+      externalSignature: 'tessie:overlap',
+      points: [[39.2, -76.7], [39.2, -76.7]],
+      speeds: [1, 1],
+    }),
+    route('Imported/2026-07-28_10-01-00-front.mp4', 39.3, {
+      source: 'teslascope',
+      externalSignature: 'teslascope:touching',
+    }),
+    route('Imported/2026-07-28_11-00-00-front.mp4', 39.4, {
+      source: 'tessie',
+      externalSignature: 'tessie:later',
+    }),
+  ];
+  const fixture = makeIndex(routes);
+  t.after(() => {
+    fixture.index.close();
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  });
+  await indexDriveData(fixture.index);
+
+  const result = await groupIndexedDrives(fixture.index);
+  const listed = fixture.index.listDriveSummaries({ offset: 0, limit: 10 });
+
+  assert.equal(result.groupedDriveCount, 4);
+  assert.equal(result.totalDriveCount, 3);
+  assert.equal(result.hiddenTessieCount, 1);
+  assert.equal(result.aggregates.totalDriveCount, 4);
+  assert.equal(listed.total, 3);
+  assert.deepEqual(
+    listed.drives.map((drive) => drive.id).sort((a, b) => a - b),
+    [0, 2, 3],
+  );
+  assert.equal(fixture.index.getDriveDetail(1, 1000), null);
+  assert.ok(fixture.index.getDriveDetail(2, 1000));
+  assert.deepEqual(result.hiddenTessieDrives, [{
+    startTime: '2026-07-28T10:00:00',
+    endTime: '2026-07-28T10:01:00',
+    distanceMi: 0,
+    source: 'tessie',
+  }]);
+});
+
 test('detail query enforces a fixed point budget and preserves aligned state arrays', async (t) => {
   const points = Array.from({ length: 101 }, (_, i) => [39 + i / 1000, -76]);
   const routes = [route('RecentClips/2026-07-28_10-00-00-front.mp4', 39, {

@@ -40,6 +40,9 @@ test('loader service owns a disposable index and serves bounded queries', async 
   });
   assert.equal(loaded.success, true);
   assert.equal(loaded.totalDriveCount, 1);
+  assert.equal(loaded.groupedDriveCount, 1);
+  assert.equal(loaded.hiddenTessieCount, 0);
+  assert.deepEqual(loaded.hiddenTessieDrives, []);
   assert.equal(loaded.drives.length, 1);
   assert.ok(messages.some((message) => message.type === 'progress' && message.payload.phase === 'reading'));
   assert.ok(messages.some((message) => message.type === 'progress' && message.payload.phase === 'grouping'));

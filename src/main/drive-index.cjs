@@ -70,6 +70,7 @@ class DriveIndex {
       INSERT INTO drives(id, start_time, source, summary, detail)
       VALUES (?, ?, ?, ?, ?)
     `);
+    this.deleteDriveStmt = this.db.prepare('DELETE FROM drives WHERE id = ?');
     this.getDriveDetailStmt = this.db.prepare('SELECT detail FROM drives WHERE id = ?');
   }
 
@@ -137,6 +138,10 @@ class DriveIndex {
       v8.serialize(summary),
       v8.serialize(detail),
     );
+  }
+
+  deleteDrive(id) {
+    this.deleteDriveStmt.run(id);
   }
 
   listDriveSummaries({ offset = 0, limit = 250 } = {}) {
