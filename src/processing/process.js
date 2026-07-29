@@ -4,16 +4,21 @@
 // Uses worker threads for parallel extraction across all CPU cores
 
 import { Worker } from "node:worker_threads";
-import { readdir, writeFile, readFile, rename, unlink } from "node:fs/promises";
+import { readdir, readFile, rename, unlink } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { groupIntoDrives, encodeByteField } from "./grouper.js";
+import { discoverProcessingFiles } from "./clip-discovery.js";
+import processResult from "./process-result.cjs";
+import clipPath from "../shared/clip-path.cjs";
 import { fsyncFile, tempLooksComplete } from "../shared/atomic-write.cjs";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const { buildProcessedRoute } = processResult;
+const { normalizeClipPath } = clipPath;
 
 // Large-file-safe reader shared with the main process (native JSON.parse under
 // V8's string cap, stream-json above it). Loaded defensively: it pulls in
@@ -39,86 +44,6 @@ const NUM_WORKERS = positional[2]
 
 // Only process clips on or after this date (YYYY-MM-DD, inclusive).
 const CUTOFF_DATE = "2025-12-01";
-
-async function discoverFrontCameraFiles(clipsDir) {
-  // First pass: walk through non-date folders to collect all date directories
-  // and any front-camera files sitting at non-date levels.
-  const dateEntries = []; // { dirPath, dateDir }
-  const rootFiles   = []; // files found outside date directories
-
-  await collectDateEntries(clipsDir, dateEntries, rootFiles, 0);
-  dateEntries.sort((a, b) => a.dateDir.localeCompare(b.dateDir));
-
-  const files = [...rootFiles];
-
-  // Second pass: scan each date directory with progress display
-  const totalDirs = dateEntries.length;
-  for (let i = 0; i < dateEntries.length; i++) {
-    process.stdout.write(`\rSCAN ${i + 1}/${totalDirs}`);
-
-    const { dirPath, dateDir } = dateEntries[i];
-    let mp4s;
-    try {
-      mp4s = await readdir(dirPath);
-    } catch {
-      continue;
-    }
-
-    for (const name of mp4s) {
-      if (name.endsWith("-front.mp4")) {
-        files.push({
-          relativePath: path.join(dateDir, name),
-          fullPath: path.join(dirPath, name),
-          dateDir,
-        });
-      }
-    }
-  }
-  if (totalDirs > 0) process.stdout.write('\n');
-
-  return files;
-}
-
-const DATE_PREFIX_RE = /^\d{4}-\d{2}-\d{2}/;
-
-async function collectDateEntries(dir, dateEntries, rootFiles, depth) {
-  if (depth > 3) return;
-
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch (err) {
-    if (depth === 0) {
-      console.error(`Failed to read clips directory: ${err.message}`);
-      process.exit(1);
-    }
-    return;
-  }
-
-  for (const e of entries) {
-    if (e.isDirectory()) {
-      if (DATE_PREFIX_RE.test(e.name)) {
-        // Date-named directory — add it for the second-pass scan
-        if (e.name.slice(0, 10) >= CUTOFF_DATE) {
-          dateEntries.push({ dirPath: path.join(dir, e.name), dateDir: e.name });
-        }
-      } else if (e.name === 'RecentClips') {
-        // Only recurse into RecentClips — ignore SavedClips, SentryClips, etc.
-        await collectDateEntries(path.join(dir, e.name), dateEntries, rootFiles, depth + 1);
-      }
-    } else if (e.name.endsWith("-front.mp4")) {
-      // Front-camera file sitting outside a date directory
-      const dateDir = e.name.slice(0, 10);
-      if (dateDir >= CUTOFF_DATE) {
-        rootFiles.push({
-          relativePath: e.name,
-          fullPath: path.join(dir, e.name),
-          dateDir,
-        });
-      }
-    }
-  }
-}
 
 // Shared-queue worker pool: every worker pulls the next file when it finishes
 // its current one, so all workers stay busy until the queue is empty. The old
@@ -219,18 +144,26 @@ async function main() {
   const processedSet = new Set();
   if (existingData.processedFiles) {
     for (const f of existingData.processedFiles) {
-      processedSet.add(f);
-      processedSet.add(f.replace(/\\/g, "/"));
+      processedSet.add(normalizeClipPath(f));
     }
   }
 
   // Discover files
   console.log("Scanning for front camera clips...");
-  const allFiles = await discoverFrontCameraFiles(CLIPS_DIR);
-  console.log(`Found ${allFiles.length} front camera clips`);
+  const discovery = await discoverProcessingFiles(CLIPS_DIR, {
+    cutoffDate: CUTOFF_DATE,
+    processedFiles: existingData.processedFiles ?? [],
+    onProgress: ({ current, total }) => {
+      if (total > 0) process.stdout.write(`\rSCAN ${current}/${total}`);
+    },
+  });
+  const allFiles = discovery.files;
+  if (discovery.recentCount > 0) process.stdout.write('\n');
+  console.log(`Found ${discovery.recentCount} RecentClips front camera clips` +
+    `${discovery.gapFillCount > 0 ? ` + ${discovery.gapFillCount} event gap-fill candidate(s)` : ''}`);
 
   // Filter already processed
-  const newFiles = allFiles.filter((f) => !processedSet.has(f.relativePath) && !processedSet.has(f.relativePath.replace(/\\/g, "/")));
+  const newFiles = allFiles.filter((f) => !processedSet.has(f.relativePath));
   console.log(`New files to process: ${newFiles.length}`);
 
   if (newFiles.length === 0) {
@@ -249,6 +182,7 @@ async function main() {
   let filesWithGPS = 0;
   let totalPoints = 0;
   let errors = 0;
+  let parkedEventSkipped = 0;
   let totalDone = 0;
 
   // Time-based checkpoints. The old every-100-files policy rewrote the whole
@@ -262,12 +196,15 @@ async function main() {
   let checkpointBusy = false;
   let pendingCheckpoint = null;
 
-  const processedFiles = [...(existingData.processedFiles || [])];
+  const processedFiles = [...new Set(
+    (existingData.processedFiles || []).map(normalizeClipPath),
+  )];
   const routeMap = new Map();
 
   if (existingData.routes) {
     for (const r of existingData.routes) {
-      routeMap.set(r.file.replace(/\\/g, "/"), r);
+      const normalizedFile = normalizeClipPath(r.file);
+      routeMap.set(normalizedFile, { ...r, file: normalizedFile });
     }
   }
 
@@ -277,26 +214,17 @@ async function main() {
   const onResult = ({ result }) => {
     totalDone++;
 
-    processedFiles.push(result.relativePath);
+    const processed = buildProcessedRoute(result);
+    processedFiles.push(processed.processedPath);
 
     if (result.error) {
       errors++;
-    } else if (result.hasGPS) {
+    } else if (processed.parkedEventSkipped) {
+      parkedEventSkipped++;
+    } else if (processed.route) {
       filesWithGPS++;
-      totalPoints += result.points.length;
-      const norm = result.relativePath.replace(/\\/g, "/");
-      routeMap.set(norm, {
-        file: result.relativePath,
-        date: result.dateDir,
-        points: result.points,
-        gearStates: result.gearStates,
-        autopilotStates: result.autopilotStates,
-        speeds: result.speeds,
-        accelPositions: result.accelPositions,
-        rawParkCount: result.rawParkCount,
-        rawFrameCount: result.rawFrameCount,
-        gearRuns: result.gearRuns,
-      });
+      totalPoints += processed.route.points.length;
+      routeMap.set(processed.processedPath, processed.route);
     }
 
     // Progress display
@@ -337,6 +265,7 @@ async function main() {
   console.log(`  Files with GPS:  ${filesWithGPS}`);
   console.log(`  Total points:    ${totalPoints}`);
   console.log(`  Errors:          ${errors}`);
+  console.log(`  Parked event gap-fill clips skipped: ${parkedEventSkipped}`);
 
   // Group into drives
   console.log("\nGrouping into drives...");
@@ -383,6 +312,7 @@ async function main() {
   const noSei = totalDone - filesWithGPS;
   console.log(`SUMMARY: scanned ${totalDone} clip(s) → ${drives.length} drive(s)` +
     `${noSei > 0 ? `, ${noSei} without GPS` : ''}${errors > 0 ? `, ${errors} error(s)` : ''}` +
+    `${parkedEventSkipped > 0 ? `, ${parkedEventSkipped} parked event candidate(s) skipped` : ''}` +
     `${droppedCount > 0 ? `, ${droppedCount} dropped` : ''} in ${elapsed}s`);
 }
 
