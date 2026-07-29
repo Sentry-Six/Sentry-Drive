@@ -26,7 +26,10 @@
     ],
     "asarUnpack": [
       "src/processing/**",
-      "src/shared/**"
+      "src/shared/**",
+      "src/main/drive-data-reader.cjs",
+      "node_modules/stream-json/**",
+      "node_modules/stream-chain/**"
     ],
     "artifactName": "Sentry-Drive-Setup-${version}.${ext}",
     "win": {

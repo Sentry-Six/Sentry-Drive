@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkDriveData: (dir) => ipcRenderer.invoke('check-drive-data', dir),
   getCpuCount: () => ipcRenderer.invoke('get-cpu-count'),
   loadAndGroupDrives: (fp) => ipcRenderer.invoke('load-and-group-drives', fp),
-  getDriveDetail: (driveId) => ipcRenderer.invoke('get-drive-detail', driveId),
+  getDriveDetail: (driveId, gen) => ipcRenderer.invoke('get-drive-detail', { driveId, gen }),
   onLoadProgress: (cb) => {
     const listener = (_ev, data) => cb(data);
     ipcRenderer.on('load-progress', listener);
@@ -28,9 +28,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('repair-progress', listener);
     return () => ipcRenderer.off('repair-progress', listener);
   },
-  getDriveTags: (fp) => ipcRenderer.invoke('get-drive-tags', fp),
   setDriveTags: (args) => ipcRenderer.invoke('set-drive-tags', args),
-  getAllTagNames: (fp) => ipcRenderer.invoke('get-all-tag-names', fp),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   reverseGeocode: (args) => ipcRenderer.invoke('reverse-geocode', args),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),

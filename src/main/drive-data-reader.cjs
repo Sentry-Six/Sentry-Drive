@@ -38,37 +38,64 @@ const Assembler = AssemblerModule.Assembler ?? AssemblerModule;
 // UTF-8 (byte size >= char count, so a 480 MB file is always parseable).
 const FAST_PARSE_LIMIT_BYTES = 480 * 1024 * 1024;
 
-// Stream the file into buffer chunks (driving onProgress), then parse natively.
-function readFast(filePath, totalBytes, onProgress) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let bytesRead = 0;
-    let lastEmit = 0;
-    const rs = fs.createReadStream(filePath);
-    rs.on('data', (chunk) => {
-      chunks.push(chunk);
-      bytesRead += chunk.length;
-      if (onProgress) {
-        const now = Date.now();
-        if (now - lastEmit >= 100) {
-          lastEmit = now;
-          onProgress(bytesRead, totalBytes);
+// Read the whole file into ONE preallocated buffer (driving onProgress), then
+// parse natively. The old chunk-array + Buffer.concat approach held TWO full
+// byte copies of the file at peak (~480 MB of avoidable spike at the size
+// cap); reading into an exact-sized buffer holds one. The handle is opened
+// first and sized via its own fstat, so an atomic rename-over (Sentry USB
+// re-exporting the file) between stat and open can't truncate the read —
+// the handle stays on the original inode. A stat after the read catches
+// in-place modification during it; any instability retries the whole read
+// once from a fresh handle, then fails loudly — partial bytes are never
+// parsed. Returns the sentinel OVERSIZED if the handle's own size exceeds
+// the fast-parse cap (the file grew past it after the caller's stat) so the
+// caller can fall back to the streaming path instead of risking
+// ERR_STRING_TOO_LONG.
+const OVERSIZED = Symbol('oversized');
+async function readFast(filePath, onProgress) {
+  for (let attempt = 0; ; attempt++) {
+    const fh = await fs.promises.open(filePath, 'r');
+    let str = null;
+    try {
+      const st = await fh.stat();
+      const size = st.size;
+      if (size > FAST_PARSE_LIMIT_BYTES) return OVERSIZED;
+      let buf = Buffer.allocUnsafe(size);
+      let bytesRead = 0;
+      let lastEmit = 0;
+      while (bytesRead < size) {
+        const { bytesRead: n } = await fh.read(buf, bytesRead, size - bytesRead, bytesRead);
+        if (n === 0) break; // EOF before the fstat'd size — file shrank mid-read
+        bytesRead += n;
+        if (onProgress) {
+          const now = Date.now();
+          if (now - lastEmit >= 100) {
+            lastEmit = now;
+            onProgress(bytesRead, size);
+          }
         }
       }
-    });
-    rs.on('end', () => {
-      try {
-        // The final parse is synchronous (~1-4 s at the size cap); the
-        // renderer lives in its own process so the UI stays responsive.
-        const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        chunks.length = 0;
-        resolve(data);
-      } catch (err) {
-        reject(err);
+      const after = await fh.stat().catch(() => null);
+      const stable = bytesRead === size &&
+        after && after.size === st.size && after.mtimeMs === st.mtimeMs;
+      if (stable) {
+        // Tight lifetimes for the giant intermediates: the buffer is released
+        // before JSON.parse builds the object graph.
+        str = buf.toString('utf8');
       }
-    });
-    rs.on('error', reject);
-  });
+      buf = null;
+    } finally {
+      await fh.close().catch(() => {});
+    }
+    if (str !== null) {
+      // The parse is synchronous (~1-4 s at the size cap); the renderer lives
+      // in its own process so the UI stays responsive.
+      return JSON.parse(str);
+    }
+    // The file changed underneath us — retry once (the writer has usually
+    // finished by then), then surface a real error instead of corrupt data.
+    if (attempt >= 1) throw new Error('drive-data.json changed while being read');
+  }
 }
 
 // Token-streaming reader (the original OOM-safe path), one stream, one pass.
@@ -179,8 +206,14 @@ async function readDriveData(filePath, opts = {}) {
   const totalBytes = fs.statSync(filePath).size;
 
   let result;
+  let data = OVERSIZED; // sentinel doubles as "take the streaming path"
   if (!forceStreaming && totalBytes <= FAST_PARSE_LIMIT_BYTES) {
-    const data = await readFast(filePath, totalBytes, onProgress);
+    // readFast re-checks size on its own handle and answers OVERSIZED if the
+    // file grew past the cap between our stat and its open — fall through to
+    // streaming in that case rather than risking the V8 string limit.
+    data = await readFast(filePath, onProgress);
+  }
+  if (data !== OVERSIZED) {
     const processedFiles = Array.isArray(data.processedFiles) ? data.processedFiles : [];
     result = {
       processedFiles: wantProcessedFiles ? processedFiles : [],
@@ -188,6 +221,9 @@ async function readDriveData(filePath, opts = {}) {
       routes: Array.isArray(data.routes) ? data.routes : [],
       driveTags: data.driveTags && typeof data.driveTags === 'object' ? data.driveTags : {},
     };
+    // The load path only needs the count — drop the (one string per clip)
+    // array now instead of keeping it alive alongside the routes.
+    if (!wantProcessedFiles) data.processedFiles = null;
   } else {
     result = await readStreaming(filePath, totalBytes, onProgress, wantProcessedFiles);
   }

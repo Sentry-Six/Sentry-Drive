@@ -8,7 +8,7 @@ let mapReady = false;          // style 'load' fired — sources/layers exist
 let pendingMapTasks = [];      // deferred until style load (source data, filters)
 let selectedMarkers = [];      // DOM markers for the selected drive (start/end/replay)
 let drives = [];
-let overviewRoutes = [];   // raw route points for overview map (one per clip)
+let driveCacheGen = null;  // main-process detail-cache generation for `drives`
 let loadedFilePath = null;
 let pendingExternalReload = false; // drive-data.json changed on disk while busy
 let selectedDriveId = null;
@@ -609,7 +609,6 @@ function initTabs() {
 // ─── Footer & Settings ───────────────────────────────────────────────────────
 let updateState = 'idle'; // idle | checking | available | downloading | ready | error
 let updateSkipped = false; // true after user dismisses the update modal this session
-let pendingVersion = '';   // version string from the 'available' event
 let pendingRemoveDrive = null;
 
 function initFooter() {
@@ -1316,8 +1315,6 @@ function applyUpdateStatus({ status, version, percent, message }) {
       break;
 
     case 'available':
-      pendingVersion = version;
-
       // Settings panel
       btn.textContent = 'Update';
       btn.disabled = false;
@@ -1565,7 +1562,7 @@ async function autoLoadDriveData(filePath) {
     pendingExternalReload = false;
     window.electronAPI.watchDriveData(filePath);
     drives = result.drives;
-    overviewRoutes = result.overviewRoutes ?? [];
+    driveCacheGen = result.cacheGen;
     refreshAllTags(result.driveTags ?? {});
     renderTagFilter();
     renderDriveStats(drives, result);
@@ -1834,7 +1831,9 @@ function initViewDrivesTab() {
       // Without this the line lingered until the next map render (e.g. selecting
       // another drive).
       renderOverviewOnMap();
-      renderDriveStats(drives, { totalRoutes: 0, processedFileCount: 0 });
+      // Keep the existing meta (hiddenTessieDrives etc.) — passing zeros here
+      // used to clobber lastDrivesMeta after a removal.
+      renderDriveStats(drives, lastDrivesMeta ?? { totalRoutes: 0, processedFileCount: 0 });
       updateTessieButtonStates();
     } finally {
       hideLoading();
@@ -1888,7 +1887,9 @@ function initViewDrivesTab() {
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       renderDriveList(drives); // also clears any multi-selection
       renderOverviewOnMap();
-      renderDriveStats(drives, { totalRoutes: 0, processedFileCount: 0 });
+      // Keep the existing meta (hiddenTessieDrives etc.) — passing zeros here
+      // used to clobber lastDrivesMeta after a removal.
+      renderDriveStats(drives, lastDrivesMeta ?? { totalRoutes: 0, processedFileCount: 0 });
       updateTessieButtonStates();
     } finally {
       hideLoading();
@@ -2508,29 +2509,49 @@ function initTessieImport() {
   });
 }
 
-async function reloadDrivesAfterWrite() {
-  if (!loadedFilePath) return;
-  showLoading();
-  try {
-    const reloaded = await window.electronAPI.loadAndGroupDrives(loadedFilePath);
-    if (reloaded.success) {
-      drives = reloaded.drives;
-      overviewRoutes = reloaded.overviewRoutes ?? [];
-      refreshAllTags(reloaded.driveTags ?? {});
-      // Let the loading overlay paint one frame before the synchronous
-      // re-render (building the card list + map layers) briefly blocks the
-      // renderer — otherwise the overlay appears frozen during the rebuild.
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      renderTagFilter();
-      renderDriveStats(drives, reloaded);
-      renderDriveList(drives);
-      renderOverviewOnMap();
-      updateRevertButton();
-      updateTessieButtonStates();
+// Single-flight: overlapping reloads (e.g. the file watcher firing while an
+// import's own reload runs) would double peak memory in the main process and
+// can interleave two full parses. Coalesce into ONE shared promise: a request
+// during a reload queues exactly one follow-up pass, and every caller awaits
+// through it — so an awaited reload always resolves with current data, never
+// an early "someone else is on it" return.
+let _reloadPromise = null;
+let _reloadQueued = false;
+
+function reloadDrivesAfterWrite() {
+  if (!loadedFilePath) return Promise.resolve();
+  if (_reloadPromise) { _reloadQueued = true; return _reloadPromise; }
+  _reloadPromise = (async () => {
+    try {
+      do {
+        _reloadQueued = false;
+        showLoading();
+        try {
+          const reloaded = await window.electronAPI.loadAndGroupDrives(loadedFilePath);
+          if (reloaded.success) {
+            drives = reloaded.drives;
+            driveCacheGen = reloaded.cacheGen;
+            refreshAllTags(reloaded.driveTags ?? {});
+            // Let the loading overlay paint one frame before the synchronous
+            // re-render (building the card list + map layers) briefly blocks the
+            // renderer — otherwise the overlay appears frozen during the rebuild.
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            renderTagFilter();
+            renderDriveStats(drives, reloaded);
+            renderDriveList(drives);
+            renderOverviewOnMap();
+            updateRevertButton();
+            updateTessieButtonStates();
+          }
+        } finally {
+          hideLoading();
+        }
+      } while (_reloadQueued); // pick up a change that arrived mid-reload
+    } finally {
+      _reloadPromise = null;
     }
-  } finally {
-    hideLoading();
-  }
+  })();
+  return _reloadPromise;
 }
 
 // Imported (non-dashcam) drives — Tessie, Teslascope, and future services.
@@ -2578,7 +2599,7 @@ async function revertGPS() {
   const reloaded = await window.electronAPI.loadAndGroupDrives(loadedFilePath);
   if (reloaded.success) {
     drives = reloaded.drives;
-    overviewRoutes = reloaded.overviewRoutes ?? [];
+    driveCacheGen = reloaded.cacheGen;
     refreshAllTags(reloaded.driveTags ?? {});
     renderTagFilter();
     renderDriveStats(drives, reloaded);
@@ -2662,7 +2683,7 @@ async function repairGPS() {
     const reloaded = await window.electronAPI.loadAndGroupDrives(loadedFilePath);
     if (reloaded.success) {
       drives = reloaded.drives;
-      overviewRoutes = reloaded.overviewRoutes ?? [];
+      driveCacheGen = reloaded.cacheGen;
       refreshAllTags(reloaded.driveTags ?? {});
       renderTagFilter();
       renderDriveStats(drives, reloaded);
@@ -2719,7 +2740,7 @@ async function loadDrives() {
     pendingExternalReload = false;
     window.electronAPI.watchDriveData(filePath);
     drives = result.drives;
-    overviewRoutes = result.overviewRoutes ?? [];
+    driveCacheGen = result.cacheGen;
     refreshAllTags(result.driveTags ?? {});
     renderTagFilter();
     renderDriveStats(drives, result);
@@ -3865,6 +3886,10 @@ async function selectDrive(drive) {
     return;
   }
 
+  // Stop the previous drive's replay BEFORE freeing its points — a running
+  // replayTick reads replayDrive.points, and freeing first left the interval
+  // dereferencing deleted fields until initReplay finally stopped it.
+  cleanupReplay();
   // Free the previously selected drive's heavy fields before swapping.
   freeDriveDetail(selectedDriveId);
 
@@ -3885,7 +3910,7 @@ async function selectDrive(drive) {
   document.getElementById('btn-back-overview').classList.remove('hidden');
   if (!drive.points) {
     const requestedId = drive.id;
-    const detail = await window.electronAPI.getDriveDetail(drive.id);
+    const detail = await window.electronAPI.getDriveDetail(drive.id, driveCacheGen);
     // Discard if the user navigated away while we were waiting on IPC —
     // otherwise we'd reattach heavy fields to a drive that's no longer selected
     // (and render a stale polyline on top of the current one).
@@ -3931,18 +3956,10 @@ function deselectDrive() {
   // selectedDriveId is null again, so the style pass renders overview mode.
   updateOverviewStyleState();
 
-  // Fit map to all drives
-  const bounds = new maplibregl.LngLatBounds();
-  let any = false;
-  for (const drive of drives) {
-    if (!drive.overviewPoints || drive.overviewPoints.length < 2) continue;
-    const a = drive.overviewPoints[0];
-    const b = drive.overviewPoints[drive.overviewPoints.length - 1];
-    bounds.extend([a[1], a[0]]);
-    bounds.extend([b[1], b[0]]);
-    any = true;
-  }
-  if (any) map.fitBounds(bounds, { padding: 30 });
+  // Fit map to all drives — the exact bounds renderOverviewOnMap computed
+  // from every overview point (fitting endpoints-only here left loop-shaped
+  // routes partly off-screen).
+  if (overviewBounds) map.fitBounds(overviewBounds, { padding: 30 });
 
   // Apply an external drive-data change that arrived while a drive was open.
   if (pendingExternalReload) {
@@ -4064,6 +4081,10 @@ function smoothLatLngsForDisplay(latLngs, iterations = 2) {
 // dashed imports), dim-grey context under a selected drive, hidden when
 // "Hide other drives" is on.
 
+// Bounds covering every drive's overview points, cached by renderOverviewOnMap
+// so deselectDrive can restore the same viewport without recomputing.
+let overviewBounds = null;
+
 // One central place derives the overview layers' visibility and filters from
 // (selectedDriveId, hideOtherDrives). The selected drive draws its own
 // highlighted route, so its grey twin is filtered out of the dim layer.
@@ -4082,11 +4103,20 @@ function updateOverviewStyleState() {
 }
 
 function renderOverviewOnMap() {
+  // Full teardown of any selected-drive state: without cleanupReplay a
+  // replay could keep ticking (and replayDrive kept the old drive's full
+  // points alive), and without freeDriveDetail the previously selected
+  // drive's heavy fields stayed attached — deselectDrive did both, but the
+  // reload/remove paths come through here instead.
+  cleanupReplay();
+  freeDriveDetail(selectedDriveId);
   removeMarkers(selectedMarkers);
   removeMarkers(fsdEventMarkers);
-  replayTrailCtx = null; // release the last drive's trail geometry
   selectedDriveId = null;
   document.getElementById('map-legend').classList.add('hidden');
+  // Match deselectDrive's UI reset — reload paths land here with a drive
+  // still open, and the Back button would otherwise linger over the overview.
+  document.getElementById('btn-back-overview').classList.add('hidden');
 
   // Build one LineString feature per drive. Imported drives are sparse cloud
   // breadcrumbs (15-60 s apart), smoothed so poll intervals don't render as
@@ -4122,34 +4152,12 @@ function renderOverviewOnMap() {
   const tessieLegend = document.querySelector('.legend-tessie');
   if (tessieLegend) tessieLegend.classList.toggle('hidden', !anyTessie);
 
+  // Remember the full-coverage bounds so deselectDrive can restore this exact
+  // viewport (it used to refit from endpoints only, which cut off loops).
+  overviewBounds = features.length > 0 ? bounds : null;
   if (features.length > 0) {
     map.fitBounds(bounds, { padding: 30 });
   }
-}
-
-function downsample(points, maxPoints) {
-  // First pass: remove outlier points that jump >50km from both neighbors
-  const clean = [];
-  for (let i = 0; i < points.length; i++) {
-    const lat = points[i][0], lng = points[i][1];
-    if (Math.abs(lat) < 1 && Math.abs(lng) < 1) continue; // null island
-    if (i === 0 || i === points.length - 1) { clean.push(points[i]); continue; }
-    const prev = points[i - 1], next = points[i + 1];
-    const dPrev = Math.abs(lat - prev[0]) + Math.abs(lng - prev[1]);
-    const dNext = Math.abs(lat - next[0]) + Math.abs(lng - next[1]);
-    // ~0.5 degrees ≈ 50km — if far from both neighbors, skip it
-    if (dPrev > 0.5 && dNext > 0.5) continue;
-    clean.push(points[i]);
-  }
-  if (clean.length <= maxPoints) return clean;
-  // Second pass: evenly sample
-  const step = (clean.length - 1) / (maxPoints - 1);
-  const result = [];
-  for (let i = 0; i < maxPoints - 1; i++) {
-    result.push(clean[Math.round(i * step)]);
-  }
-  result.push(clean[clean.length - 1]);
-  return result;
 }
 
 // Darken a #rrggbb color — the not-yet-traveled route state. 0.45 keeps the
@@ -4228,8 +4236,10 @@ function drawSelectedDrive(drive) {
   const pts = drive.points;
   if (!pts || pts.length < 2) {
     // Nothing drawable — still clear the previous drive's highlighted route
-    // (the old per-layer code cleared it as a side effect of clearLayers).
-    replayTrailCtx = null;
+    // (the old per-layer code cleared it as a side effect of clearLayers),
+    // and stop any replay left over from the previous drive (this early
+    // return used to leave its interval ticking and its points retained).
+    cleanupReplay();
     whenMapReady(() => {
       map.getSource('selected-route').setData(EMPTY_FC);
       map.getSource('selected-traveled').setData(EMPTY_FC);

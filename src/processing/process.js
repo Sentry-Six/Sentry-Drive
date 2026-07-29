@@ -11,8 +11,21 @@ import os from "node:os";
 import { groupIntoDrives, encodeByteField } from "./grouper.js";
 import { fsyncFile, tempLooksComplete } from "../shared/atomic-write.cjs";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Large-file-safe reader shared with the main process (native JSON.parse under
+// V8's string cap, stream-json above it). Loaded defensively: it pulls in
+// stream-chain/stream-json, and this child runs as plain Node in packaged
+// builds (ELECTRON_RUN_AS_NODE — no asar support), so the module and those
+// deps must be asarUnpacked (see package.json build.asarUnpack). If the
+// require ever fails, fall back to the plain readFile path below — the
+// ENOENT-only fresh-start rule still protects the existing file either way.
+let readDriveData = null;
+try {
+  ({ readDriveData } = createRequire(import.meta.url)("../main/drive-data-reader.cjs"));
+} catch { /* fall back to readFile + JSON.parse */ }
 
 const rawArgs = process.argv.slice(2);
 const REPROCESS_ALL = rawArgs.includes("--reprocess-all");
@@ -175,8 +188,13 @@ async function main() {
   // clip is re-extracted.
   let existingData = { processedFiles: [], routes: [], driveTags: {} };
   try {
-    const raw = await readFile(OUTPUT_PATH, "utf-8");
-    const loaded = JSON.parse(raw);
+    let loaded;
+    if (readDriveData) {
+      // Shared large-file-safe reader — handles libraries past V8's string cap.
+      loaded = await readDriveData(OUTPUT_PATH, { wantProcessedFiles: true });
+    } else {
+      loaded = JSON.parse(await readFile(OUTPUT_PATH, "utf-8"));
+    }
     if (REPROCESS_ALL) {
       existingData = { processedFiles: [], routes: [], driveTags: loaded.driveTags || {} };
       console.log(`Reprocess-all mode: discarding ${loaded.processedFiles?.length || 0} processed files / ${loaded.routes?.length || 0} routes (preserving ${Object.keys(loaded.driveTags || {}).length} drive tags)`);
@@ -184,7 +202,17 @@ async function main() {
       existingData = loaded;
       console.log(`Loaded existing data: ${existingData.processedFiles?.length || 0} processed files, ${existingData.routes?.length || 0} routes`);
     }
-  } catch {
+  } catch (err) {
+    // Only a MISSING file means "fresh start". Any other failure (a file too
+    // large for V8's string cap, corrupt JSON, a permission error) used to be
+    // swallowed here too — and the final save would then rewrite the file
+    // WITHOUT the old routes, imported drives, or tags. Abort instead: the
+    // existing drive-data.json is left untouched.
+    if (err.code !== "ENOENT") {
+      console.error(`Failed to read existing ${OUTPUT_PATH}: ${err.message}`);
+      console.error("Aborting so the existing drive data is not overwritten.");
+      process.exit(1);
+    }
     // No existing data, start fresh
   }
 
