@@ -27,7 +27,7 @@ const { geodesicM } = require('../shared/drive-calc.cjs');
 const HOST = 'nominatim.openstreetmap.org';
 const RATE_MS = 1100;          // ≤ 1 req/s per Nominatim policy (+ margin)
 const KEY_DECIMALS = 5;        // ~1.1 m grouping — house-level distinct
-const UA = 'Sentry-Drive/1.0 (https://github.com/JeffFromTheIRS/Sentry-Drive)';
+const UA = 'Sentry-Drive/1.0 (https://github.com/Sentry-Six/Sentry-Drive)';
 // Reverse geocoding snaps to the NEAREST mapped feature, which is not always
 // where the car is — only trust a feature's name/house number when it's
 // within this distance of the queried coordinates.

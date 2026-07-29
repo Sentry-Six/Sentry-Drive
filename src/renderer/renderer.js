@@ -647,10 +647,14 @@ let updateSkipped = false; // true after user dismisses the update modal this se
 let pendingRemoveDrive = null;
 
 function initFooter() {
-  // GitHub link opens in external browser
+  // GitHub / Discord links open in the external browser
   document.getElementById('link-github').addEventListener('click', (e) => {
     e.preventDefault();
-    window.electronAPI.openExternal('https://github.com/JeffFromTheIRS/Sentry-Drive');
+    window.electronAPI.openExternal('https://github.com/Sentry-Six/Sentry-Drive');
+  });
+  document.getElementById('link-discord').addEventListener('click', () => {
+    // Same invite as the README badge
+    window.electronAPI.openExternal('https://discord.gg/9QZEzVwdnt');
   });
 
   // Settings modal
@@ -1208,7 +1212,7 @@ async function initChangelogModal() {
   });
 
   ghBtn.addEventListener('click', () => {
-    window.electronAPI.openExternal('https://github.com/JeffFromTheIRS/Sentry-Drive/releases');
+    window.electronAPI.openExternal('https://github.com/Sentry-Six/Sentry-Drive/releases');
   });
 
   const result = await window.electronAPI.getChangelog();
@@ -4081,6 +4085,57 @@ function removeMarkers(arr) {
   document.querySelectorAll('#map .map-tooltip').forEach((t) => t.remove());
 }
 
+// Painted-ink measurement for a marker label: rasterize the glyph at 8x,
+// pixel-scan the alpha channel, and return the ink center relative to the
+// text origin plus the metrics the layout math needs. Canvas and DOM share
+// the same text rasterizer, so this is where the letter ACTUALLY lands —
+// immune to the ~0.2px drift in the font's declared bounding boxes. Results
+// are cached per label+size, but only once the real font has loaded, so an
+// early fallback-font measurement can't poison the session.
+function measureGlyphInk(label, px) {
+  const font = `800 ${px}px 'Noto Sans', sans-serif`;
+  const cache = (measureGlyphInk._cache ??= new Map());
+  const key = `${label}|${px}`;
+  if (cache.has(key)) return cache.get(key);
+
+  const S = 8; // supersample: 1/8px ink resolution
+  const canvas = document.createElement('canvas');
+  canvas.width = px * 4 * S;
+  canvas.height = px * 4 * S;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.scale(S, S);
+  ctx.font = font;
+  const m = ctx.measureText(label);
+  if (m.fontBoundingBoxAscent === undefined) return null;
+  const originX = px;
+  const baselineY = px * 2;
+  ctx.fillStyle = '#fff';
+  ctx.fillText(label, originX, baselineY);
+  const img = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  let minX = Infinity, maxX = -1, minY = Infinity, maxY = -1;
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) {
+      if (img[(y * canvas.width + x) * 4 + 3] > 16) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return null; // nothing painted (blank label)
+  const result = {
+    cx: (minX + maxX + 1) / 2 / S - originX,     // ink center vs text origin
+    cy: (minY + maxY + 1) / 2 / S - baselineY,   // negative = above baseline
+    width: m.width,
+    fontAscent: m.fontBoundingBoxAscent,
+    fontDescent: m.fontBoundingBoxDescent,
+  };
+  // Cache only measurements taken with the real font in place.
+  if (document.fonts?.check?.(font)) cache.set(key, result);
+  return result;
+}
+
 // Circle DOM marker (start/end/FSD events) with a hover tooltip — replaces
 // L.circleMarker + bindTooltip. Anchored at its center like the old radius-
 // based markers. `label` centers a single letter inside the dot.
@@ -4108,17 +4163,22 @@ function makeDotMarker(latLng, { fill, radius = 7, strokeW = 2, opacity = 1, too
     lbl.style.lineHeight = '1';
     lbl.style.textShadow = '0 1px 2px rgba(0, 0, 0, 0.5)'; // legibility on any fill
     // Flex centers the em BOX / advance width, not the ink: where the letter
-    // actually lands depends on the font's ascent/descent split and side
-    // bearings. Measure the real ink bounds on both axes and shift the ink
-    // center onto the box center — exact for whatever font actually loaded.
-    const ctx = (makeDotMarker._mctx ??= document.createElement('canvas').getContext('2d'));
-    ctx.font = `800 ${px}px 'Noto Sans', sans-serif`;
-    const m = ctx.measureText(label);
-    if (m.fontBoundingBoxAscent !== undefined) {
-      const dy = (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2
-               - (m.fontBoundingBoxAscent - m.fontBoundingBoxDescent) / 2;
-      const dx = m.width / 2
-               - (m.actualBoundingBoxRight - m.actualBoundingBoxLeft) / 2;
+    // actually lands depends on the font's ascent/descent split, side
+    // bearings, and rasterization. Font metrics proved ~0.2px off from the
+    // painted truth, so rasterize the glyph once (supersampled), scan the
+    // actual ink pixels, and shift the painted ink center onto the disc
+    // center — exact for whatever font actually loaded. Cached per label+size
+    // once the real font is available.
+    const ink = measureGlyphInk(label, px);
+    if (ink) {
+      // Slight rightward bias beyond dead-center: caps like A/D carry their
+      // visual weight left, so pixel-perfect reads a hair left in a disc.
+      const opticalDx = 0.5;
+      // Span box is m.width × px (line-height:1). The baseline sits at
+      // half-leading + ascent from the box top; the origin at the box left.
+      const originY = (px - (ink.fontAscent + ink.fontDescent)) / 2 + ink.fontAscent;
+      const dx = ink.width / 2 - ink.cx + opticalDx;
+      const dy = px / 2 - (originY + ink.cy);
       lbl.style.transform = `translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px)`;
     }
     el.appendChild(lbl);

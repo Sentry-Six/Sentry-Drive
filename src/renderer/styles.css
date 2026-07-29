@@ -3005,9 +3005,12 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 
 /* ── Loading Overlay ───────────────────────────────────────────────────── */
 #loading-overlay {
-  position: absolute;
+  /* Fixed + above every modal (highest sibling is 9600): a data load must
+     block the whole app — panel tabs, footer links, settings — not just the
+     map it used to cover when it lived inside #map-container. */
+  position: fixed;
   inset: 0;
-  z-index: 800;
+  z-index: 9700;
   display: flex;
   align-items: center;
   justify-content: center;

@@ -404,7 +404,7 @@ ipcMain.handle('download-update', () => autoUpdater.downloadUpdate().catch(() =>
 ipcMain.handle('install-update', () => autoUpdater.quitAndInstall(false, true));
 
 ipcMain.handle('fetch-remote-changelog', () => {
-  const url = 'https://raw.githubusercontent.com/JeffFromTheIRS/Sentry-Drive/main/changelog.json';
+  const url = 'https://raw.githubusercontent.com/Sentry-Six/Sentry-Drive/main/changelog.json';
   return new Promise((resolve) => {
     const req = require('https').get(
       url,
