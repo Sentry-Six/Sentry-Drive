@@ -1,5 +1,6 @@
 ﻿.claude
 node_modules/
+docs/superpowers/
 dist/
 drive-data.json
 *.bak
