@@ -559,6 +559,35 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   padding-bottom: 8px;
 }
 
+#drive-pager {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 7px 4px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+#drive-pager button {
+  width: 28px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: pointer;
+}
+
+#drive-pager button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .drive-date-header {
   position: sticky;
   top: 0;

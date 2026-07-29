@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, safeStorage, utilityProcess } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -8,14 +8,9 @@ const fs = require('fs');
 const v8 = require('v8');
 const { geodesicM, GEAR_PARK, CLIP_DURATION_MS, DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
 
-// Give V8 more old-space headroom so the main process can parse large
-// drive-data.json files (hundreds of MB to ~1GB). Must be set before
-// app.whenReady(). The renderer inherits the same flag.
-app.commandLine.appendSwitch('js-flags', '--max-old-space-size=8192');
-
 let mainWindow;
 let activeChild = null;
-let driveDetailCache = null;
+let driveLoaderClient = null;
 
 // ─── drive-data.json reading ─────────────────────────────────────────────────
 // All reads go through src/main/drive-data-reader.cjs: native JSON.parse for
@@ -41,6 +36,7 @@ require('../processing/teslascope-api.cjs').setLogger(logger);
 require('../processing/tessie-api.cjs').setLogger?.(logger);
 
 app.on('before-quit', () => {
+  driveLoaderClient?.close().catch(() => {});
   logger.info('main', 'app quitting');
   logger.flushNow();
 });
@@ -98,16 +94,16 @@ ipcMain.handle('download-logs', async () => {
   }
 });
 
-function downsampleForIPC(pts, maxPts) {
-  if (!pts || pts.length === 0) return [];
-  if (pts.length <= maxPts) return pts.map((p) => [p[0], p[1]]);
-  const result = [];
-  const step = (pts.length - 1) / (maxPts - 1);
-  for (let i = 0; i < maxPts; i++) {
-    const p = pts[Math.round(i * step)];
-    result.push([p[0], p[1]]);
-  }
-  return result;
+function getDriveLoaderClient() {
+  if (driveLoaderClient) return driveLoaderClient;
+  const { createDriveLoaderClient } = require('./drive-loader-client.cjs');
+  driveLoaderClient = createDriveLoaderClient({
+    fork: utilityProcess.fork.bind(utilityProcess),
+    workerPath: path.join(__dirname, 'drive-loader-worker.cjs'),
+    cacheRoot: path.join(app.getPath('temp'), 'sentry-drive', 'load-cache'),
+    logger,
+  });
+  return driveLoaderClient;
 }
 
 // ─── Window State Persistence ────────────────────────────────────────────────
@@ -182,11 +178,6 @@ function createWindow() {
   if (state.isFullScreen) mainWindow.setFullScreen(true);
 
   mainWindow.on('close', saveWindowState);
-  // On macOS the process outlives the last window (window-all-closed keeps it
-  // alive) — drop the serialized detail cache so a closed UI doesn't pin the
-  // whole GPS history in RSS. Reopening reloads from disk anyway.
-  mainWindow.on('closed', () => { driveDetailCache = null; });
-
   // DevTools shortcuts (application menu is disabled, so wire them here).
   mainWindow.webContents.on('before-input-event', (_e, input) => {
     if (input.type !== 'keyDown') return;
@@ -392,9 +383,8 @@ ipcMain.handle('get-changelog', () => {
   }
 });
 
-// Serialize loads: two overlapping full parses would double peak memory, and
-// both rebuild the single global driveDetailCache. Chained like the write
-// lock — a second load waits for the first, then re-reads fresh state.
+// Serialize loads because each one replaces the utility process's disposable
+// disk index. A second load waits for the first, then re-reads fresh state.
 let driveLoadChain = Promise.resolve();
 function withDriveLoadLock(fn) {
   const result = driveLoadChain.then(fn, fn);
@@ -402,13 +392,21 @@ function withDriveLoadLock(fn) {
   return result;
 }
 
-// Bumped on every completed load; get-drive-detail rejects a stale generation
-// so a reload can never serve detail for a same-numbered drive from a
-// different load (drive ids restart at 0 every load).
+// Bumped on every completed load. Summary/detail requests carry this generation
+// so a reload can never serve data for a same-numbered drive from another file.
 let driveDetailGen = 0;
 
 ipcMain.handle('load-and-group-drives', (_e, filePath) => withDriveLoadLock(async () => {
   try {
+    const loaderResult = await getDriveLoaderClient().load(filePath, (progress) => {
+      mainWindow?.webContents.send('load-progress', progress);
+    });
+    driveDetailGen++;
+    logger.info('main', `loaded ${loaderResult.totalDriveCount} drive(s) from ${loaderResult.totalRoutes} clips — ${filePath}`);
+    return { ...loaderResult, cacheGen: driveDetailGen };
+
+    /* Legacy in-main loader retained below temporarily while the disk-backed
+       loader is exercised; unreachable by design. */
     const sendProgress = (phase, current, total) => {
       mainWindow?.webContents.send('load-progress', { phase, current, total });
     };
@@ -540,17 +538,29 @@ ipcMain.handle('load-and-group-drives', (_e, filePath) => withDriveLoadLock(asyn
   }
 }));
 
-// Accepts the legacy bare-id form and the {driveId, gen} form; a mismatched
-// generation means the cache was rebuilt by a newer load since the renderer
-// got this drive's summary — refuse rather than serve another load's data.
-ipcMain.handle('get-drive-detail', (_e, arg) => {
-  const driveId = (arg && typeof arg === 'object') ? arg.driveId : arg;
-  const gen = (arg && typeof arg === 'object') ? arg.gen : null;
-  if (!driveDetailCache) return { success: false, error: 'No drives loaded' };
-  if (gen != null && gen !== driveDetailGen) return { success: false, error: 'Drive list was reloaded' };
-  const buf = driveDetailCache.get(driveId);
-  if (!buf) return { success: false, error: 'Drive not found' };
-  return { success: true, ...v8.deserialize(buf) };
+ipcMain.handle('list-drive-summaries', async (_e, query) => {
+  try {
+    if (query?.gen != null && query.gen !== driveDetailGen) {
+      return { success: false, error: 'Drive list was reloaded', code: 'STALE_DRIVE_DATA' };
+    }
+    return { success: true, ...(await getDriveLoaderClient().list(query ?? {})) };
+  } catch (err) {
+    return { success: false, error: err.message, code: err.code };
+  }
+});
+
+ipcMain.handle('get-drive-detail', async (_e, arg) => {
+  try {
+    const driveId = (arg && typeof arg === 'object') ? arg.driveId : arg;
+    const gen = (arg && typeof arg === 'object') ? arg.gen : null;
+    if (gen != null && gen !== driveDetailGen) {
+      return { success: false, error: 'Drive list was reloaded', code: 'STALE_DRIVE_DATA' };
+    }
+    const detail = await getDriveLoaderClient().detail(driveId);
+    return detail ? { success: true, ...detail } : { success: false, error: 'Drive not found' };
+  } catch (err) {
+    return { success: false, error: err.message, code: err.code };
+  }
 });
 
 ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount, reprocessAll }) => {

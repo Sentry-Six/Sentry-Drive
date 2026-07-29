@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkDriveData: (dir) => ipcRenderer.invoke('check-drive-data', dir),
   getCpuCount: () => ipcRenderer.invoke('get-cpu-count'),
   loadAndGroupDrives: (fp) => ipcRenderer.invoke('load-and-group-drives', fp),
+  listDriveSummaries: (query) => ipcRenderer.invoke('list-drive-summaries', query),
   getDriveDetail: (driveId, gen) => ipcRenderer.invoke('get-drive-detail', { driveId, gen }),
   onLoadProgress: (cb) => {
     const listener = (_ev, data) => cb(data);
