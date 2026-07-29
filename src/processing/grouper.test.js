@@ -176,6 +176,18 @@ test('duplicate file paths (mixed separators) are deduped', () => {
   assert.equal(drives[0].routeFiles.length, 1);
 });
 
+test('RecentClips-prefixed and canonical route paths are one clip', () => {
+  const drives = drivesOf([
+    testRoute('RecentClips/2026-07-27/2026-07-27_14-01-02-front.mp4', [[37, -122]]),
+    testRoute('2026-07-27/2026-07-27_14-01-02-front.mp4', [[38, -123]]),
+  ]);
+  assert.equal(drives.length, 1);
+  assert.deepEqual(
+    drives[0].routeFiles,
+    ['2026-07-27/2026-07-27_14-01-02-front.mp4'],
+  );
+});
+
 test('event-folder routes are filtered out of grouping (grouper.rs:3314)', () => {
   // Three routes in the same minute; only the RecentClips one survives.
   const drives = drivesOf([
@@ -185,7 +197,7 @@ test('event-folder routes are filtered out of grouping (grouper.rs:3314)', () =>
   ]);
   assert.equal(drives.length, 1);
   assert.equal(drives[0].routeFiles.length, 1);
-  assert.equal(drives[0].routeFiles[0].startsWith('RecentClips/'), true);
+  assert.equal(drives[0].routeFiles[0], '2025-01-15/2025-01-15_12-30-00-front.mp4');
 });
 
 test('July 27 manual save: driving SavedClips fill the RecentClips hole', () => {
@@ -252,6 +264,13 @@ test('May 17 regression: event clips do not create a phantom parked drive', () =
     'RecentClips/2026-05-17/2026-05-17_18-50-34-front.mp4',
     'RecentClips/2026-05-17/2026-05-17_18-51-34-front.mp4',
   ];
+  const expectedDriveFiles = [
+    '2026-05-17/2026-05-17_18-47-34-front.mp4',
+    '2026-05-17/2026-05-17_18-48-34-front.mp4',
+    '2026-05-17/2026-05-17_18-49-34-front.mp4',
+    '2026-05-17/2026-05-17_18-50-34-front.mp4',
+    '2026-05-17/2026-05-17_18-51-34-front.mp4',
+  ];
   driveStarts.forEach((f, i) => {
     routes.push(testRoute(f, [[39.198835 + i * 1e-4, -76.795246]]));
   });
@@ -259,9 +278,7 @@ test('May 17 regression: event clips do not create a phantom parked drive', () =
   const drives = drivesOf(routes);
   assert.equal(drives.length, 1);
   assert.equal(drives[0].routeFiles.length, driveStarts.length);
-  for (const f of drives[0].routeFiles) {
-    assert.equal(f.startsWith('RecentClips/'), true);
-  }
+  assert.deepEqual(drives[0].routeFiles, expectedDriveFiles);
 });
 
 // ─── BLE location-name rollup (Rust roll_up_telemetry, grouper.rs:2785) ───────

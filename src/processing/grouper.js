@@ -19,6 +19,7 @@ import {
   MPS_TO_KMH,
 } from "../shared/drive-calc.cjs";
 import eventGapFill from "../shared/event-gap-fill.cjs";
+import clipPath from "../shared/clip-path.cjs";
 
 const {
   isEventFolderPath,
@@ -26,6 +27,7 @@ const {
   telemetryHasDriving,
   selectGapFill,
 } = eventGapFill;
+const { normalizeClipPath } = clipPath;
 
 export { isEventFolderPath };
 
@@ -73,7 +75,7 @@ export function groupIntoDrives(routes) {
   for (const r of routes) {
     // Event paths stay partitioned until the gap-fill selector can distinguish
     // moved driving footage from duplicates and parked Sentry recordings.
-    const norm = String(r?.file ?? "").replace(/\\/g, "/");
+    const norm = normalizeClipPath(r?.file);
     if (seen.has(norm)) continue;
     seen.add(norm);
     if (isEventFolderPath(norm)) {

@@ -3,34 +3,17 @@
 // Rust-parity event-folder gap-fill selection. Shared as CommonJS so both the
 // ESM processing pipeline and CommonJS disk-backed loader use one decision.
 
+const {
+  isEventFolderPath,
+  parseClipTimestampMs,
+} = require('./clip-path.cjs');
+
 const GEAR_PARK = 0;
 const GAP_FILL_MIN_MS = 90 * 1000;
 const GAP_FILL_MAX_MS = 30 * 60 * 1000;
 const GAP_FILL_ADJ_MS = 3 * 60 * 1000;
 const GAP_FILL_DUP_MS = 30 * 1000;
 const GAP_FILL_MIN_SPEED_MPS = 0.5;
-const FILE_TIMESTAMP_RE = /(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/;
-
-function normalizePath(file) {
-  return String(file ?? '').replace(/\\/g, '/');
-}
-
-function isEventFolderPath(file) {
-  const normalized = normalizePath(file);
-  return normalized.startsWith('SavedClips/') || normalized.startsWith('SentryClips/');
-}
-
-// Event paths contain the event timestamp before the clip timestamp. Always
-// parse the final filename component so the route lands in its real minute.
-function parseClipTimestampMs(file) {
-  const normalized = normalizePath(file);
-  const filename = normalized.slice(normalized.lastIndexOf('/') + 1);
-  const match = FILE_TIMESTAMP_RE.exec(filename);
-  if (!match) return null;
-  const value = new Date(`${match[1]}T${match[2]}:${match[3]}:${match[4]}`).getTime();
-  return Number.isFinite(value) ? value : null;
-}
-
 function decodeGearStates(field) {
   if (typeof field === 'string') return Buffer.from(field, 'base64');
   return field ?? [];

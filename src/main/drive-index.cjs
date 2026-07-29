@@ -10,6 +10,7 @@ const AssemblerModule = require('stream-json/assembler.js');
 const Assembler = AssemblerModule.Assembler ?? AssemblerModule;
 const { DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
 const { parseClipTimestampMs } = require('../shared/event-gap-fill.cjs');
+const { normalizeClipPath } = require('../shared/clip-path.cjs');
 const parseFileTimestampMs = parseClipTimestampMs;
 
 function abortError() {
@@ -17,10 +18,6 @@ function abortError() {
   err.name = 'AbortError';
   err.code = 'ABORT_ERR';
   return err;
-}
-
-function normalizeFile(file) {
-  return String(file ?? '').replace(/\\/g, '/');
 }
 
 class DriveIndex {
@@ -77,7 +74,7 @@ class DriveIndex {
   }
 
   insertRoute(route, sequence) {
-    const normalizedFile = normalizeFile(route?.file);
+    const normalizedFile = normalizeClipPath(route?.file);
     if (!normalizedFile) return 'dropped';
     const timestampMs = parseClipTimestampMs(normalizedFile);
     if (timestampMs == null) return 'dropped';

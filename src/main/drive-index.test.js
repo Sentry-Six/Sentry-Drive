@@ -23,10 +23,11 @@ function makeFixture() {
       '2026-07-28T10:00:00': ['Work', 'Unicode ✓'],
     },
     routes: [
-      route('RecentClips/2026-07-28_10-00-00-front.mp4', 39.1),
-      route('RecentClips\\2026-07-28_10-00-00-front.mp4', 39.2),
+      route('RecentClips/2026-07-28/2026-07-28_10-00-00-front.mp4', 39.1),
+      route('RecentClips\\2026-07-28\\2026-07-28_10-00-00-front.mp4', 39.2),
+      route('2026-07-28/2026-07-28_10-00-00-front.mp4', 39.25),
       route('SavedClips/2026-07-28_10-30-00/2026-07-28_10-01-00-front.mp4', 39.3),
-      route('RecentClips/2026-07-28_11-00-00-front.mp4', 39.4),
+      route('RecentClips/2026-07-28/2026-07-28_11-00-00-front.mp4', 39.4),
     ],
     processedFiles: ['one.mp4', 'two.mp4'],
   }));
@@ -46,13 +47,13 @@ test('indexes routes on disk with normalized deduplication and bounded time wind
     processedFileCount: 2,
     routeCount: 3,
     droppedCount: 0,
-    duplicateCount: 1,
+    duplicateCount: 2,
   });
   const windows = [...index.iterateTimeWindows()];
   assert.equal(windows.length, 2);
   assert.equal(windows[0].length, 2);
   assert.equal(windows[1].length, 1);
-  assert.equal(windows[0][0].file, 'RecentClips/2026-07-28_10-00-00-front.mp4');
+  assert.equal(windows[0][0].file, '2026-07-28/2026-07-28_10-00-00-front.mp4');
   assert.equal(
     windows[0][1].file,
     'SavedClips/2026-07-28_10-30-00/2026-07-28_10-01-00-front.mp4',
