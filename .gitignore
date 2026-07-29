@@ -5,3 +5,5 @@ dist/
 drive-data.json
 *.bak
 *.psd
+temp/
+*.tmp

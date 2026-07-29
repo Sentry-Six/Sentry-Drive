@@ -94,13 +94,67 @@ ipcMain.handle('download-logs', async () => {
   }
 });
 
+// The drive index for a multi-GB drive-data.json is itself large, and the
+// system temp folder sits on the OS drive — the one most likely to be full.
+// (A full temp drive surfaces as a bare "database or disk is full" from
+// SQLite mid-load.) Keep the cache next to the app instead, which is usually
+// on the same roomy drive the user keeps their footage on.
+//
+// Falls back to the system temp folder when the app directory isn't writable:
+// a machine-wide install under Program Files needs elevation, and the
+// packaged app itself lives inside a read-only asar (only the surrounding
+// directory is real). Writability is proven by writing, not by accessSync —
+// on Windows that reports W_OK for directories the process cannot write.
+function resolveLoaderCacheRoot() {
+  const appDir = app.isPackaged ? path.dirname(process.execPath) : app.getAppPath();
+  const preferred = path.join(appDir, 'temp', 'load-cache');
+  try {
+    fs.mkdirSync(preferred, { recursive: true });
+    const probe = path.join(preferred, `.write-probe-${process.pid}`);
+    fs.writeFileSync(probe, '');
+    fs.rmSync(probe, { force: true });
+    return preferred;
+  } catch (err) {
+    const fallback = path.join(app.getPath('temp'), 'sentry-drive', 'load-cache');
+    logger.warn('main', `index cache: ${preferred} not writable (${err?.code ?? err?.message}) — falling back to ${fallback}`);
+    return fallback;
+  }
+}
+
+// Each load builds its index in a fresh UUID directory that's removed when the
+// load closes; a crash or a kill leaves one behind. Sweep them at startup so
+// they can't accumulate next to the app.
+function sweepStaleLoaderCaches(cacheRoot) {
+  let removed = 0;
+  let bytes = 0;
+  try {
+    for (const entry of fs.readdirSync(cacheRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(cacheRoot, entry.name);
+      try {
+        for (const f of fs.readdirSync(dir)) {
+          try { bytes += fs.statSync(path.join(dir, f)).size; } catch { /* racing cleanup */ }
+        }
+        fs.rmSync(dir, { recursive: true, force: true });
+        removed++;
+      } catch { /* in use by another instance — leave it */ }
+    }
+  } catch { /* cache root doesn't exist yet */ }
+  if (removed > 0) {
+    logger.info('main', `index cache: swept ${removed} stale load dir(s), freed ${(bytes / 1048576).toFixed(0)} MB`);
+  }
+}
+
 function getDriveLoaderClient() {
   if (driveLoaderClient) return driveLoaderClient;
   const { createDriveLoaderClient } = require('./drive-loader-client.cjs');
+  const cacheRoot = resolveLoaderCacheRoot();
+  sweepStaleLoaderCaches(cacheRoot);
+  logger.info('main', `index cache root: ${cacheRoot}`);
   driveLoaderClient = createDriveLoaderClient({
     fork: utilityProcess.fork.bind(utilityProcess),
     workerPath: path.join(__dirname, 'drive-loader-worker.cjs'),
-    cacheRoot: path.join(app.getPath('temp'), 'sentry-drive', 'load-cache'),
+    cacheRoot,
     logger,
   });
   return driveLoaderClient;

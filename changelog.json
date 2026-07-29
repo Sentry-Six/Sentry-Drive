@@ -44,6 +44,10 @@
         {
           "type": "improvement",
           "description": "The vehicle replay marker is now drawn at its real size on the map, so it grows and shrinks with the ground like the streets and buildings under it — zoom in and the car sits in its lane; zoom out and it settles to a small, unobtrusive marker instead of covering half a city. The arrow marker is unchanged."
+        },
+        {
+          "type": "fix",
+          "description": "The temporary index the app builds when loading a large drive data file is now written next to the app instead of the system temp folder, which is usually on the system drive — on a full system drive the load previously failed with a bare \"database or disk is full\". Leftover indexes from an interrupted load are cleaned up on the next start."
         }
       ]
     },
