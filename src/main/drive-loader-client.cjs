@@ -82,6 +82,10 @@ class DriveLoaderClient {
     return this.request('detail', { id, maxPoints });
   }
 
+  setTags(startTime, tags) {
+    return this.request('setTags', { startTime, tags });
+  }
+
   cancel() {
     return this.request('cancel');
   }

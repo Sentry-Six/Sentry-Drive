@@ -45,6 +45,16 @@ const DRIVE_GAP_MS = 5 * 60 * 1000; // >5 min between clips ⇒ separate drives
 const PARK_GAP_SECONDS = 2.0;       // ≥2 s in Park ⇒ split the drive
 const CLIP_DURATION_MS = 60000;     // each dashcam clip spans ~60 s
 
+// Event-clip gap-fill (mirrors Sentry-USB-Rusty grouper.rs — commits
+// 23f1cb2/f8ac749/109254d there). RecentClips recording gaps can be covered
+// by SavedClips/SentryClips pre-roll clips; these bound which event clips
+// qualify.
+const GAP_FILL_MIN_MS = 90 * 1000;        // hole must exceed one missing minute-clip
+const GAP_FILL_MAX_MS = 30 * 60 * 1000;   // beyond this a gap is a park/drive boundary
+const GAP_FILL_ADJ_MS = 3 * 60 * 1000;    // max hop between chained trailing/leading clips
+const GAP_FILL_DUP_MS = 30 * 1000;        // twin-of-occupied-slot / overlap-dup window
+const GAP_FILL_MIN_SPEED_MPS = 0.5;       // above this, SEI speed counts as driving
+
 // ─── Speed sanity caps ───────────────────────────────────────────────────────
 const SEI_SPEED_MAX_MPS = 100;     // accept SEI speed only if 0 ≤ v < 100 m/s
 const DERIVED_SPEED_MAX_MPS = 70;  // GPS-derived speed teleport guard (<70 m/s)
@@ -150,6 +160,11 @@ module.exports = {
   DRIVE_GAP_MS,
   PARK_GAP_SECONDS,
   CLIP_DURATION_MS,
+  GAP_FILL_MIN_MS,
+  GAP_FILL_MAX_MS,
+  GAP_FILL_ADJ_MS,
+  GAP_FILL_DUP_MS,
+  GAP_FILL_MIN_SPEED_MPS,
   SEI_SPEED_MAX_MPS,
   DERIVED_SPEED_MAX_MPS,
   GEAR_PARK,

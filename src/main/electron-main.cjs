@@ -966,6 +966,14 @@ ipcMain.handle('set-drive-tags', (_e, { filePath, driveKey, tags }) => withDrive
       if (gs !== r.gearStates) r.gearStates = gs;
     }
     await writeDriveDataJSON(filePath, data);
+    // Keep the loaded index's tag column in step so tag FILTERING reflects
+    // the edit immediately — without this, a drive tagged mid-session
+    // wouldn't appear under that tag's filter until the next load.
+    try {
+      await getDriveLoaderClient().setTags(driveKey, tags);
+    } catch (err) {
+      logger.warn('main', `tag filter index not updated for ${driveKey}: ${err?.message ?? err}`);
+    }
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };

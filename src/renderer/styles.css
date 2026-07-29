@@ -551,6 +551,45 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   color: var(--warn);
 }
 
+/* ── Date-range filter (defaults to no filtering) ──────────────────────── */
+#date-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+#date-filter.hidden { display: none; }
+.date-filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.date-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color-scheme: dark; /* dark native calendar + icon */
+}
+.date-input:focus { outline: none; border-color: var(--accent); }
+.date-filter-sep { color: var(--text-dim); font-size: 11px; }
+.date-clear {
+  display: inline-flex;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px;
+}
+.date-clear:hover { color: var(--danger); }
+
 #drives-list {
   display: flex;
   flex-direction: column;

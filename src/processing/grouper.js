@@ -8,6 +8,11 @@ import {
   DRIVE_GAP_MS,
   PARK_GAP_SECONDS,
   CLIP_DURATION_MS,
+  GAP_FILL_MIN_MS,
+  GAP_FILL_MAX_MS,
+  GAP_FILL_ADJ_MS,
+  GAP_FILL_DUP_MS,
+  GAP_FILL_MIN_SPEED_MPS,
   NULL_ISLAND_DEG,
   MAX_FROM_MEDIAN_M,
   MAX_JUMP_M,
@@ -71,39 +76,228 @@ export function isEventFolderPath(file) {
   return norm.startsWith("SavedClips/") || norm.startsWith("SentryClips/");
 }
 
+// ─── Event-clip gap-fill (port of Rusty grouper.rs, commits 23f1cb2/f8ac749/
+// e653729/109254d there) ─────────────────────────────────────────────────────
+// A hole in the continuous RecentClips recording becomes a hole in the drive
+// even when the missing minutes exist inside a SavedClips/SentryClips event
+// folder (Tesla events carry a ~10-minute pre-roll covering the gap). Rusty
+// admits exactly those clips into its drives — and writes them into
+// drive-data.json — so this grouper must admit them too, or every gap-filled
+// drive truncates on re-grouping here.
+
+/**
+ * Clip timestamp from the FILENAME component only. Event paths embed the
+ * event-folder timestamp first (`SentryClips/<event_ts>/<clip_ts>-front.mp4`),
+ * which the left-to-right whole-path scan would win.
+ */
+export function parseClipTimestamp(filePath) {
+  const norm = String(filePath ?? "").replace(/\\/g, "/");
+  const base = norm.includes("/") ? norm.slice(norm.lastIndexOf("/") + 1) : norm;
+  return parseFileTimestamp(base);
+}
+
+/**
+ * Holes in a SORTED continuous-clip ms-timestamp sequence that qualify for
+ * event-clip gap-fill: wider than one missing minute-clip but within the fill
+ * cap — a longer gap is a park/drive boundary, not a recording dropout.
+ * Returns [startMs, endMs] pairs.
+ */
+export function fillableHoles(sortedTsMs) {
+  const holes = [];
+  for (let i = 1; i < sortedTsMs.length; i++) {
+    const gap = sortedTsMs[i] - sortedTsMs[i - 1];
+    if (gap > GAP_FILL_MIN_MS && gap <= GAP_FILL_MAX_MS) {
+      holes.push([sortedTsMs[i - 1], sortedTsMs[i]]);
+    }
+  }
+  return holes;
+}
+
+/** True when ts lies STRICTLY inside one of the (sorted) holes. */
+export function tsInHoles(holes, tsMs) {
+  for (const [start, end] of holes) {
+    if (tsMs > start && tsMs < end) return true;
+    if (start >= tsMs) break; // sorted — nothing later can contain ts
+  }
+  return false;
+}
+
+/**
+ * True when SEI telemetry shows the car moving: any non-Park gear frame or
+ * any speed sample above a crawl. All-Park + speed≈0 (or no telemetry at all
+ * — no positive evidence of driving) returns false.
+ * Deviation from Rust, documented: the raw-counts fallback arm requires
+ * rawParkCount to actually be present. Rusty's DB rows always carry it;
+ * drive-data.json does not, and treating "absent" as 0 would count every
+ * telemetry-less clip as driving.
+ */
+export function telemetryHasDriving(route) {
+  const gearRuns = route.gearRuns ?? [];
+  const gearStates = route.gearStates ?? [];
+  const speeds = route.speeds ?? [];
+  if (gearRuns.some((r) => r.gear !== GEAR_PARK)) return true;
+  for (const g of gearStates) if (g !== GEAR_PARK) return true;
+  if (
+    gearRuns.length === 0 &&
+    gearStates.length === 0 &&
+    Number.isFinite(route.rawParkCount) &&
+    (route.rawFrameCount ?? 0) > 0 &&
+    route.rawParkCount < route.rawFrameCount
+  ) {
+    return true;
+  }
+  return speeds.some((s) => Math.abs(s) > GAP_FILL_MIN_SPEED_MPS);
+}
+
+/**
+ * Steps 2-3 of gap-fill admission: drop candidates that duplicate an occupied
+ * RecentClips slot (one-sided, within GAP_FILL_DUP_MS AFTER a recent clip —
+ * Tesla stamps the Saved/Sentry twin of a segment 0-1 s later), then dedup
+ * overlapping candidates in (timestamp, path) order so the lowest path wins
+ * and SavedClips/SentryClips twins of the same minute never both land.
+ * `order` holds still-eligible indices into `cands`; returns the kept subset.
+ */
+function dedupCandidates(recentSortedTsMs, cands, order) {
+  const dupOfRecent = (tsMs) => {
+    // last recent clip at or before ts
+    let lo = 0, hi = recentSortedTsMs.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (recentSortedTsMs[mid] <= tsMs) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo > 0 && tsMs - recentSortedTsMs[lo - 1] <= GAP_FILL_DUP_MS;
+  };
+  let kept = order.filter((i) => !dupOfRecent(cands[i].ts));
+  kept.sort((a, b) =>
+    cands[a].ts - cands[b].ts ||
+    (cands[a].file < cands[b].file ? -1 : cands[a].file > cands[b].file ? 1 : 0));
+  const out = [];
+  for (const i of kept) {
+    if (out.length > 0 && cands[i].ts - cands[out[out.length - 1]].ts <= GAP_FILL_DUP_MS) continue;
+    out.push(i);
+  }
+  return out;
+}
+
+/**
+ * Select which event clips fill RecentClips gaps. `recentSortedTsMs` is the
+ * sorted continuous-clip timeline (ms); `candidates` are
+ * { ts (ms), file, driving } with driving true/false/null (null = unknown,
+ * treated as eligible). Returns indices into `candidates`.
+ *
+ * Admission pipeline (see the Rust doc comment for the full rationale):
+ * 1. drop clips whose SEI says parked-only (driving === false);
+ * 2-3. dedupCandidates (occupied-slot twins, overlap dups);
+ * 4. admit what remains if it lies strictly inside a hole (interior) OR
+ *    chains to the recent timeline: hops ≤ GAP_FILL_ADJ_MS through recent
+ *    clips / other kept candidates, anchored to ≥1 recent clip, capped at
+ *    GAP_FILL_MAX_MS from the nearest one.
+ */
+export function selectGapFill(recentSortedTsMs, candidates) {
+  if (recentSortedTsMs.length === 0 || candidates.length === 0) return [];
+  const holes = fillableHoles(recentSortedTsMs);
+
+  const nearestRecentMs = (tsMs) => {
+    let lo = 0, hi = recentSortedTsMs.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (recentSortedTsMs[mid] < tsMs) lo = mid + 1;
+      else hi = mid;
+    }
+    let best = Infinity;
+    if (lo > 0) best = Math.min(best, tsMs - recentSortedTsMs[lo - 1]);
+    if (lo < recentSortedTsMs.length) best = Math.min(best, recentSortedTsMs[lo] - tsMs);
+    return best;
+  };
+
+  const order = [];
+  for (let i = 0; i < candidates.length; i++) {
+    if (candidates[i].driving !== false) order.push(i);
+  }
+  const kept = dedupCandidates(recentSortedTsMs, candidates, order);
+
+  // Step 4b: chain connectivity over the merged recent+kept timeline.
+  // Clusters are maximal runs whose consecutive gaps stay within
+  // GAP_FILL_ADJ_MS; a kept candidate is chained when its cluster holds at
+  // least one recent clip and it sits within GAP_FILL_MAX_MS of the nearest.
+  const merged = recentSortedTsMs
+    .map((t) => ({ ts: t, keptIdx: -1 }))
+    .concat(kept.map((i, k) => ({ ts: candidates[i].ts, keptIdx: k })));
+  merged.sort((a, b) => a.ts - b.ts);
+
+  const chained = new Array(kept.length).fill(false);
+  let clusterStart = 0;
+  for (let idx = 0; idx <= merged.length; idx++) {
+    const clusterEnds = idx === merged.length ||
+      (idx > 0 && merged[idx].ts - merged[idx - 1].ts > GAP_FILL_ADJ_MS);
+    if (!clusterEnds) continue;
+    const cluster = merged.slice(clusterStart, idx);
+    if (cluster.some((m) => m.keptIdx === -1)) {
+      for (const m of cluster) {
+        if (m.keptIdx >= 0 && nearestRecentMs(m.ts) <= GAP_FILL_MAX_MS) {
+          chained[m.keptIdx] = true;
+        }
+      }
+    }
+    clusterStart = idx;
+  }
+
+  const out = [];
+  for (let k = 0; k < kept.length; k++) {
+    const i = kept[k];
+    if (tsInHoles(holes, candidates[i].ts) || chained[k]) out.push(i);
+  }
+  return out;
+}
+
+/** Timestamp-only wrapper for callers without SEI in hand. */
+export function selectGapFillEvents(recentSortedTsMs, candidates) {
+  return selectGapFill(
+    recentSortedTsMs,
+    candidates.map(({ ts, file }) => ({ ts, file, driving: null })),
+  );
+}
+
 /**
  * Group routes into logical drives based on time gaps and gear state.
  */
 export function groupIntoDrives(routes) {
   // Deduplicate routes by normalized file path, decoding Go-serialized base64
   // byte fields so downstream code always sees Uint8Array.
+  // Partition SavedClips/SentryClips event-folder routes off BEFORE dedup —
+  // parity with Rust group_clips. They contain (a) clips duplicating
+  // RecentClips data under a path dedup-by-path can't catch and (b) parked
+  // Sentry-mode recordings the gear splitter would surface as spurious
+  // drives. The only event routes admitted are gap-fills (below); the rest
+  // stay dropped exactly as before.
   const seen = new Set();
   const unique = [];
+  const eventCandidates = [];
   for (const r of routes) {
-    // Drop SavedClips/SentryClips event-folder routes before dedup — parity
-    // with Rust group_clips (grouper.rs:334). They duplicate RecentClips data
-    // under a path dedup-by-path can't catch and would otherwise surface parked
-    // recordings as spurious drives.
-    if (isEventFolderPath(r.file)) continue;
     const norm = r.file.replace(/\\/g, "/");
-    if (!seen.has(norm)) {
-      seen.add(norm);
-      unique.push({
-        ...r,
-        source: r.source ?? "sei",
-        autopilotStates: decodeByteField(r.autopilotStates),
-        gearStates: decodeByteField(r.gearStates),
-      });
-    }
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    const clone = {
+      ...r,
+      source: r.source ?? "sei",
+      autopilotStates: decodeByteField(r.autopilotStates),
+      gearStates: decodeByteField(r.gearStates),
+    };
+    if (isEventFolderPath(r.file)) eventCandidates.push(clone);
+    else unique.push(clone);
   }
 
-  // Parse timestamps and sort. The entries in `unique` are already our own
-  // clones (built in the dedup loop above, never the caller's objects), so
-  // attach the timestamp in place instead of spread-cloning every route a
-  // second time — on a large library that second copy was pure peak waste.
+  // Parse timestamps and sort. Clip-basename timestamps (parseClipTimestamp):
+  // identical to the old whole-path scan for RecentClips paths, and the only
+  // correct reading for event paths, whose event-FOLDER timestamp comes
+  // first. The entries in `unique` are already our own clones (built in the
+  // dedup loop above, never the caller's objects), so attach the timestamp in
+  // place instead of spread-cloning every route a second time — on a large
+  // library that second copy was pure peak waste.
   const timed = [];
   for (const r of unique) {
-    const t = parseFileTimestamp(r.file);
+    const t = parseClipTimestamp(r.file);
     if (t) {
       r.timestamp = t;
       timed.push(r);
@@ -113,6 +307,35 @@ export function groupIntoDrives(routes) {
   if (timed.length === 0) return { drives: [], timeGroupCount: 0, routeCount: 0, droppedCount: unique.length };
 
   timed.sort((a, b) => a.timestamp - b.timestamp);
+
+  // Gap-fill: admit event routes whose CLIP timestamp fills a RecentClips
+  // gap — interior hole, or a driving-gated trailing/leading chain. One
+  // route per timestamp; everything else stays filtered.
+  if (eventCandidates.length > 0) {
+    const recentTs = timed.map((t) => t.timestamp.getTime());
+    const cands = [];
+    for (const r of eventCandidates) {
+      const t = parseClipTimestamp(r.file);
+      if (t) {
+        cands.push({
+          ts: t.getTime(),
+          file: r.file.replace(/\\/g, "/"),
+          driving: telemetryHasDriving(r),
+          route: r,
+          date: t,
+        });
+      }
+    }
+    const admitted = selectGapFill(recentTs, cands);
+    if (admitted.length > 0) {
+      for (const i of admitted) {
+        const r = cands[i].route;
+        r.timestamp = cands[i].date;
+        timed.push(r);
+      }
+      timed.sort((a, b) => a.timestamp - b.timestamp);
+    }
+  }
 
   // First pass: group by time gap
   const timeGroups = [];

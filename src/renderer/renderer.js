@@ -19,7 +19,13 @@ let removeOutputListener = null;
 let processingStartTime = null;
 let cpuCount = 1;
 let allTags = [];          // deduplicated, sorted list of all tag names
-let activeTagFilter = '';  // currently active tag filter (empty = show all)
+// Drive list filters. Defaults are all-off — the app does no filtering until
+// the user asks. Applied SERVER-side (in the loader's SQL): the renderer only
+// ever holds one page, so filtering here would silently search 250 drives
+// out of thousands.
+let driveFilters = { tag: '', startDate: '', endDate: '' };
+const driveFiltersActive = () =>
+  Boolean(driveFilters.tag || driveFilters.startDate || driveFilters.endDate);
 let hideOtherDrives = false;
 let showFsdMarkers = true;
 let fsdEventMarkers = [];  // DOM markers for FSD events (toggleable in Settings)
@@ -1624,18 +1630,40 @@ async function changeDrivePage(direction) {
   }
 }
 
+// Re-query the loader with the current filters (from page 1) and re-render.
+// The page model folds the filters into next/previous too, so paging stays
+// inside the filtered set.
+async function applyDriveFilters() {
+  if (!drivePageModel || !loadedFilePath) return;
+  const pager = document.getElementById('drive-pager');
+  pager?.classList.add('is-loading');
+  try {
+    const state = await drivePageModel.load({ ...driveFilters });
+    await applyDrivePageState(state);
+    logAction(`drive filter — tag=${driveFilters.tag || '(none)'} range=${driveFilters.startDate || '…'}→${driveFilters.endDate || '…'} → ${state.total} drive(s)`);
+  } catch (error) {
+    alert(`Couldn't apply the drive filter: ${error.message}`);
+  } finally {
+    pager?.classList.remove('is-loading');
+  }
+}
+
 async function applyLoadedDriveData(result, filePath) {
   loadedFilePath = filePath;
   localStorage.setItem('lastDriveDataPath', filePath);
   pendingExternalReload = false;
   window.electronAPI.watchDriveData(filePath);
   driveCacheGen = result.cacheGen;
-  const state = await drivePageModel.load();
+  // Carry the active filters across reloads (auto-refresh re-runs this path;
+  // clearing the user's filter mid-session would be surprising). A fresh
+  // session still starts unfiltered — the defaults are all-off.
+  const state = await drivePageModel.load({ ...driveFilters });
   drivePageState = state;
   drives = state.drives;
   overviewRoutes = result.overviewRoutes ?? [];
   refreshAllTags(result.driveTags ?? {});
   renderTagFilter();
+  document.getElementById('date-filter').classList.remove('hidden');
   renderDriveStats(drives, result);
   await renderDriveList(drives);
   renderOverviewOnMap();
@@ -1837,6 +1865,25 @@ function initViewDrivesTab() {
   });
   document.getElementById('drive-page-prev').addEventListener('click', () => changeDrivePage('previous'));
   document.getElementById('drive-page-next').addEventListener('click', () => changeDrivePage('next'));
+
+  // Date-range filter (inclusive both ends; either side may be open)
+  const dateStart = document.getElementById('filter-date-start');
+  const dateEnd = document.getElementById('filter-date-end');
+  const dateClear = document.getElementById('btn-clear-dates');
+  const syncDateFilter = () => {
+    driveFilters.startDate = dateStart.value || '';
+    driveFilters.endDate = dateEnd.value || '';
+    dateClear.classList.toggle('hidden', !driveFilters.startDate && !driveFilters.endDate);
+    applyDriveFilters();
+  };
+  dateStart.addEventListener('change', syncDateFilter);
+  dateEnd.addEventListener('change', syncDateFilter);
+  dateClear.addEventListener('click', () => {
+    dateStart.value = '';
+    dateEnd.value = '';
+    syncDateFilter();
+  });
+
   initTessieImport();
 
   // Auto-refresh when drive-data.json changes on disk (e.g. Sentry USB
@@ -3620,21 +3667,16 @@ async function renderDriveList(drives) {
   clearMultiSelect();
 
   if (drives.length === 0) {
-    list.innerHTML = '<div class="empty-state">No drives found in this file.</div>';
+    list.innerHTML = driveFiltersActive()
+      ? '<div class="empty-state">No drives match the current filters.</div>'
+      : '<div class="empty-state">No drives found in this file.</div>';
     return;
   }
 
-  // Reverse-chronological, filtered by active tag
-  let sorted = [...drives].sort((a, b) => b.startTime.localeCompare(a.startTime));
-  if (activeTagFilter) {
-    sorted = sorted.filter((d) => (d.tags ?? []).includes(activeTagFilter));
-  }
+  // Reverse-chronological. Filtering happened in the loader's query — this
+  // page IS the filtered result.
+  const sorted = [...drives].sort((a, b) => b.startTime.localeCompare(a.startTime));
   lastRenderedOrder = sorted.map((d) => String(d.id));
-
-  if (sorted.length === 0) {
-    list.innerHTML = '<div class="empty-state">No drives match the selected filter.</div>';
-    return;
-  }
 
   const BATCH = 100;
   let currentDate = '';
@@ -5086,18 +5128,18 @@ function renderTagFilter() {
   }
 
   container.classList.remove('hidden');
-  let html = `<button class="tag-filter-btn${activeTagFilter === '' ? ' active' : ''}" data-tag="">All</button>`;
+  let html = `<button class="tag-filter-btn${driveFilters.tag === '' ? ' active' : ''}" data-tag="">All</button>`;
   for (const t of allTags) {
-    html += `<button class="tag-filter-btn${activeTagFilter === t ? ' active' : ''}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`;
+    html += `<button class="tag-filter-btn${driveFilters.tag === t ? ' active' : ''}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`;
   }
   container.innerHTML = html;
 
   container.querySelectorAll('.tag-filter-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const tag = btn.dataset.tag;
-      activeTagFilter = (activeTagFilter === tag && tag !== '') ? '' : tag;
+      driveFilters.tag = (driveFilters.tag === tag && tag !== '') ? '' : tag;
       renderTagFilter();
-      renderDriveList(drives);
+      applyDriveFilters(); // re-query the loader — the filter spans ALL drives
     });
   });
 }
@@ -5145,11 +5187,18 @@ async function removeTag(drive, tagName) {
   drive.tags = prev.filter((t) => t !== tagName);
   logAction(`tag removed: "${tagName}"`);
 
-  // Optimistic UI (see addTag).
+  // Optimistic UI (see addTag). If the removed tag was the active filter and
+  // no drive carries it anymore, drop the filter (and re-query, since the
+  // filter is applied loader-side).
   rebuildAllTagsFromDrives();
-  if (activeTagFilter === tagName && !allTags.includes(tagName)) activeTagFilter = '';
-  renderTagFilter();
-  renderDriveList(drives);
+  if (driveFilters.tag === tagName && !allTags.includes(tagName)) {
+    driveFilters.tag = '';
+    renderTagFilter();
+    applyDriveFilters();
+  } else {
+    renderTagFilter();
+    renderDriveList(drives);
+  }
   if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
 
   const res = await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags: drive.tags });

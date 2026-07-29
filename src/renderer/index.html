@@ -111,6 +111,14 @@
 
         <div id="tag-filter" class="hidden"></div>
 
+        <div id="date-filter" class="hidden">
+          <span class="date-filter-label">Dates</span>
+          <input type="date" id="filter-date-start" class="date-input" title="From date (inclusive)" />
+          <span class="date-filter-sep">–</span>
+          <input type="date" id="filter-date-end" class="date-input" title="To date (inclusive)" />
+          <button id="btn-clear-dates" class="date-clear hidden" title="Clear date filter" type="button">&times;</button>
+        </div>
+
         <div id="drives-list"></div>
         <div id="drive-pager" class="hidden">
           <button id="drive-page-prev" type="button" title="Previous drives"><span class="material-icons">chevron_left</span></button>

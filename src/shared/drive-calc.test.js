@@ -39,6 +39,13 @@ test('constants match the canonical Rust crate', () => {
   assert.equal(calc.PARK_GAP_SECONDS, 2.0);
   assert.equal(calc.CLIP_DURATION_MS, 60000);
 
+  // Event-clip gap-fill (mirrors Rusty grouper.rs GAP_FILL_*)
+  assert.equal(calc.GAP_FILL_MIN_MS, 90000);
+  assert.equal(calc.GAP_FILL_MAX_MS, 1800000);
+  assert.equal(calc.GAP_FILL_ADJ_MS, 180000);
+  assert.equal(calc.GAP_FILL_DUP_MS, 30000);
+  assert.equal(calc.GAP_FILL_MIN_SPEED_MPS, 0.5);
+
   // Speed sanity caps
   assert.equal(calc.SEI_SPEED_MAX_MPS, 100);
   assert.equal(calc.DERIVED_SPEED_MAX_MPS, 70);
