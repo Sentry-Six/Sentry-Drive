@@ -1188,7 +1188,8 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   border-top: 0 solid var(--border-light);
 }
 #map-stats.expanded .map-stats-details {
-  max-height: 400px;
+  max-height: min(72vh, 760px);
+  overflow-y: auto;
   padding: 14px 24px 18px;
   border-top: 1px solid var(--border-light);
 }
@@ -1350,6 +1351,51 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--text-muted);
+}
+
+.drive-telemetry-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-light);
+}
+
+.drive-telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.drive-telemetry-stat {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px 9px 13px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.drive-telemetry-stat::before {
+  content: '';
+  position: absolute;
+  inset: 7px auto 7px 0;
+  width: 2px;
+  border-radius: 2px;
+  background: rgba(110, 231, 183, 0.55);
+}
+
+.drive-telemetry-stat .map-stats-extra-val {
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+@media (max-width: 680px) {
+  .drive-telemetry-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .map-stat {

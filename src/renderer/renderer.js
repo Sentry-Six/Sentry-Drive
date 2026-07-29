@@ -3009,6 +3009,24 @@ function renderSelectedDriveStats(drive) {
     `;
   }
 
+  const telemetrySections = window.driveTelemetryView
+    ?.buildDriveTelemetrySections(drive, unitSystem) ?? [];
+  for (const section of telemetrySections) {
+    details += `
+      <section class="drive-telemetry-section">
+        <div class="map-stats-details-title">${section.title}</div>
+        <div class="drive-telemetry-grid">
+          ${section.items.map((item) => `
+            <div class="drive-telemetry-stat">
+              <span class="map-stats-extra-val">${item.value}</span>
+              <span class="map-stats-extra-lbl">${item.label}</span>
+            </div>
+          `).join('')}
+        </div>
+      </section>
+    `;
+  }
+
   const date   = drive.startTime.slice(0, 10);
   const startT = drive.startTime.slice(11, 16);
   const endT   = drive.endTime.slice(11, 16);

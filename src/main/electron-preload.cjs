@@ -2,6 +2,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 const driveCalc = require('../shared/drive-calc.cjs');
+const driveTelemetryView = require('../renderer/drive-telemetry-view.cjs');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   appLog: (entry) => ipcRenderer.send('app-log', entry),
@@ -106,3 +107,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
 // processing pipeline. Exposed read-only so the renderer's display conversions
 // use the exact same numbers as the rest of the app (src/shared/drive-calc.cjs).
 contextBridge.exposeInMainWorld('driveCalc', { ...driveCalc });
+contextBridge.exposeInMainWorld('driveTelemetryView', { ...driveTelemetryView });
