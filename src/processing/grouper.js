@@ -18,8 +18,16 @@ import {
   MPS_TO_MPH,
   MPS_TO_KMH,
 } from "../shared/drive-calc.cjs";
+import eventGapFill from "../shared/event-gap-fill.cjs";
 
-const FILE_TIMESTAMP_RE = /(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/;
+const {
+  isEventFolderPath,
+  parseClipTimestampMs,
+  telemetryHasDriving,
+  selectGapFill,
+} = eventGapFill;
+
+export { isEventFolderPath };
 
 // Sentry-USB is Go; its `[]uint8` fields (gearStates, autopilotStates) are
 // serialized by encoding/json as base64 strings. We normalize on read so the
@@ -43,11 +51,8 @@ export function encodeByteField(field) {
  * Parse a Tesla dashcam filename into a Date object.
  */
 function parseFileTimestamp(filePath) {
-  const m = FILE_TIMESTAMP_RE.exec(filePath);
-  if (!m) return null;
-  const s = `${m[1]}T${m[2]}:${m[3]}:${m[4]}`;
-  const t = new Date(s);
-  return isNaN(t.getTime()) ? null : t;
+  const timestampMs = parseClipTimestampMs(filePath);
+  return timestampMs == null ? null : new Date(timestampMs);
 }
 
 // geodesicM (WGS-84 ellipsoidal distance), round2, and every drive-calc
@@ -57,21 +62,6 @@ function parseFileTimestamp(filePath) {
 // docs/RUST-GEODESIC-MIGRATION.md lands there.
 
 /**
- * True when a route lives under a top-level SavedClips/ or SentryClips/ event
- * folder. Mirrors Sentry-USB-Rusty `is_event_folder_path` (grouper.rs:322):
- * these are parked sentry/event recordings (and path-duplicates of RecentClips
- * data) that must not be counted as drives. Native scans already skip them
- * (process.js:91); this is the grouper-level safety net for a loaded or
- * imported drive-data.json that may still contain them. Only a top-level
- * segment counts — "MySavedClips/…" and "foo/SavedClips/…" are NOT events.
- */
-export function isEventFolderPath(file) {
-  if (!file) return false;
-  const norm = String(file).replace(/\\/g, "/");
-  return norm.startsWith("SavedClips/") || norm.startsWith("SentryClips/");
-}
-
-/**
  * Group routes into logical drives based on time gaps and gear state.
  */
 export function groupIntoDrives(routes) {
@@ -79,22 +69,24 @@ export function groupIntoDrives(routes) {
   // byte fields so downstream code always sees Uint8Array.
   const seen = new Set();
   const unique = [];
+  const eventCandidates = [];
   for (const r of routes) {
-    // Drop SavedClips/SentryClips event-folder routes before dedup — parity
-    // with Rust group_clips (grouper.rs:334). They duplicate RecentClips data
-    // under a path dedup-by-path can't catch and would otherwise surface parked
-    // recordings as spurious drives.
-    if (isEventFolderPath(r.file)) continue;
-    const norm = r.file.replace(/\\/g, "/");
-    if (!seen.has(norm)) {
-      seen.add(norm);
-      unique.push({
-        ...r,
-        source: r.source ?? "sei",
-        autopilotStates: decodeByteField(r.autopilotStates),
-        gearStates: decodeByteField(r.gearStates),
-      });
+    // Event paths stay partitioned until the gap-fill selector can distinguish
+    // moved driving footage from duplicates and parked Sentry recordings.
+    const norm = String(r?.file ?? "").replace(/\\/g, "/");
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    if (isEventFolderPath(norm)) {
+      eventCandidates.push({ ...r, file: norm });
+      continue;
     }
+    unique.push({
+      ...r,
+      file: norm,
+      source: r.source ?? "sei",
+      autopilotStates: decodeByteField(r.autopilotStates),
+      gearStates: decodeByteField(r.gearStates),
+    });
   }
 
   // Parse timestamps and sort. The entries in `unique` are already our own
@@ -110,9 +102,41 @@ export function groupIntoDrives(routes) {
     }
   }
 
-  if (timed.length === 0) return { drives: [], timeGroupCount: 0, routeCount: 0, droppedCount: unique.length };
+  if (timed.length === 0) {
+    return { drives: [], timeGroupCount: 0, routeCount: 0, droppedCount: routes.length };
+  }
 
   timed.sort((a, b) => a.timestamp - b.timestamp);
+
+  // Tesla moves RecentClips into SavedClips when Save is pressed mid-drive.
+  // Admit only event routes selected by the canonical Rust gap-fill rules:
+  // positive driving telemetry, no occupied-slot/twin duplicate, and either
+  // inside a bounded RecentClips hole or in an anchored leading/trailing chain.
+  if (eventCandidates.length > 0) {
+    const candidates = [];
+    for (const route of eventCandidates) {
+      const timestampMs = parseClipTimestampMs(route.file);
+      if (timestampMs == null) continue;
+      candidates.push({
+        timestampMs,
+        file: route.file,
+        driving: telemetryHasDriving(route),
+        route,
+      });
+    }
+    const recentSortedMs = timed.map((route) => route.timestamp.getTime());
+    for (const candidateIndex of selectGapFill(recentSortedMs, candidates)) {
+      const candidate = candidates[candidateIndex];
+      timed.push({
+        ...candidate.route,
+        source: candidate.route.source ?? "sei",
+        autopilotStates: decodeByteField(candidate.route.autopilotStates),
+        gearStates: decodeByteField(candidate.route.gearStates),
+        timestamp: new Date(candidate.timestampMs),
+      });
+    }
+    timed.sort((a, b) => a.timestamp - b.timestamp);
+  }
 
   // First pass: group by time gap
   const timeGroups = [];
@@ -145,7 +169,7 @@ export function groupIntoDrives(routes) {
     drives,
     timeGroupCount: timeGroups.length,
     routeCount: timed.length,
-    droppedCount: unique.length - timed.length,
+    droppedCount: routes.length - timed.length,
   };
 }
 

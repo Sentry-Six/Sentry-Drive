@@ -188,6 +188,47 @@ test('event-folder routes are filtered out of grouping (grouper.rs:3314)', () =>
   assert.equal(drives[0].routeFiles[0].startsWith('RecentClips/'), true);
 });
 
+test('July 27 manual save: driving SavedClips fill the RecentClips hole', () => {
+  const routes = [
+    testRoute(
+      '2026-07-27/2026-07-27_14-01-02-front.mp4',
+      [[39.0, -76.7]],
+    ),
+  ];
+  const savedClipTimes = [
+    '14-02-02',
+    '14-03-02',
+    '14-04-03',
+    '14-05-03',
+    '14-06-03',
+    '14-07-03',
+    '14-08-04',
+    '14-09-04',
+    '14-10-04',
+    '14-11-04',
+    '14-12-05',
+  ];
+  savedClipTimes.forEach((time, index) => {
+    routes.push(testRoute(
+      `SavedClips/2026-07-27_14-12-29/2026-07-27_${time}-front.mp4`,
+      [[39.001 + index * 0.001, -76.7]],
+    ));
+  });
+  routes.push(testRoute(
+    '2026-07-27/2026-07-27_14-12-26-front.mp4',
+    [[39.013, -76.7]],
+  ));
+
+  const drives = drivesOf(routes);
+  assert.equal(drives.length, 1);
+  assert.equal(drives[0].routeFiles.length, 13);
+  assert.equal(
+    drives[0].routeFiles.filter((file) => file.startsWith('SavedClips/')).length,
+    11,
+  );
+  assert.deepEqual(drives[0].routeFiles, routes.map((route) => route.file));
+});
+
 test('May 17 regression: event clips do not create a phantom parked drive', () => {
   // 11 SentryClips parked recordings + 1 SavedClips duplicate + 5 RecentClips
   // driving clips. After event-folder filtering this must be ONE drive of

@@ -9,8 +9,8 @@ const { parser } = require('stream-json/parser.js');
 const AssemblerModule = require('stream-json/assembler.js');
 const Assembler = AssemblerModule.Assembler ?? AssemblerModule;
 const { DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
-
-const FILE_TIMESTAMP_RE = /(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/;
+const { parseClipTimestampMs } = require('../shared/event-gap-fill.cjs');
+const parseFileTimestampMs = parseClipTimestampMs;
 
 function abortError() {
   const err = new Error('Drive data indexing canceled');
@@ -19,19 +19,8 @@ function abortError() {
   return err;
 }
 
-function parseFileTimestampMs(filePath) {
-  const match = FILE_TIMESTAMP_RE.exec(String(filePath ?? ''));
-  if (!match) return null;
-  const value = new Date(`${match[1]}T${match[2]}:${match[3]}:${match[4]}`).getTime();
-  return Number.isFinite(value) ? value : null;
-}
-
 function normalizeFile(file) {
   return String(file ?? '').replace(/\\/g, '/');
-}
-
-function isEventFolder(file) {
-  return file.startsWith('SavedClips/') || file.startsWith('SentryClips/');
 }
 
 class DriveIndex {
@@ -89,8 +78,8 @@ class DriveIndex {
 
   insertRoute(route, sequence) {
     const normalizedFile = normalizeFile(route?.file);
-    if (!normalizedFile || isEventFolder(normalizedFile)) return 'dropped';
-    const timestampMs = parseFileTimestampMs(normalizedFile);
+    if (!normalizedFile) return 'dropped';
+    const timestampMs = parseClipTimestampMs(normalizedFile);
     if (timestampMs == null) return 'dropped';
     const result = this.insertRouteStmt.run(
       sequence,
