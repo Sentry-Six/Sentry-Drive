@@ -132,19 +132,6 @@ function round2(v) {
   return Math.round(v * 100) / 100;
 }
 
-function metersToMiles(m) {
-  return m / M_PER_MILE;
-}
-function metersToKm(m) {
-  return m / M_PER_KM;
-}
-function mpsToMph(v) {
-  return v * MPS_TO_MPH;
-}
-function mpsToKmh(v) {
-  return v * MPS_TO_KMH;
-}
-
 // IMPORTANT: assign a plain object literal first so Node's cjs-module-lexer can
 // statically detect the named exports for ESM `import { … }`. Freeze on the
 // next line — `module.exports = Object.freeze({…})` wraps the literal in a call
@@ -178,9 +165,5 @@ module.exports = {
   geodesicM,
   haversineM,
   round2,
-  metersToMiles,
-  metersToKm,
-  mpsToMph,
-  mpsToKmh,
 };
 Object.freeze(module.exports);

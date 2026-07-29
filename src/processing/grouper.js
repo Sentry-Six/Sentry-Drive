@@ -97,11 +97,17 @@ export function groupIntoDrives(routes) {
     }
   }
 
-  // Parse timestamps and sort
+  // Parse timestamps and sort. The entries in `unique` are already our own
+  // clones (built in the dedup loop above, never the caller's objects), so
+  // attach the timestamp in place instead of spread-cloning every route a
+  // second time — on a large library that second copy was pure peak waste.
   const timed = [];
   for (const r of unique) {
     const t = parseFileTimestamp(r.file);
-    if (t) timed.push({ ...r, timestamp: t });
+    if (t) {
+      r.timestamp = t;
+      timed.push(r);
+    }
   }
 
   if (timed.length === 0) return { drives: [], timeGroupCount: 0, routeCount: 0, droppedCount: unique.length };
@@ -552,6 +558,12 @@ function buildDriveStats(clips, idx) {
   const geocodeStartPoint = snapGeocodeEndpoint(allPoints, false);
   const geocodeEndPoint = snapGeocodeEndpoint(allPoints, true);
 
+  // allPoints (seven-field object per GPS sample) is fully consumed at this
+  // point — release it before building the return object so the heavy
+  // intermediate and the final arrays don't coexist any longer than needed.
+  const pointCount = allPoints.length;
+  allPoints.length = 0;
+
   // v10 BLE location names — mirrors Rust roll_up_telemetry (grouper.rs:2785):
   // first non-null locationNameStart / last non-null locationNameEnd across the
   // drive's clips (time-ordered), deduped by parent file so a clip split into
@@ -591,7 +603,7 @@ function buildDriveStats(clips, idx) {
     avgSpeedKmh: r2(avgSpeedMps * MPS_TO_KMH),
     maxSpeedKmh: r2(maxSpeedMps * MPS_TO_KMH),
     clipCount: clips.length,
-    pointCount: allPoints.length,
+    pointCount,
     points: pointData,
     gearStates: hasGearData ? gearStates : undefined,
     fsdStates: hasAssistedData ? fsdStates : undefined,
@@ -693,10 +705,17 @@ function filterGPSOutliers(points) {
   // Step 3: Remove isolated outliers far from both neighbors.
   // MAX_JUMP_M (5 km — impossible between consecutive ~1s samples) is imported
   // from the shared single-source calc module.
-
+  //
+  // Semantics preserved from the old reverse splice loop: "prev" is the
+  // original lower neighbor (lower indices were untouched when index i was
+  // examined), "next" is the next SURVIVING higher neighbor (higher-index
+  // removals had already happened). One mark pass + one compact pass instead
+  // of splice-per-removal, which was O(n²) on dirty GPS.
+  const removed = new Uint8Array(points.length);
+  let nextSurvivor = null;
   for (let i = points.length - 1; i >= 0; i--) {
     const prev = i > 0 ? points[i - 1] : null;
-    const next = i < points.length - 1 ? points[i + 1] : null;
+    const next = nextSurvivor;
 
     const farFromPrev = prev
       ? geodesicM(prev.lat, prev.lng, points[i].lat, points[i].lng) > MAX_JUMP_M
@@ -708,9 +727,16 @@ function filterGPSOutliers(points) {
     if ((prev && next && farFromPrev && farFromNext) ||
         (!prev && farFromNext) ||
         (!next && farFromPrev)) {
-      points.splice(i, 1);
+      removed[i] = 1;
+    } else {
+      nextSurvivor = points[i];
     }
   }
+  let kw = 0;
+  for (let i = 0; i < points.length; i++) {
+    if (!removed[i]) points[kw++] = points[i];
+  }
+  points.length = kw;
 }
 
 function formatISO(d) {

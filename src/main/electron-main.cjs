@@ -5,6 +5,7 @@ const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const v8 = require('v8');
 const { geodesicM, GEAR_PARK, CLIP_DURATION_MS, DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
 
 // Give V8 more old-space headroom so the main process can parse large
@@ -181,6 +182,10 @@ function createWindow() {
   if (state.isFullScreen) mainWindow.setFullScreen(true);
 
   mainWindow.on('close', saveWindowState);
+  // On macOS the process outlives the last window (window-all-closed keeps it
+  // alive) — drop the serialized detail cache so a closed UI doesn't pin the
+  // whole GPS history in RSS. Reopening reloads from disk anyway.
+  mainWindow.on('closed', () => { driveDetailCache = null; });
 
   // DevTools shortcuts (application menu is disabled, so wire them here).
   mainWindow.webContents.on('before-input-event', (_e, input) => {
@@ -387,7 +392,22 @@ ipcMain.handle('get-changelog', () => {
   }
 });
 
-ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
+// Serialize loads: two overlapping full parses would double peak memory, and
+// both rebuild the single global driveDetailCache. Chained like the write
+// lock — a second load waits for the first, then re-reads fresh state.
+let driveLoadChain = Promise.resolve();
+function withDriveLoadLock(fn) {
+  const result = driveLoadChain.then(fn, fn);
+  driveLoadChain = result.then(() => {}, () => {});
+  return result;
+}
+
+// Bumped on every completed load; get-drive-detail rejects a stale generation
+// so a reload can never serve detail for a same-numbered drive from a
+// different load (drive ids restart at 0 every load).
+let driveDetailGen = 0;
+
+ipcMain.handle('load-and-group-drives', (_e, filePath) => withDriveLoadLock(async () => {
   try {
     const sendProgress = (phase, current, total) => {
       mainWindow?.webContents.send('load-progress', { phase, current, total });
@@ -456,18 +476,25 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
     // Cache full drive detail in the main process; strip large point arrays from
     // the IPC payload so we don't serialize millions of GPS coordinates over the
     // context bridge (the main cause of the V8 heap OOM on large files).
-    driveDetailCache = new Map();
+    // Each cache entry is stored as a v8.serialize() Buffer rather than the
+    // live object graph: one contiguous native buffer per drive instead of
+    // millions of small point arrays resident for the whole session. It
+    // deserializes to the exact same structure in get-drive-detail.
+    // Build into a local map and swap in only when complete — a load that
+    // dies mid-loop (e.g. OOM during serialize) must not leave a new
+    // generation with a partial cache while the old, valid one is gone.
+    const newCache = new Map();
     for (const d of drives) {
       // Bridge routes are the synthetic `-front-bridge.mp4` entries Check
       // Drives writes into GPS gaps — flag drives containing one so the UI
       // can show which drives were bridged.
       d.bridged = (d.routeFiles ?? []).some((f) => f.includes('-front-bridge.mp4'));
-      driveDetailCache.set(d.id, {
+      newCache.set(d.id, v8.serialize({
         points: d.points,
         fsdStates: d.fsdStates,
         gearStates: d.gearStates,
         fsdEvents: d.fsdEvents,
-      });
+      }));
       // 120 pts is visually identical at overview zooms and cuts both the IPC
       // payload and the canvas point count ~40% vs the old 200.
       d.overviewPoints = downsampleForIPC(d.points, 120);
@@ -475,7 +502,22 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
       delete d.fsdStates;
       delete d.gearStates;
       delete d.fsdEvents;
+      // Fields the renderer never reads — verified against renderer.js. The
+      // biggest is routeFiles (one path string per clip); dropping them cuts
+      // IPC serialization and renderer residency without any UI change.
+      delete d.routeFiles;
+      delete d.clipCount;
+      delete d.pointCount;
+      delete d.avgSpeedKmh;
+      delete d.maxSpeedKmh;
+      delete d.autosteerEngagedMs;
+      delete d.taccEngagedMs;
+      delete d.externalSignature;
+      delete d.tessieAutopilotPercent;
     }
+
+    driveDetailCache = newCache;
+    driveDetailGen++;
 
     logger.info('main', `loaded ${drives.length} drive(s) from ${totalRoutes} clips` +
       `${hiddenTessieCount > 0 ? `, ${hiddenTessieCount} imported hidden behind dashcam drives` : ''} — ${filePath}`);
@@ -490,18 +532,25 @@ ipcMain.handle('load-and-group-drives', async (_e, filePath) => {
       droppedCount,
       hiddenTessieCount,
       hiddenTessieDrives,
+      cacheGen: driveDetailGen,
     };
   } catch (err) {
     logger.error('main', 'load drives failed:', err?.message ?? err);
     return { success: false, error: err.message };
   }
-});
+}));
 
-ipcMain.handle('get-drive-detail', (_e, driveId) => {
+// Accepts the legacy bare-id form and the {driveId, gen} form; a mismatched
+// generation means the cache was rebuilt by a newer load since the renderer
+// got this drive's summary — refuse rather than serve another load's data.
+ipcMain.handle('get-drive-detail', (_e, arg) => {
+  const driveId = (arg && typeof arg === 'object') ? arg.driveId : arg;
+  const gen = (arg && typeof arg === 'object') ? arg.gen : null;
   if (!driveDetailCache) return { success: false, error: 'No drives loaded' };
-  const detail = driveDetailCache.get(driveId);
-  if (!detail) return { success: false, error: 'Drive not found' };
-  return { success: true, ...detail };
+  if (gen != null && gen !== driveDetailGen) return { success: false, error: 'Drive list was reloaded' };
+  const buf = driveDetailCache.get(driveId);
+  if (!buf) return { success: false, error: 'Drive not found' };
+  return { success: true, ...v8.deserialize(buf) };
 });
 
 ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount, reprocessAll }) => {
@@ -525,20 +574,26 @@ ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount
   if (workerCount && workerCount > 0) args.push(String(workerCount));
   if (reprocessAll) args.push('--reprocess-all');
 
+  // Keep a local handle: the close/error callbacks below fire after this run
+  // may already have been stopped (and a NEW run started). Guarding on
+  // `activeChild === child` keeps a dying child from clobbering the new run's
+  // reference or sending it a spurious 'done'.
+  let child;
   try {
-    activeChild = spawn(process.execPath, args, {
+    child = spawn(process.execPath, args, {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     });
   } catch (err) {
     logger.error('processing', 'spawn failed:', err.message);
     return { success: false, error: `spawn failed: ${err.message}` };
   }
+  activeChild = child;
 
   logger.info('processing', `${reprocessAll ? 'reprocess-all' : 'process new'} started — workers=${workerCount || 'auto'}, clips=${clipsDir}`);
-  activeChild.stderr?.on('data', (chunk) => logger.error('processing', String(chunk).trim()));
-  activeChild.on('exit', (code) => logger.info('processing', `child exited with code ${code}`));
+  child.stderr?.on('data', (chunk) => logger.error('processing', String(chunk).trim()));
+  child.on('exit', (code) => logger.info('processing', `child exited with code ${code}`));
 
-  activeChild.stdout.on('data', (chunk) => {
+  child.stdout.on('data', (chunk) => {
     const text = chunk.toString();
     mainWindow?.webContents.send('processing-output', { type: 'stdout', text });
     // Lift the child's one-line outcome summary into the app log timeline.
@@ -547,19 +602,28 @@ ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount
     }
   });
 
-  activeChild.stderr.on('data', (chunk) => {
+  child.stderr.on('data', (chunk) => {
     mainWindow?.webContents.send('processing-output', { type: 'stderr', text: chunk.toString() });
   });
 
   return new Promise((resolve) => {
-    activeChild.on('close', (code) => {
-      activeChild = null;
-      mainWindow?.webContents.send('processing-output', { type: 'done', code });
+    child.on('close', (code) => {
+      const wasCurrent = activeChild === child;
+      if (wasCurrent) activeChild = null;
+      // A user Stop already painted its own final state in the renderer —
+      // sending 'done' with the SIGTERM exit code would overwrite a clean
+      // "Stopped" with a spurious error line.
+      if (wasCurrent && !child.userStopped) {
+        mainWindow?.webContents.send('processing-output', { type: 'done', code });
+      }
       resolve({ success: true, exitCode: code });
     });
-    activeChild.on('error', (err) => {
-      activeChild = null;
-      mainWindow?.webContents.send('processing-output', { type: 'error', text: err.message });
+    child.on('error', (err) => {
+      const wasCurrent = activeChild === child;
+      if (wasCurrent) activeChild = null;
+      if (wasCurrent && !child.userStopped) {
+        mainWindow?.webContents.send('processing-output', { type: 'error', text: err.message });
+      }
       resolve({ success: false, error: err.message });
     });
   });
@@ -567,9 +631,24 @@ ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount
 
 ipcMain.handle('stop-processing', () => {
   if (!activeChild) return { success: false, error: 'No process running' };
-  activeChild.kill('SIGTERM');
-  activeChild = null;
-  return { success: true };
+  const child = activeChild;
+  child.userStopped = true; // suppress the close handler's 'done' — the renderer paints "Stopped" itself
+  child.kill('SIGTERM');
+  // Hold activeChild until the child actually exits so a quick Start can't
+  // spawn a second run alongside the dying one ('start-processing' refuses
+  // while activeChild is set). If the child ignores SIGTERM, escalate to
+  // SIGKILL after 5s — never release the slot while the old process could
+  // still be writing the output file; SIGKILL can't be ignored, so 'close'
+  // always arrives.
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    }, 5000);
+    child.once('close', () => {
+      clearTimeout(timer);
+      resolve({ success: true });
+    });
+  });
 });
 
 // ─── drive-data.json wire format ─────────────────────────────────────────────
@@ -799,15 +878,6 @@ async function decodeRoutesByteFields(routes) {
 
 // ─── Drive Tags ──────────────────────────────────────────────────────────────
 
-ipcMain.handle('get-drive-tags', async (_e, filePath) => {
-  try {
-    const data = await readDriveData(filePath);
-    return { success: true, driveTags: data.driveTags ?? {} };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-});
-
 ipcMain.handle('set-drive-tags', (_e, { filePath, driveKey, tags }) => withDriveDataLock(async () => {
   try {
     const data = await readDriveData(filePath, { wantProcessedFiles: true });
@@ -819,27 +889,24 @@ ipcMain.handle('set-drive-tags', (_e, { filePath, driveKey, tags }) => withDrive
       data.driveTags[driveKey] = tags;
     }
 
-    data.routes = await routesToWireFormat(data.routes);
+    // Byte fields read from disk are normally already wire-format base64
+    // strings, so a full routesToWireFormat pass only spread-copied every
+    // route on each tag edit. Encode in place, and only the rare legacy
+    // array-form field — keeps the on-disk format canonical without copies.
+    const { encode } = await getByteFieldCodec();
+    for (const r of data.routes ?? []) {
+      if (!r) continue;
+      const ap = encode(r.autopilotStates);
+      if (ap !== r.autopilotStates) r.autopilotStates = ap;
+      const gs = encode(r.gearStates);
+      if (gs !== r.gearStates) r.gearStates = gs;
+    }
     await writeDriveDataJSON(filePath, data);
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
   }
 }));
-
-ipcMain.handle('get-all-tag-names', async (_e, filePath) => {
-  try {
-    const data = await readDriveData(filePath);
-    const driveTags = data.driveTags ?? {};
-    const set = new Set();
-    for (const tags of Object.values(driveTags)) {
-      for (const t of tags) set.add(t);
-    }
-    return { success: true, tags: [...set].sort() };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-});
 
 ipcMain.handle('revert-gps', (_e, filePath) => {
   try {
@@ -862,6 +929,7 @@ ipcMain.handle('check-online', async () => {
   try {
     await new Promise((resolve, reject) => {
       const req = require('https').get('https://router.project-osrm.org/health', { timeout: 5000 }, (res) => {
+        res.resume(); // drain — only the status matters; an unread body pins the socket
         resolve(res.statusCode);
       });
       req.on('error', reject);
@@ -1682,10 +1750,13 @@ ipcMain.handle('tessie-remove-hidden', (_e, { driveDataPath }) => withDriveDataL
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives } = groupIntoDrives(data.routes ?? []);
 
-    // Build SEI ranges and find Tessie drives that overlap them.
+    // Build SEI ranges and find Tessie drives that overlap them. Only real
+    // dashcam (SEI) drives count as coverage — excluding just 'tessie' here
+    // used to let Teslascope imports count as "dashcam", deleting Tessie
+    // drives that only overlapped another import.
     const seiRanges = [];
     for (const d of drives) {
-      if (d.source === 'tessie' || !d.startTime || !d.endTime) continue;
+      if (d.source !== 'sei' || !d.startTime || !d.endTime) continue;
       const s = Date.parse(d.startTime);
       const e = Date.parse(d.endTime);
       if (Number.isFinite(s) && Number.isFinite(e)) seiRanges.push({ s, e });
