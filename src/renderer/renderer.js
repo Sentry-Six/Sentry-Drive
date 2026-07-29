@@ -4085,37 +4085,59 @@ function removeMarkers(arr) {
   document.querySelectorAll('#map .map-tooltip').forEach((t) => t.remove());
 }
 
-// Painted-ink measurement for a marker label: rasterize the glyph at 8x,
-// pixel-scan the alpha channel, and return the ink center relative to the
-// text origin plus the metrics the layout math needs. Canvas and DOM share
-// the same text rasterizer, so this is where the letter ACTUALLY lands —
-// immune to the ~0.2px drift in the font's declared bounding boxes. Results
-// are cached per label+size, but only once the real font has loaded, so an
-// early fallback-font measurement can't poison the session.
-function measureGlyphInk(label, px) {
-  const font = `800 ${px}px 'Noto Sans', sans-serif`;
-  const cache = (measureGlyphInk._cache ??= new Map());
-  const key = `${label}|${px}`;
-  if (cache.has(key)) return cache.get(key);
+// Pre-rendered badge sprite: disc + white ring + letter + shadow baked into
+// one supersampled offscreen canvas. WHY A BITMAP: MapLibre rounds marker
+// positions to whole pixels (subpixelPositioning defaults to false) and
+// Chromium snaps DOM glyph origins to integer device pixels, so fractional
+// letter offsets inside a live DOM marker are quantized away at paint time —
+// DOM text can never be reliably sub-pixel centered in these badges. In a
+// baked raster the letter's ink is alpha-scanned and painted so its pixel
+// center lands exactly on the disc center, and the finished badge moves as
+// one image that nothing re-snaps.
+function renderBadgeSprite({ label, fill, radius, strokeW, labelColor }) {
+  const dpr = Math.ceil(window.devicePixelRatio || 1);
+  const cache = (renderBadgeSprite._cache ??= new Map());
+  const key = `${label}|${fill}|${radius}|${strokeW}|${labelColor}|${dpr}`;
+  const hit = cache.get(key);
+  if (hit) return hit;
 
-  const S = 8; // supersample: 1/8px ink resolution
+  const px = Math.round(radius * 1.7); // letter size — same ratio as always
+  const font = `800 ${px}px 'Noto Sans', sans-serif`;
+  const S = dpr * 2;                   // supersample for clean downscaled AA
+  // Match the old content-box DOM disc: a 2R fill with the ring OUTSIDE it.
+  const size = radius * 2 + strokeW * 2;
   const canvas = document.createElement('canvas');
-  canvas.width = px * 4 * S;
-  canvas.height = px * 4 * S;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  canvas.width = size * S;
+  canvas.height = size * S;
+  const ctx = canvas.getContext('2d');
   ctx.scale(S, S);
-  ctx.font = font;
-  const m = ctx.measureText(label);
-  if (m.fontBoundingBoxAscent === undefined) return null;
+
+  const c = size / 2;
+  ctx.beginPath();
+  ctx.arc(c, c, radius + strokeW / 2, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill(); // fill runs under the ring — no seam at the join
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = strokeW;
+  ctx.stroke();
+
+  // Letter: alpha-scan its ink on a scratch raster first, then paint it with
+  // the ink's pixel center exactly on the disc center.
+  const scratch = document.createElement('canvas');
+  scratch.width = px * 4 * S;
+  scratch.height = px * 4 * S;
+  const sctx = scratch.getContext('2d', { willReadFrequently: true });
+  sctx.scale(S, S);
+  sctx.font = font;
   const originX = px;
   const baselineY = px * 2;
-  ctx.fillStyle = '#fff';
-  ctx.fillText(label, originX, baselineY);
-  const img = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+  sctx.fillStyle = '#fff';
+  sctx.fillText(label, originX, baselineY);
+  const img = sctx.getImageData(0, 0, scratch.width, scratch.height).data;
   let minX = Infinity, maxX = -1, minY = Infinity, maxY = -1;
-  for (let y = 0; y < canvas.height; y++) {
-    for (let x = 0; x < canvas.width; x++) {
-      if (img[(y * canvas.width + x) * 4 + 3] > 16) {
+  for (let y = 0; y < scratch.height; y++) {
+    for (let x = 0; x < scratch.width; x++) {
+      if (img[(y * scratch.width + x) * 4 + 3] > 16) {
         if (x < minX) minX = x;
         if (x > maxX) maxX = x;
         if (y < minY) minY = y;
@@ -4123,17 +4145,25 @@ function measureGlyphInk(label, px) {
       }
     }
   }
-  if (maxX < 0) return null; // nothing painted (blank label)
-  const result = {
-    cx: (minX + maxX + 1) / 2 / S - originX,     // ink center vs text origin
-    cy: (minY + maxY + 1) / 2 / S - baselineY,   // negative = above baseline
-    width: m.width,
-    fontAscent: m.fontBoundingBoxAscent,
-    fontDescent: m.fontBoundingBoxDescent,
-  };
-  // Cache only measurements taken with the real font in place.
-  if (document.fonts?.check?.(font)) cache.set(key, result);
-  return result;
+  if (maxX >= 0) {
+    const inkCx = (minX + maxX + 1) / 2 / S - originX; // vs text origin, CSS px
+    const inkCy = (minY + maxY + 1) / 2 / S - baselineY;
+    const BADGE_OPTICAL_DX = 0; // taste bias on a pixel-exact baseline
+    ctx.font = font;
+    ctx.fillStyle = labelColor;
+    // Canvas shadows ignore the transform (device-px units): scale them so
+    // the look matches the old CSS text-shadow `0 1px 2px rgba(0,0,0,.5)`.
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+    ctx.shadowBlur = 2 * S;
+    ctx.shadowOffsetY = 1 * S;
+    ctx.fillText(label, c - inkCx + BADGE_OPTICAL_DX, c - inkCy);
+    ctx.shadowColor = 'transparent';
+  }
+
+  // Cache only sprites drawn with the real font: a fallback-font render
+  // before fonts.ready must not poison the session.
+  if (document.fonts?.check?.(font)) cache.set(key, canvas);
+  return canvas;
 }
 
 // Circle DOM marker (start/end/FSD events) with a hover tooltip — replaces
@@ -4142,46 +4172,31 @@ function measureGlyphInk(label, px) {
 function makeDotMarker(latLng, { fill, radius = 7, strokeW = 2, opacity = 1, tooltip, label, labelColor = '#fff' }) {
   const el = document.createElement('div');
   el.className = 'map-dot-marker';
-  el.style.width = `${radius * 2}px`;
-  el.style.height = `${radius * 2}px`;
-  el.style.background = fill;
-  el.style.border = `${strokeW}px solid #fff`;
   if (opacity !== 1) el.style.opacity = String(opacity);
   if (label) {
-    el.style.display = 'flex';
-    el.style.alignItems = 'center';
-    el.style.justifyContent = 'center';
-    // The letter lives in an inner span: el is anchored to the GPS point, so any
-    // optical nudge has to move the glyph, not the circle.
-    const px = Math.round(radius * 1.7); // fill the circle
-    const lbl = document.createElement('span');
-    lbl.textContent = label;
-    lbl.style.color = labelColor;
-    lbl.style.fontFamily = "'Noto Sans', sans-serif";
-    lbl.style.fontWeight = '800';
-    lbl.style.fontSize = `${px}px`;
-    lbl.style.lineHeight = '1';
-    lbl.style.textShadow = '0 1px 2px rgba(0, 0, 0, 0.5)'; // legibility on any fill
-    // Flex centers the em BOX / advance width, not the ink: where the letter
-    // actually lands depends on the font's ascent/descent split, side
-    // bearings, and rasterization. Font metrics proved ~0.2px off from the
-    // painted truth, so rasterize the glyph once (supersampled), scan the
-    // actual ink pixels, and shift the painted ink center onto the disc
-    // center — exact for whatever font actually loaded. Cached per label+size
-    // once the real font is available.
-    const ink = measureGlyphInk(label, px);
-    if (ink) {
-      // Slight rightward bias beyond dead-center: caps like A/D carry their
-      // visual weight left, so pixel-perfect reads a hair left in a disc.
-      const opticalDx = 0.5;
-      // Span box is m.width × px (line-height:1). The baseline sits at
-      // half-leading + ascent from the box top; the origin at the box left.
-      const originY = (px - (ink.fontAscent + ink.fontDescent)) / 2 + ink.fontAscent;
-      const dx = ink.width / 2 - ink.cx + opticalDx;
-      const dy = px / 2 - (originY + ink.cy);
-      lbl.style.transform = `translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px)`;
-    }
-    el.appendChild(lbl);
+    // Labeled badge: one pre-rendered bitmap (see renderBadgeSprite for why
+    // DOM text can't be centered here). The wrapper div stays a plain round
+    // hit target — the tooltip and the display toggle in
+    // applyFsdMarkerVisibility keep working on it — sized like the old
+    // content-box div: 2R disc with the ring outside.
+    const sprite = renderBadgeSprite({ label, fill, radius, strokeW, labelColor });
+    const cssSize = radius * 2 + strokeW * 2;
+    el.style.width = `${cssSize}px`;
+    el.style.height = `${cssSize}px`;
+    const view = document.createElement('canvas');
+    view.width = sprite.width;
+    view.height = sprite.height;
+    view.style.width = `${cssSize}px`;
+    view.style.height = `${cssSize}px`;
+    view.style.display = 'block';
+    view.style.pointerEvents = 'none';
+    view.getContext('2d').drawImage(sprite, 0, 0);
+    el.appendChild(view);
+  } else {
+    el.style.width = `${radius * 2}px`;
+    el.style.height = `${radius * 2}px`;
+    el.style.background = fill;
+    el.style.border = `${strokeW}px solid #fff`;
   }
   if (tooltip) attachMapTooltip(el, tooltip);
   return new maplibregl.Marker({ element: el, anchor: 'center' })
