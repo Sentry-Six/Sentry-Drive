@@ -349,6 +349,48 @@ test('battery rollup: omitted entirely when no clip has battery telemetry', () =
 // Median of the stationary cluster at each end; raw terminal fix when the car
 // was already rolling (cluster < 3 points).
 
+test('complete BLE telemetry rollup matches Sentry USB drive summaries', () => {
+  const drives = drivesOf([
+    {
+      ...testRoute('2026-07-27/2026-07-27_10-00-00-front.mp4', [[37, -122]]),
+      batteryPctStart: 80, batteryPctEnd: 79,
+      interiorTempMin: 20, interiorTempMax: 24, exteriorTempAvg: 30,
+      hvacRuntimeS: 30, tireFlPsi: 42, tireRlPsi: 43,
+      odometerMiStart: 1000,
+    },
+    {
+      ...testRoute('2026-07-27/2026-07-27_10-01-00-front.mp4', [[37.001, -122]]),
+      batteryPctStart: 79, batteryPctEnd: 78,
+      interiorTempMin: 18, interiorTempMax: 28, exteriorTempAvg: 32,
+      hvacRuntimeS: 45, tireFlPsi: 41.5, tireFrPsi: 42.5,
+      tireRrPsi: 43.5, odometerMiEnd: 1002.25,
+    },
+  ]);
+  assert.equal(drives.length, 1);
+  assert.deepEqual({
+    batteryPctStart: drives[0].batteryPctStart,
+    batteryPctEnd: drives[0].batteryPctEnd,
+    batteryPctUsed: drives[0].batteryPctUsed,
+    interiorTempMinC: drives[0].interiorTempMinC,
+    interiorTempMaxC: drives[0].interiorTempMaxC,
+    exteriorTempAvgC: drives[0].exteriorTempAvgC,
+    hvacRuntimeS: drives[0].hvacRuntimeS,
+    tireFlPsi: drives[0].tireFlPsi,
+    tireFrPsi: drives[0].tireFrPsi,
+    tireRlPsi: drives[0].tireRlPsi,
+    tireRrPsi: drives[0].tireRrPsi,
+    odometerMiStart: drives[0].odometerMiStart,
+    odometerMiEnd: drives[0].odometerMiEnd,
+    odometerMiDriven: drives[0].odometerMiDriven,
+  }, {
+    batteryPctStart: 80, batteryPctEnd: 78, batteryPctUsed: 2,
+    interiorTempMinC: 18, interiorTempMaxC: 28, exteriorTempAvgC: 31,
+    hvacRuntimeS: 75, tireFlPsi: 41.5, tireFrPsi: 42.5,
+    tireRlPsi: 43, tireRrPsi: 43.5,
+    odometerMiStart: 1000, odometerMiEnd: 1002.25, odometerMiDriven: 2.25,
+  });
+});
+
 test('geocode endpoints: stationary-median start, raw terminal fix when rolling', () => {
   const pts = [
     // Parked cluster: 5 jittered fixes within ~5 m (median lat = 37.000009).
