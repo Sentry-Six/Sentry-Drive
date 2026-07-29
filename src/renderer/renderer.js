@@ -127,23 +127,28 @@ let markerColor = localStorage.getItem('markerColor') || '#ffffff';
 // files the same pixel size), add an entry here and an <option> in
 // index.html — options whose artwork is missing self-remove at startup (see
 // the probe in initFooter).
+// `lengthM` is the real bumper-to-bumper length; the marker is drawn at that
+// size in MAP metres (see vehicleMarkerSize), so a car sits on the road like
+// the buildings do rather than staying a fixed blob. w/h are the aspect
+// source — only their ratio matters now, not their absolute values.
 const VEHICLE_MODELS = {
-  // Marker boxes are one shared scale over each render's canvas (model3 = 90px
-  // tall), so the fleet stays proportional to each other — the art's canvas
-  // heights already track real vehicle length — and nothing warps.
   // Keys are stable: renaming one would orphan a saved markerType setting.
-  model3:      { texture: '../../assets/map-ui/model3_t.png',        mask: '../../assets/map-ui/model3_c.png',        w: 47, h: 90  },
-  highland:    { texture: '../../assets/map-ui/highland_t.png',      mask: '../../assets/map-ui/highland_c.png',      w: 46, h: 90  },
-  highlandPerf:{ texture: '../../assets/map-ui/highland-perf_t.png', mask: '../../assets/map-ui/highland-perf_c.png', w: 46, h: 90  },
-  modelY:      { texture: '../../assets/map-ui/modely_t.png',        mask: '../../assets/map-ui/modely_c.png',        w: 48, h: 92  },
-  juniper:     { texture: '../../assets/map-ui/juniper_t.png',       mask: '../../assets/map-ui/juniper_c.png',       w: 48, h: 92  },
-  juniperPerf: { texture: '../../assets/map-ui/juniper-perf_t.png',  mask: '../../assets/map-ui/juniper-perf_c.png',  w: 47, h: 92  },
-  modelYL:     { texture: '../../assets/map-ui/modelyL_t.png',       mask: '../../assets/map-ui/modelyL_c.png',       w: 48, h: 96  },
-  modelS:      { texture: '../../assets/map-ui/models_t.png',        mask: '../../assets/map-ui/models_c.png',        w: 49, h: 95  },
-  modelSPlaid: { texture: '../../assets/map-ui/models-plaid_t.png',  mask: '../../assets/map-ui/models-plaid_c.png',  w: 49, h: 96  },
-  modelX:      { texture: '../../assets/map-ui/modelx_t.png',        mask: '../../assets/map-ui/modelx_c.png',        w: 50, h: 98  },
-  cybertruck:  { texture: '../../assets/map-ui/cybertruck_t.png',    mask: '../../assets/map-ui/cybertruck_c.png',    w: 54, h: 111 },
+  model3:      { texture: '../../assets/map-ui/model3_t.png',        mask: '../../assets/map-ui/model3_c.png',        w: 47, h: 90,  lengthM: 4.72 },
+  highland:    { texture: '../../assets/map-ui/highland_t.png',      mask: '../../assets/map-ui/highland_c.png',      w: 46, h: 90,  lengthM: 4.72 },
+  highlandPerf:{ texture: '../../assets/map-ui/highland-perf_t.png', mask: '../../assets/map-ui/highland-perf_c.png', w: 46, h: 90,  lengthM: 4.72 },
+  modelY:      { texture: '../../assets/map-ui/modely_t.png',        mask: '../../assets/map-ui/modely_c.png',        w: 48, h: 92,  lengthM: 4.75 },
+  juniper:     { texture: '../../assets/map-ui/juniper_t.png',       mask: '../../assets/map-ui/juniper_c.png',       w: 48, h: 92,  lengthM: 4.79 },
+  juniperPerf: { texture: '../../assets/map-ui/juniper-perf_t.png',  mask: '../../assets/map-ui/juniper-perf_c.png',  w: 47, h: 92,  lengthM: 4.79 },
+  modelYL:     { texture: '../../assets/map-ui/modelyL_t.png',       mask: '../../assets/map-ui/modelyL_c.png',       w: 48, h: 96,  lengthM: 4.98 },
+  modelS:      { texture: '../../assets/map-ui/models_t.png',        mask: '../../assets/map-ui/models_c.png',        w: 49, h: 95,  lengthM: 5.02 },
+  modelSPlaid: { texture: '../../assets/map-ui/models-plaid_t.png',  mask: '../../assets/map-ui/models-plaid_c.png',  w: 49, h: 96,  lengthM: 5.02 },
+  modelX:      { texture: '../../assets/map-ui/modelx_t.png',        mask: '../../assets/map-ui/modelx_c.png',        w: 50, h: 98,  lengthM: 5.06 },
+  cybertruck:  { texture: '../../assets/map-ui/cybertruck_t.png',    mask: '../../assets/map-ui/cybertruck_c.png',    w: 54, h: 111, lengthM: 5.68 },
 };
+// Below this on-screen height the car is unreadable, so it stops shrinking and
+// behaves like a cursor — the only departure from true scale, and only when
+// zoomed far enough out that ground truth stopped being meaningful anyway.
+const VEHICLE_MIN_PX = 38;
 let vehicleColoredUrl = null; // tinted texture for the CURRENT vehicle model
 let carColorPicker   = null;
 let markerColorDebounceTimer = null;
@@ -589,10 +594,31 @@ function initMap() {
     }
   });
 
+  // Vehicle markers are sized in map metres, so they have to be re-measured
+  // whenever the scale changes. Resizing the existing <img> is cheap — no
+  // re-tint, no marker rebuild — so running it per zoom frame is fine.
+  map.on('zoom', resizeVehicleMarkerToZoom);
+
   document.getElementById('btn-back-overview').addEventListener('click', (e) => {
     e.stopPropagation();
     deselectDrive();
   });
+}
+
+// Rescale the live replay marker for the current zoom, preserving its bearing
+// (the rotation lives on the inner <img>'s transform, which we don't touch).
+function resizeVehicleMarkerToZoom() {
+  if (!replayMarker || !(markerType in VEHICLE_MODELS)) return;
+  const { w, h } = getMarkerSize();
+  const el = replayMarker.getElement();
+  if (el.style.width === `${w}px`) return; // no visible change — skip the write
+  el.style.width = `${w}px`;
+  el.style.height = `${h}px`;
+  const img = el.querySelector('#replay-arrow');
+  if (img) {
+    img.style.width = `${w}px`;
+    img.style.height = `${h}px`;
+  }
 }
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
@@ -4632,8 +4658,30 @@ function calcBearing(lat1, lon1, lat2, lon2) {
 
 const ARROW_MARKER_SIZE = { w: 128, h: 128 };
 
+// Screen pixels per map metre at the marker's latitude and the map's current
+// zoom. MapLibre's Mercator scale stretches with latitude, so this is measured
+// at the marker itself rather than assumed from zoom alone.
+function pixelsPerMetreAt(lat) {
+  const EARTH_CIRCUMFERENCE_M = 40075016.686;
+  const metresPerPixel = (EARTH_CIRCUMFERENCE_M * Math.cos((lat * Math.PI) / 180))
+    / (512 * Math.pow(2, map.getZoom()));
+  return metresPerPixel > 0 ? 1 / metresPerPixel : 0;
+}
+
+// A vehicle marker is a physical object, so it's drawn at its true length in
+// map metres — it grows and shrinks with the ground like the buildings under
+// it. Clamped at VEHICLE_MIN_PX so it never disappears when zoomed out.
+function vehicleMarkerSize(model) {
+  const lat = replayMarker?.getLngLat()?.lat ?? map?.getCenter()?.lat ?? 0;
+  const ppm = mapReady ? pixelsPerMetreAt(lat) : 0;
+  const h = Math.max(VEHICLE_MIN_PX, model.lengthM * ppm);
+  return { w: Math.round(h * (model.w / model.h)), h: Math.round(h) };
+}
+
 function getMarkerSize() {
-  return VEHICLE_MODELS[markerType] ?? ARROW_MARKER_SIZE;
+  const model = VEHICLE_MODELS[markerType];
+  if (!model) return ARROW_MARKER_SIZE; // the arrow is a cursor — fixed size
+  return vehicleMarkerSize(model);
 }
 
 function buildMarkerHtml(bearing) {

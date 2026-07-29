@@ -40,6 +40,10 @@
         {
           "type": "feature",
           "description": "The replay marker now covers the whole lineup — Model 3, Highland (and Performance), Model Y, Juniper (and Performance), Model Y L, Model S (and Plaid), Model X, and Cybertruck. Each is drawn to scale with the others and takes your chosen paint color, with glass, wheels, and trim left alone."
+        },
+        {
+          "type": "improvement",
+          "description": "The vehicle replay marker is now drawn at its real size on the map, so it grows and shrinks with the ground like the streets and buildings under it — zoom in and the car sits in its lane; zoom out and it settles to a small, unobtrusive marker instead of covering half a city. The arrow marker is unchanged."
         }
       ]
     },
