@@ -301,6 +301,10 @@
                   <button class="car-color-swatch line-color-swatch" data-linecolor="fsd" type="button"></button>
                 </div>
                 <div class="settings-row">
+                  <span class="settings-row-label">Summon</span>
+                  <button class="car-color-swatch line-color-swatch" data-linecolor="summon" type="button"></button>
+                </div>
+                <div class="settings-row">
                   <span class="settings-row-label">Imported</span>
                   <button class="car-color-swatch line-color-swatch" data-linecolor="imported" type="button"></button>
                 </div>
@@ -418,18 +422,45 @@
       </div>
     </div>
 
-    <!-- ── Check Drives Confirm Modal ──────────────────────────────── -->
+    <!-- ── Check Drives Menu Modal ─────────────────────────────────── -->
     <div id="check-drives-overlay" class="hidden">
       <div class="reprocess-modal">
         <div class="reprocess-modal-icon halo-amber"><span class="material-icons">build</span></div>
-        <div class="reprocess-modal-title">Check Drives?</div>
+        <div class="reprocess-modal-title">Check Drives</div>
         <div class="reprocess-modal-msg">
-          This scans for GPS gaps and bridges missing segments. A backup of your current drive data is written first (.bak), so you can revert if needed.
+          Pick a check to run. A backup of your current drive data is written first (.bak), so you can revert if needed.
         </div>
-        <div class="reprocess-modal-warning">This is an ALPHA feature and may produce unexpected results.</div>
+        <div class="check-drives-options">
+          <button id="btn-check-bridge" class="check-option">
+            <span class="material-icons">route</span>
+            <span class="check-option-text">
+              <span class="check-option-title">Bridge Gaps</span>
+              <span class="check-option-desc">Scan for GPS gaps and bridge missing segments with road routes (or straight lines offline).</span>
+            </span>
+          </button>
+          <button id="btn-check-summon" class="check-option">
+            <span class="material-icons">settings_remote</span>
+            <span class="check-option-text">
+              <span class="check-option-title">Check for Summon</span>
+              <span class="check-option-desc">Re-read parking-speed drives' clips for blinker and brake evidence, then tag Summon drives.</span>
+            </span>
+          </button>
+        </div>
+        <div class="reprocess-modal-warning">These are ALPHA features and may produce unexpected results.</div>
         <div class="reprocess-modal-actions">
-          <button id="btn-check-drives-confirm" class="btn-primary btn-update-full">Check Drives</button>
           <button id="btn-check-drives-cancel" class="update-skip-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Check Drives Result Modal (in-app completion report) ──────── -->
+    <div id="check-result-overlay" class="hidden">
+      <div class="reprocess-modal">
+        <div class="reprocess-modal-icon halo-amber"><span class="material-icons">build</span></div>
+        <div id="check-result-title" class="reprocess-modal-title">Check complete</div>
+        <div id="check-result-msg" class="check-result-msg"></div>
+        <div class="reprocess-modal-actions">
+          <button id="btn-check-result-ok" class="btn-primary btn-update-full">OK</button>
         </div>
       </div>
     </div>

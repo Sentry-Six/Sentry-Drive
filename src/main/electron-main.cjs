@@ -6,7 +6,11 @@ const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const v8 = require('v8');
-const { geodesicM, GEAR_PARK, CLIP_DURATION_MS, DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
+const {
+  geodesicM, GEAR_PARK, CLIP_DURATION_MS, DRIVE_GAP_MS,
+  SUMMON_MAX_SPEED_MPS, SUMMON_MAX_DURATION_MS, MPS_TO_MPH,
+  computeGearRuns, computeFlagRuns,
+} = require('../shared/drive-calc.cjs');
 
 let mainWindow;
 let activeChild = null;
@@ -881,6 +885,14 @@ function writeDriveDataJSON(filePath, data) {
         await write('  "driveTags": ');
         await write(JSON.stringify(data.driveTags ?? {}, null, 2).replace(/\n/g, '\n  '));
 
+        // Sections this app doesn't model (Rusty's telemetrySamples,
+        // chargeTags, chargeCosts, …) — captured by readDriveData and echoed
+        // back verbatim so a read-modify-write never shrinks the shared file.
+        for (const [key, value] of Object.entries(data.extraSections ?? {})) {
+          await write(',\n  ' + JSON.stringify(key) + ': ');
+          await write(JSON.stringify(value) ?? 'null');
+        }
+
         await write('\n}\n');
         ws.end();
       } catch (err) {
@@ -1182,6 +1194,179 @@ ipcMain.handle('repair-gps', (_e, { filePath, useRouting }) => withDriveDataLock
     return { success: true, bridgedGaps, routedGaps, removedBridges };
   } catch (err) {
     logger.error('gps', 'check drives failed:', err?.message ?? err);
+    return { success: false, error: err.message };
+  }
+}));
+
+// ─── Check for Summon ────────────────────────────────────────────────────────
+
+// Resolve a route's relative clip path against the clips directory. Route
+// paths come in two shapes — Drive-processed "2026-07-15/x-front.mp4" and
+// Rusty-written "RecentClips/2026-07-15/x-front.mp4" — and the clips dir may
+// or may not itself end in RecentClips. Try the plausible joins; first hit wins.
+function resolveClipPath(clipsDir, normFile) {
+  if (!clipsDir) return null;
+  const cands = [path.join(clipsDir, normFile)];
+  if (/^RecentClips\//i.test(normFile)) {
+    cands.push(path.join(clipsDir, normFile.replace(/^RecentClips\//i, '')));
+  } else if (path.basename(clipsDir).toLowerCase() !== 'recentclips') {
+    cands.push(path.join(clipsDir, 'RecentClips', normFile));
+  }
+  for (const c of cands) {
+    try { if (fs.existsSync(c)) return c; } catch { /* unreadable share — treat as missing */ }
+  }
+  return null;
+}
+
+// Backfill SEI blinker/brake evidence (flagRuns) so the next grouping can tag
+// summon drives — the cheap alternative to reprocess-all for libraries
+// processed before flags existed (including Rusty-written files).
+//
+// Candidates come from two places:
+//  1. Whole drives inside the summon speed/duration envelope (an isolated
+//     summon that already grouped as its own tiny drive).
+//  2. The LOW-SPEED EDGE CLIPS of every dashcam drive. A summon fused onto a
+//     following drive hides at its head (verified live: Rusty's route for a
+//     summon-end clip missed the trailing Park run, so the park splitter
+//     never separated the summon from the hour of driving after it — the
+//     merged drive fails the envelope and would never be re-read). Summon can
+//     only sit at a drive's edges (it is always bracketed by Park), so edge
+//     clips at parking-lot speed are the complete hiding set.
+//
+// Re-extraction refreshes gearRuns/rawFrameCount/rawParkCount alongside
+// flagRuns: frame-accurate gear evidence is what lets the splitter isolate a
+// fused summon in the first place.
+ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock(async () => {
+  try {
+    sendRepairProgress('Reading…', 0, 1);
+    fs.copyFileSync(filePath, filePath + '.bak');
+    const data = await readDriveData(filePath, { wantProcessedFiles: true });
+    const routes = await decodeRoutesByteFields(data.routes ?? []);
+
+    const routeByFile = new Map();
+    for (const r of routes) routeByFile.set(String(r.file).replace(/\\/g, '/'), r);
+
+    sendRepairProgress('Scanning drives…', 0, 1);
+    const { groupIntoDrives } = await import('../processing/grouper.js');
+    const { drives } = groupIntoDrives(routes);
+
+    const maxMph = SUMMON_MAX_SPEED_MPS * MPS_TO_MPH + 0.01; // r2 rounding guard
+    const MAX_EDGE_CLIPS = 10; // summon duration cap is 10 min = 10 minute-clips
+
+    const routeIsSlow = (norm) => {
+      const route = routeByFile.get(norm);
+      if (!route || !Array.isArray(route.speeds) || route.speeds.length === 0) return false;
+      for (const s of route.speeds) {
+        if (Math.abs(s) > SUMMON_MAX_SPEED_MPS) return false;
+      }
+      return true;
+    };
+
+    // Unique clips worth re-reading, keyed by normalized path.
+    const pending = new Map();
+    const addClip = (f) => {
+      const norm = String(f).replace(/\\/g, '/');
+      if (norm.includes('-front-bridge.mp4')) return; // synthetic — no MP4 on disk
+      const route = routeByFile.get(norm);
+      if (route && !(Array.isArray(route.flagRuns) && route.flagRuns.length > 0)) {
+        pending.set(norm, route);
+      }
+    };
+
+    let candidateDrives = 0;
+    for (const d of drives) {
+      if ((d.source ?? 'sei') !== 'sei' || d.summon) continue;
+      const files = d.routeFiles ?? [];
+      if (files.length === 0) continue;
+
+      // No lower speed bound: reverse-only summons report NEGATIVE SEI
+      // speeds, which the display stat ignores — such drives show 0 mph.
+      const wholeDrive =
+        (d.maxSpeedMph ?? 0) <= maxMph &&
+        (d.durationMs ?? 0) <= SUMMON_MAX_DURATION_MS;
+      if (wholeDrive) {
+        candidateDrives++;
+        for (const f of files) addClip(f);
+        continue;
+      }
+
+      // Low-speed head and tail of a faster drive (fused-summon case). The
+      // slow run PLUS ONE boundary clip each way: a summon that ends seconds
+      // before the human drives off shares its final clip with fast driving
+      // (verified live, 2026-07-27 20:04) — that mixed clip holds the end
+      // bookend and the park run that lets the splitter isolate the summon,
+      // so a scan that stops at the first fast clip can never free it.
+      let took = false;
+      for (let i = 0; i < Math.min(files.length, MAX_EDGE_CLIPS); i++) {
+        const norm = String(files[i]).replace(/\\/g, '/');
+        if (!routeIsSlow(norm)) {
+          if (took) addClip(files[i]); // boundary clip after the slow run
+          break;
+        }
+        addClip(files[i]);
+        took = true;
+      }
+      let tookTail = false;
+      for (let i = 0; i < Math.min(files.length, MAX_EDGE_CLIPS); i++) {
+        const norm = String(files[files.length - 1 - i]).replace(/\\/g, '/');
+        if (!routeIsSlow(norm)) {
+          if (tookTail) addClip(files[files.length - 1 - i]); // boundary before the slow tail
+          break;
+        }
+        addClip(files[files.length - 1 - i]);
+        tookTail = true;
+      }
+      if (took || tookTail) candidateDrives++;
+    }
+
+    const { extractGPSFromFile } = await import('../processing/extract.js');
+    const entries = [...pending.entries()];
+    let scanned = 0, updated = 0, missing = 0;
+    const startMs = Date.now();
+    for (let i = 0; i < entries.length; i++) {
+      const [norm, route] = entries[i];
+      const etaSec = i > 0
+        ? Math.round(((Date.now() - startMs) / i) * (entries.length - i) / 1000)
+        : 0;
+      sendRepairProgress('Reading clips…', i + 1, entries.length, etaSec);
+      const fullPath = resolveClipPath(clipsDir, norm);
+      if (!fullPath) { missing++; continue; }
+      try {
+        const extracted = await extractGPSFromFile(fullPath);
+        scanned++;
+        if (extracted && extracted.flags && extracted.flags.length > 0) {
+          route.flagRuns = computeFlagRuns(extracted.flags);
+          // Authoritative gear evidence from the same frames. Rusty-written
+          // routes can miss short trailing Park runs; without them the park
+          // splitter can't isolate a summon from the drive that follows.
+          route.gearRuns = computeGearRuns(extracted.gears);
+          route.rawFrameCount = extracted.gears.length;
+          let parkCount = 0;
+          for (const g of extracted.gears) if (g === GEAR_PARK) parkCount++;
+          route.rawParkCount = parkCount;
+          updated++;
+        }
+      } catch {
+        missing++;
+      }
+    }
+
+    if (updated > 0) {
+      sendRepairProgress('Saving…', 1, 1);
+      data.routes = await routesToWireFormat(routes);
+      await writeDriveDataJSON(filePath, data);
+    }
+    logger.info('gps', `check summon: ${candidateDrives} candidate drive(s), ${scanned} clip(s) read, ` +
+      `${updated} route(s) gained flag+gear evidence, ${missing} clip(s) unavailable`);
+    return {
+      success: true,
+      candidateDrives,
+      clipsScanned: scanned,
+      updatedRoutes: updated,
+      missingClips: missing,
+    };
+  } catch (err) {
+    logger.error('gps', 'check summon failed:', err?.message ?? err);
     return { success: false, error: err.message };
   }
 }));

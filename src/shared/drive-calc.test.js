@@ -169,3 +169,215 @@ test('lifetime total sums pre-rounded per-drive miles, not metres (Rust db.rs:10
 
   assert.notEqual(sumOfRounded, metresMethod);
 });
+
+// ─── Summon detection ────────────────────────────────────────────────────────
+// Fixtures mirror real probed footage: the 2026-07-15 Actually Smart Summon
+// (two clips, ~29.9 fps) and the 2026-07-28 human parking-lot reposition that
+// superficially matches summon on gear/speed but fails every no-human tell.
+
+test('summon flag constants and thresholds are locked', () => {
+  assert.equal(calc.FLAG_BLINKER_LEFT, 1);
+  assert.equal(calc.FLAG_BLINKER_RIGHT, 2);
+  assert.equal(calc.FLAG_BRAKE, 4);
+  assert.equal(calc.FLAG_ACCEL, 8);
+  assert.equal(calc.SUMMON_MAX_SPEED_MPS, 3.5);
+  assert.equal(calc.SUMMON_BOOKEND_SECONDS, 10);
+  assert.equal(calc.SUMMON_MAX_DURATION_MS, 600000);
+});
+
+test('flagRunsOverlap: requireAll needs both bits in the SAME run', () => {
+  const HAZARD = calc.FLAG_BLINKER_LEFT | calc.FLAG_BLINKER_RIGHT;
+  // Hazards: one run carrying both bits.
+  assert.equal(calc.flagRunsOverlap([{ flags: 3, frames: 10 }], 0, 10, HAZARD, true), true);
+  // A left-only run followed by a right-only run must NOT read as hazards.
+  const alternating = [{ flags: 1, frames: 10 }, { flags: 2, frames: 10 }];
+  assert.equal(calc.flagRunsOverlap(alternating, 0, 20, HAZARD, true), false);
+  // …but requireAll=false (any-bit) sees them.
+  assert.equal(calc.flagRunsOverlap(alternating, 0, 20, HAZARD, false), true);
+});
+
+test('flagRunsOverlap honors [from, to) frame bounds', () => {
+  const runs = [
+    { flags: 3, frames: 60 },   // frames 0-59
+    { flags: 0, frames: 540 },  // frames 60-599
+    { flags: 3, frames: 60 },   // frames 600-659
+    { flags: 0, frames: 1140 }, // frames 660-1799
+  ];
+  assert.equal(calc.flagRunsOverlap(runs, 0, 60, 3, true), true);
+  assert.equal(calc.flagRunsOverlap(runs, 60, 600, 3, true), false);
+  // Run ending exactly at `from` is outside the window…
+  assert.equal(calc.flagRunsOverlap(runs, 660, 1800, 3, true), false);
+  // …and a window ending exactly at a run start excludes it too.
+  assert.equal(calc.flagRunsOverlap(runs, 360, 600, 3, true), false);
+  assert.equal(calc.flagRunsOverlap(runs, 360, 601, 3, true), true);
+});
+
+// Probe shape of 2026-07-15_20-49-54 (start clip): hazards through the P→D
+// shift, a 29 s left-signal run while maneuvering, no pedal bits anywhere.
+const ASS_START_CLIP = {
+  flagRuns: [
+    { flags: 0, frames: 27 },
+    { flags: 3, frames: 123 },
+    { flags: 0, frames: 17 },
+    { flags: 1, frames: 873 },
+    { flags: 0, frames: 746 },
+  ],
+  startFrame: 0,
+  endFrame: 1786,
+  totalFrames: 1786,
+};
+// Probe shape of 2026-07-15_20-50-43 (end clip): hazards through the stop
+// and D→P shift at the tail.
+const ASS_END_CLIP = {
+  flagRuns: [
+    { flags: 0, frames: 471 },
+    { flags: 3, frames: 82 },
+  ],
+  startFrame: 0,
+  endFrame: 553,
+  totalFrames: 553,
+};
+const ASS_STATS = { maxSpeedMps: 2.7, durationMs: 78000, hasSeiSpeeds: true };
+
+test('detectSummon: real ASS two-clip shape is summon', () => {
+  assert.equal(calc.detectSummon([ASS_START_CLIP, ASS_END_CLIP], ASS_STATS), true);
+});
+
+test('detectSummon: single-clip dumb-summon shape is summon', () => {
+  const clip = {
+    flagRuns: [
+      { flags: 3, frames: 90 },
+      { flags: 0, frames: 300 },
+      { flags: 3, frames: 60 },
+    ],
+    startFrame: 0,
+    endFrame: 450,
+    totalFrames: 450,
+  };
+  assert.equal(
+    calc.detectSummon([clip], { maxSpeedMps: 1.0, durationMs: 15000, hasSeiSpeeds: true }),
+    true,
+  );
+});
+
+test('detectSummon: pedal input anywhere disqualifies (human reposition)', () => {
+  // 2026-07-28_21-05-46 shape: brake to shift, accel to creep, no hazards.
+  const humanClip = {
+    flagRuns: [
+      { flags: 0, frames: 1200 },
+      { flags: 4, frames: 12 },
+      { flags: 8, frames: 230 },
+      { flags: 4, frames: 40 },
+      { flags: 0, frames: 674 },
+    ],
+    startFrame: 0,
+    endFrame: 2156,
+    totalFrames: 2156,
+  };
+  assert.equal(
+    calc.detectSummon([humanClip], { maxSpeedMps: 1.3, durationMs: 10000, hasSeiSpeeds: true }),
+    false,
+  );
+  // Even WITH hazard bookends, a single accel frame anywhere kills it.
+  const hazardsButPedal = {
+    flagRuns: [
+      { flags: 3, frames: 90 },
+      { flags: 0, frames: 100 },
+      { flags: 8, frames: 1 },
+      { flags: 0, frames: 199 },
+      { flags: 3, frames: 60 },
+    ],
+    startFrame: 0,
+    endFrame: 450,
+    totalFrames: 450,
+  };
+  assert.equal(
+    calc.detectSummon([hazardsButPedal], { maxSpeedMps: 1.0, durationMs: 15000, hasSeiSpeeds: true }),
+    false,
+  );
+});
+
+test('detectSummon: hazards must bookend BOTH ends', () => {
+  const startOnly = {
+    ...ASS_START_CLIP,
+  };
+  const noHazardEnd = {
+    flagRuns: [{ flags: 0, frames: 553 }],
+    startFrame: 0,
+    endFrame: 553,
+    totalFrames: 553,
+  };
+  assert.equal(calc.detectSummon([startOnly, noHazardEnd], ASS_STATS), false);
+});
+
+test('detectSummon: individual turn signals never read as hazards', () => {
+  const clip = {
+    flagRuns: [
+      { flags: 1, frames: 90 },  // left only at start
+      { flags: 0, frames: 300 },
+      { flags: 2, frames: 60 },  // right only at end
+    ],
+    startFrame: 0,
+    endFrame: 450,
+    totalFrames: 450,
+  };
+  assert.equal(
+    calc.detectSummon([clip], { maxSpeedMps: 1.0, durationMs: 15000, hasSeiSpeeds: true }),
+    false,
+  );
+});
+
+test('detectSummon: speed, duration, and SEI-speed gates', () => {
+  const clips = [ASS_START_CLIP, ASS_END_CLIP];
+  assert.equal(calc.detectSummon(clips, { ...ASS_STATS, maxSpeedMps: 5.0 }), false);
+  assert.equal(calc.detectSummon(clips, { ...ASS_STATS, maxSpeedMps: 0 }), false);
+  assert.equal(calc.detectSummon(clips, { ...ASS_STATS, durationMs: 601000 }), false);
+  assert.equal(calc.detectSummon(clips, { ...ASS_STATS, hasSeiSpeeds: false }), false);
+});
+
+test('detectSummon: any clip without flagRuns makes the drive unverifiable', () => {
+  const legacyClip = { flagRuns: undefined, startFrame: 0, endFrame: 553, totalFrames: 553 };
+  assert.equal(calc.detectSummon([ASS_START_CLIP, legacyClip], ASS_STATS), false);
+  assert.equal(calc.detectSummon([], ASS_STATS), false);
+});
+
+test('detectSummon: park-split segment bounds gate the bookend windows', () => {
+  // Full clip has hazards at frames 0-59 and 600-659; a 2 s park gap split
+  // the clip at frame 660. The FIRST segment sees both hazard windows; the
+  // SECOND segment (frames 660+) contains none and must not inherit them.
+  const flagRuns = [
+    { flags: 3, frames: 60 },
+    { flags: 0, frames: 540 },
+    { flags: 3, frames: 60 },
+    { flags: 0, frames: 1140 },
+  ];
+  const stats = { maxSpeedMps: 1.5, durationMs: 22000, hasSeiSpeeds: true };
+  const firstSegment = { flagRuns, startFrame: 0, endFrame: 660, totalFrames: 1800 };
+  const secondSegment = { flagRuns, startFrame: 660, endFrame: 1800, totalFrames: 1800 };
+  assert.equal(calc.detectSummon([firstSegment], stats), true);
+  assert.equal(calc.detectSummon([secondSegment], stats), false);
+});
+
+test('computeFlagRuns RLEs raw frames and round-trips totals', () => {
+  assert.deepEqual(calc.computeFlagRuns([]), []);
+  assert.deepEqual(calc.computeFlagRuns([0, 0, 3, 3, 3, 1, 0]), [
+    { flags: 0, frames: 2 },
+    { flags: 3, frames: 3 },
+    { flags: 1, frames: 1 },
+    { flags: 0, frames: 1 },
+  ]);
+  // Run totals must reconstruct the frame count — the summon detector's
+  // segment bounds depend on flagRuns living in raw frame space.
+  const flags = [0, 8, 8, 4, 0, 0, 3, 3, 2, 1];
+  const total = calc.computeFlagRuns(flags).reduce((s, r) => s + r.frames, 0);
+  assert.equal(total, flags.length);
+});
+
+test('computeGearRuns matches the worker RLE shape', () => {
+  assert.deepEqual(calc.computeGearRuns([]), []);
+  assert.deepEqual(calc.computeGearRuns([0, 0, 1, 1, 1, 0]), [
+    { gear: 0, frames: 2 },
+    { gear: 1, frames: 3 },
+    { gear: 0, frames: 1 },
+  ]);
+});

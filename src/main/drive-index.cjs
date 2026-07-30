@@ -175,11 +175,18 @@ class DriveIndex {
   }
 
   putDrive(summary, detail) {
+    // Summon-detected drives get a synthetic "summon" entry in the FILTER
+    // column only — summary.tags stays user-authored, so the tag editor
+    // never shows (or persists) a pill the user didn't add. A duplicate from
+    // a user's own "summon" tag is harmless: the LIKE match is identical.
+    const filterTags = summary.summon
+      ? [...(summary.tags ?? []), 'summon']
+      : summary.tags;
     this.insertDriveStmt.run(
       summary.id,
       summary.startTime,
       summary.source ?? 'sei',
-      encodeTagSet(summary.tags),
+      encodeTagSet(filterTags),
       v8.serialize(summary),
       v8.serialize(detail),
     );
@@ -192,8 +199,15 @@ class DriveIndex {
    * tag FILTERING truthful until the next load rebuilds the index.
    */
   setDriveTags(startTime, tags) {
+    // Keep the synthetic summon filter entry (see putDrive) across in-session
+    // tag edits — rewriting the column from user tags alone would silently
+    // drop a summon drive out of the Summon filter until the next regroup.
+    const row = this.db.prepare('SELECT summary FROM drives WHERE start_time = ?')
+      .get(String(startTime));
+    const isSummon = row ? Boolean(v8.deserialize(row.summary)?.summon) : false;
+    const filterTags = isSummon ? [...(tags ?? []), 'summon'] : tags;
     this.db.prepare('UPDATE drives SET tags = ? WHERE start_time = ?')
-      .run(encodeTagSet(tags), String(startTime));
+      .run(encodeTagSet(filterTags), String(startTime));
     const all = this.getDriveTags();
     if (Array.isArray(tags) && tags.length > 0) all[startTime] = tags;
     else delete all[startTime];

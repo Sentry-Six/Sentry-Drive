@@ -6,6 +6,7 @@
 // the unluckiest one ground through its remaining chunk alone.
 import { parentPort, workerData } from "node:worker_threads";
 import { extractGPSFromFile } from "./extract.js";
+import { computeGearRuns, computeFlagRuns } from "../shared/drive-calc.cjs";
 
 const { workerId } = workerData;
 
@@ -23,6 +24,7 @@ parentPort.on("message", async (msg) => {
     const data = await extractGPSFromFile(f.fullPath);
     if (data && data.points.length > 0) {
       const gearRuns = computeGearRuns(data.gears);
+      const flagRuns = computeFlagRuns(data.flags);
       const rawFrameCount = data.gears.length;
       let rawParkCount = 0;
       for (const g of data.gears) {
@@ -45,6 +47,7 @@ parentPort.on("message", async (msg) => {
           rawParkCount,
           rawFrameCount,
           gearRuns,
+          flagRuns,
           hasGPS: true,
         };
       } else {
@@ -62,24 +65,6 @@ parentPort.on("message", async (msg) => {
 
 // Announce readiness — the coordinator answers with the first file.
 parentPort.postMessage({ type: "ready", workerId });
-
-function computeGearRuns(gears) {
-  if (gears.length === 0) return [];
-  const runs = [];
-  let currentGear = gears[0];
-  let count = 1;
-  for (let i = 1; i < gears.length; i++) {
-    if (gears[i] === currentGear) {
-      count++;
-    } else {
-      runs.push({ gear: currentGear, frames: count });
-      currentGear = gears[i];
-      count = 1;
-    }
-  }
-  runs.push({ gear: currentGear, frames: count });
-  return runs;
-}
 
 function deduplicatePoints(points, gears, apStates, speeds, accelPositions) {
   if (points.length === 0) return { points: [], gears: [], apStates: [], speeds: [], accelPositions: [] };

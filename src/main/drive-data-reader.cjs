@@ -11,11 +11,17 @@
 //     path can't be used for everything.
 //
 // Both paths return the same shape:
-//   { processedFiles, processedFileCount, routes, driveTags }
+//   { processedFiles, processedFileCount, routes, driveTags, extraSections }
 // `processedFiles` is only populated when `wantProcessedFiles: true` (write
 // paths need it preserved for writeDriveDataJSON; the load/display path only
 // needs the count). The streaming path skips collecting the strings unless
 // asked, matching the old behavior.
+//
+// `extraSections` holds every top-level key this app does NOT model —
+// Rusty's exports carry telemetrySamples/chargeTags/chargeCosts alongside the
+// shared sections, and a read-modify-write cycle that dropped them silently
+// shrank the file by ~40 MB (verified live 2026-07-29). Writers must emit
+// these back verbatim.
 //
 // This module replaced the JSON.parse(readFileSync(...)) calls scattered
 // through electron-main.cjs — those crashed outright on >512 MiB files
@@ -98,6 +104,9 @@ async function readFast(filePath, onProgress) {
   }
 }
 
+// Top-level keys with dedicated handling; everything else is an extra section.
+const KNOWN_TOP_KEYS = new Set(['processedFiles', 'routes', 'driveTags']);
+
 // Token-streaming reader (the original OOM-safe path), one stream, one pass.
 function readStreaming(filePath, totalBytes, onProgress, wantProcessedFiles) {
   return new Promise((resolve, reject) => {
@@ -105,6 +114,7 @@ function readStreaming(filePath, totalBytes, onProgress, wantProcessedFiles) {
     const processedFiles = wantProcessedFiles ? [] : null;
     const routes = [];
     let driveTags = {};
+    const extraSections = {};
 
     // depth: 1 = inside top-level object; 2 = inside a top-level field's
     // value (array or object); 3 = inside a route element.
@@ -144,6 +154,7 @@ function readStreaming(filePath, totalBytes, onProgress, wantProcessedFiles) {
           if (depth === asmExitDepth) {
             if (currentTopKey === 'routes') routes.push(asm.current);
             else if (currentTopKey === 'driveTags') driveTags = asm.current;
+            else extraSections[currentTopKey] = asm.current;
             asm = null;
           }
         }
@@ -159,8 +170,10 @@ function readStreaming(filePath, totalBytes, onProgress, wantProcessedFiles) {
           asmExitDepth = before;
           asm.consume(token);
         }
-        // Start assembling the driveTags object (object at depth 2, value of driveTags key).
-        else if (before === 1 && name === 'startObject' && currentTopKey === 'driveTags') {
+        // Start assembling a whole top-level value: driveTags, or any section
+        // this app doesn't model (Rusty's telemetrySamples/chargeTags/…).
+        else if (before === 1 && currentTopKey && currentTopKey !== 'routes' &&
+                 currentTopKey !== 'processedFiles') {
           asm = new Assembler();
           asmExitDepth = before;
           asm.consume(token);
@@ -173,6 +186,18 @@ function readStreaming(filePath, totalBytes, onProgress, wantProcessedFiles) {
       } else if (name === 'stringValue' && depth === 2 && currentTopKey === 'processedFiles') {
         processedFileCount++;
         if (processedFiles) processedFiles.push(token.value);
+      } else if (depth === 1 && currentTopKey && !KNOWN_TOP_KEYS.has(currentTopKey)) {
+        // Scalar-valued extra section (a version string, a number, …).
+        if (name === 'stringValue' || name === 'numberValue') {
+          extraSections[currentTopKey] = name === 'numberValue' ? Number(token.value) : token.value;
+          currentTopKey = null;
+        } else if (name === 'trueValue' || name === 'falseValue') {
+          extraSections[currentTopKey] = name === 'trueValue';
+          currentTopKey = null;
+        } else if (name === 'nullValue') {
+          extraSections[currentTopKey] = null;
+          currentTopKey = null;
+        }
       }
     });
 
@@ -182,6 +207,7 @@ function readStreaming(filePath, totalBytes, onProgress, wantProcessedFiles) {
         processedFileCount,
         routes,
         driveTags,
+        extraSections,
       });
     });
     pipeline.on('error', reject);
@@ -199,7 +225,7 @@ function readStreaming(filePath, totalBytes, onProgress, wantProcessedFiles) {
  * @param {boolean} [opts.forceStreaming] test hook — exercise the streaming
  *   path on small fixtures.
  * @returns {Promise<{processedFiles: string[], processedFileCount: number,
- *   routes: object[], driveTags: object}>}
+ *   routes: object[], driveTags: object, extraSections: object}>}
  */
 async function readDriveData(filePath, opts = {}) {
   const { wantProcessedFiles = false, onProgress, forceStreaming = false } = opts;
@@ -215,11 +241,16 @@ async function readDriveData(filePath, opts = {}) {
   }
   if (data !== OVERSIZED) {
     const processedFiles = Array.isArray(data.processedFiles) ? data.processedFiles : [];
+    const extraSections = {};
+    for (const key of Object.keys(data)) {
+      if (!KNOWN_TOP_KEYS.has(key)) extraSections[key] = data[key];
+    }
     result = {
       processedFiles: wantProcessedFiles ? processedFiles : [],
       processedFileCount: processedFiles.length,
       routes: Array.isArray(data.routes) ? data.routes : [],
       driveTags: data.driveTags && typeof data.driveTags === 'object' ? data.driveTags : {},
+      extraSections,
     };
     // The load path only needs the count — drop the (one string per clip)
     // array now instead of keeping it alive alongside the routes.

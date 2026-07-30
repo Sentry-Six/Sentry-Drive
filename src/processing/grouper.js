@@ -5,6 +5,7 @@ import { GEAR_PARK, AUTOPILOT_OFF, AUTOPILOT_FSD, AUTOPILOT_AUTOSTEER, AUTOPILOT
 import {
   geodesicM,
   round2,
+  detectSummon,
   DRIVE_GAP_MS,
   PARK_GAP_SECONDS,
   CLIP_DURATION_MS,
@@ -608,7 +609,11 @@ function buildDriveStats(clips, idx) {
   let maxSpeedMps = 0;
   const speedSamples = [];
 
-  const hasSEISpeeds = allPoints.some((p) => p.seiSpeed > 0);
+  // SEI speed is SIGNED — negative in Reverse. Speed stats use the MAGNITUDE
+  // (deliberate divergence from Rusty, which still drops negative samples and
+  // so reports 0 mph for a reverse-only move; Drive leads here like it did on
+  // geodesic distance). Channel presence likewise counts reverse-only data.
+  const hasSEISpeeds = allPoints.some((p) => p.seiSpeed !== 0);
 
   for (let i = 1; i < allPoints.length; i++) {
     const p0 = allPoints[i - 1];
@@ -618,8 +623,8 @@ function buildDriveStats(clips, idx) {
     totalDistanceM += d;
 
     if (hasSEISpeeds) {
-      const speed = p1.seiSpeed;
-      if (speed >= 0 && speed < SEI_SPEED_MAX_MPS) {
+      const speed = Math.abs(p1.seiSpeed);
+      if (speed < SEI_SPEED_MAX_MPS) {
         speedSamples.push(speed);
         if (speed > maxSpeedMps) maxSpeedMps = speed;
       }
@@ -772,6 +777,33 @@ function buildDriveStats(clips, idx) {
   const r2 = round2;
   const pct = (part) => totalDistanceM > 0 ? Math.round((part / totalDistanceM) * 1000) / 10 : 0;
 
+  // Summon detection — evidence lives in raw SEI frame space (flagRuns +
+  // park-split segment bounds), so it is immune to GPS dedup and to the
+  // fraction-based frame→point index mapping the splitter uses. Clips without
+  // flagRuns (pre-flags extractions, imports) make the drive unverifiable and
+  // detectSummon returns false. Speed inputs come straight from the drive
+  // stats: maxSpeedMps is magnitude-based (reverse counts — see above), and
+  // hasSeiSpeeds gates out GPS-derived speeds, which jitter past walking pace
+  // on a car that barely moved.
+  const summonEvidence = clips.map((clip) => {
+    const runs = clip.flagRuns;
+    let totalFrames = clip.subClipFrames?.totalFrames ?? clip.rawFrameCount ?? 0;
+    if (!(totalFrames > 0) && Array.isArray(runs)) {
+      totalFrames = runs.reduce((sum, r) => sum + (r.frames ?? 0), 0);
+    }
+    return {
+      flagRuns: runs,
+      startFrame: clip.subClipFrames?.startFrame ?? 0,
+      endFrame: clip.subClipFrames?.endFrame ?? totalFrames,
+      totalFrames,
+    };
+  });
+  const summon = detectSummon(summonEvidence, {
+    maxSpeedMps: hasSEISpeeds ? maxSpeedMps : 0,
+    durationMs,
+    hasSeiSpeeds: hasSEISpeeds,
+  });
+
   // Geocoding-quality endpoints — Drive-leading enhancement (no Rust
   // counterpart; used ONLY for reverse-geocode labels, never for the locked
   // distance/speed stats). A single raw GPS fix carries 3–8 m of noise and
@@ -854,6 +886,7 @@ function buildDriveStats(clips, idx) {
     // Provenance: "sei" (native dashcam extraction) or "tessie" (imported).
     // Defaults to "sei" on old files that predate the source field.
     source: firstClip.source ?? "sei",
+    ...(summon ? { summon: true } : {}),
     ...(firstClip.externalSignature ? { externalSignature: firstClip.externalSignature } : {}),
     ...(firstClip.tessieAutopilotPercent != null ? { tessieAutopilotPercent: firstClip.tessieAutopilotPercent } : {}),
     ...(locationNameStart != null ? { locationNameStart } : {}),

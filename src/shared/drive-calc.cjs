@@ -71,6 +71,24 @@ const AUTOPILOT_FSD = 1;
 const AUTOPILOT_AUTOSTEER = 2;
 const AUTOPILOT_TACC = 3;
 
+// Per-frame SEI flag bits (SeiMetadata fields 7/8/9, plus derived accel bit).
+// Carried per clip as `flagRuns`: an RLE over RAW SEI frame indices
+// [{ flags, frames }] — the same frame space as gearRuns, so park-split
+// segment bounds index into it exactly, unaffected by GPS point dedup.
+const FLAG_BLINKER_LEFT = 1;  // blinker_on_left (steady switch state, not lamp flash)
+const FLAG_BLINKER_RIGHT = 2; // blinker_on_right
+const FLAG_BRAKE = 4;         // brake_applied (pedal-only; summon's own braking never sets it)
+const FLAG_ACCEL = 8;         // accelerator_pedal_position > 0 (human-only input)
+
+// Summon detection thresholds, verified against real Actually Smart Summon
+// footage (2026-07-15 20:49/20:50): hazards = both blinker bits in the same
+// frame, held 1-4 s spanning BOTH gear transitions; accel/brake stay 0 the
+// whole drive; speed peaked at 2.7 m/s (Tesla caps summon near 6 mph);
+// autopilot_state stays 0 during summon, so it plays no part here.
+const SUMMON_MAX_SPEED_MPS = 3.5;
+const SUMMON_BOOKEND_SECONDS = 10;      // hazards must appear this close to each end
+const SUMMON_MAX_DURATION_MS = 10 * 60 * 1000;
+
 // ─── Pure helpers ────────────────────────────────────────────────────────────
 
 // Ellipsoidal distance in metres between two GPS coordinates — Andoyer–Lambert
@@ -142,6 +160,135 @@ function round2(v) {
   return Math.round(v * 100) / 100;
 }
 
+/**
+ * RLE the per-frame gear states over RAW frame indices. Shared by the
+ * extraction worker and the Check for Summon backfill — the backfill
+ * re-derives gearRuns because Rusty-written routes can miss short trailing
+ * Park runs, which glues a summon onto the drive that follows it.
+ */
+function computeGearRuns(gears) {
+  if (!gears || gears.length === 0) return [];
+  const runs = [];
+  let currentGear = gears[0];
+  let count = 1;
+  for (let i = 1; i < gears.length; i++) {
+    if (gears[i] === currentGear) {
+      count++;
+    } else {
+      runs.push({ gear: currentGear, frames: count });
+      currentGear = gears[i];
+      count = 1;
+    }
+  }
+  runs.push({ gear: currentGear, frames: count });
+  return runs;
+}
+
+/**
+ * RLE the per-frame SEI flag bytes (blinkers/brake/accel bits) over RAW frame
+ * indices — the same frame space as gearRuns, deliberately computed BEFORE
+ * GPS point dedup: a stationary car with hazards on produces few unique GPS
+ * points, and the summon detector needs those frames, not the survivors.
+ * Shared by the extraction worker and the Check for Summon backfill.
+ */
+function computeFlagRuns(flags) {
+  if (!flags || flags.length === 0) return [];
+  const runs = [];
+  let currentFlags = flags[0];
+  let count = 1;
+  for (let i = 1; i < flags.length; i++) {
+    if (flags[i] === currentFlags) {
+      count++;
+    } else {
+      runs.push({ flags: currentFlags, frames: count });
+      currentFlags = flags[i];
+      count = 1;
+    }
+  }
+  runs.push({ flags: currentFlags, frames: count });
+  return runs;
+}
+
+/**
+ * True when any flagRuns run overlapping [fromFrame, toFrame) carries `mask`
+ * bits: all of them when requireAll (hazards = left AND right in the SAME
+ * run), any of them otherwise (pedal input = brake OR accel).
+ */
+function flagRunsOverlap(flagRuns, fromFrame, toFrame, mask, requireAll) {
+  let frame = 0;
+  for (const run of flagRuns) {
+    const start = frame;
+    const end = frame + run.frames;
+    frame = end;
+    if (end <= fromFrame) continue;
+    if (start >= toFrame) break;
+    const bits = run.flags & mask;
+    if (requireAll ? bits === mask : bits !== 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Detect a Summon / Smart Summon drive from per-clip SEI flag evidence.
+ *
+ * clipEvidence — one entry per clip of the drive, in drive order:
+ *   { flagRuns, startFrame, endFrame, totalFrames }
+ * where [startFrame, endFrame) bounds the drive's segment of that clip in
+ * raw SEI frame space (the full clip when the park splitter left it whole).
+ *
+ * The verified signature: hazards within the opening seconds of the first
+ * segment AND the closing seconds of the last, no pedal input anywhere in
+ * between, and the whole drive at parking-lot speed. A driverless car is
+ * the only thing that satisfies all three at once — a human repositioning
+ * with hazards on still touches a pedal or exceeds the summon speed cap.
+ */
+function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
+  if (!Array.isArray(clipEvidence) || clipEvidence.length === 0) return false;
+  // GPS-derived speeds jitter well past walking pace on a parked car — only
+  // SEI speed is trustworthy at summon magnitudes. Flag data always ships
+  // alongside SEI speed, so this only rejects degenerate inputs.
+  if (!hasSeiSpeeds) return false;
+  if (!(maxSpeedMps > 0) || maxSpeedMps > SUMMON_MAX_SPEED_MPS) return false;
+  if (!(durationMs > 0) || durationMs > SUMMON_MAX_DURATION_MS) return false;
+
+  // Every clip needs flag evidence — a single pre-flags clip (older
+  // extraction, or routes written by a tool that hasn't ported flagRuns yet)
+  // makes the drive unverifiable, and unverifiable must mean "not summon".
+  for (const c of clipEvidence) {
+    if (!c || !Array.isArray(c.flagRuns) || c.flagRuns.length === 0 ||
+        !(c.totalFrames > 0) || !(c.endFrame > c.startFrame)) {
+      return false;
+    }
+  }
+
+  const HAZARD = FLAG_BLINKER_LEFT | FLAG_BLINKER_RIGHT;
+  const PEDAL = FLAG_BRAKE | FLAG_ACCEL;
+
+  for (const c of clipEvidence) {
+    if (flagRunsOverlap(c.flagRuns, c.startFrame, c.endFrame, PEDAL, false)) return false;
+  }
+
+  const bookendFrames = (c) =>
+    Math.max(1, Math.ceil((c.totalFrames * SUMMON_BOOKEND_SECONDS * 1000) / CLIP_DURATION_MS));
+  const first = clipEvidence[0];
+  const last = clipEvidence[clipEvidence.length - 1];
+  const hazardAtStart = flagRunsOverlap(
+    first.flagRuns,
+    first.startFrame,
+    Math.min(first.endFrame, first.startFrame + bookendFrames(first)),
+    HAZARD,
+    true,
+  );
+  const hazardAtEnd = flagRunsOverlap(
+    last.flagRuns,
+    Math.max(last.startFrame, last.endFrame - bookendFrames(last)),
+    last.endFrame,
+    HAZARD,
+    true,
+  );
+  return hazardAtStart && hazardAtEnd;
+}
+
 // IMPORTANT: assign a plain object literal first so Node's cjs-module-lexer can
 // statically detect the named exports for ESM `import { … }`. Freeze on the
 // next line — `module.exports = Object.freeze({…})` wraps the literal in a call
@@ -175,10 +322,21 @@ module.exports = {
   AUTOPILOT_FSD,
   AUTOPILOT_AUTOSTEER,
   AUTOPILOT_TACC,
+  FLAG_BLINKER_LEFT,
+  FLAG_BLINKER_RIGHT,
+  FLAG_BRAKE,
+  FLAG_ACCEL,
+  SUMMON_MAX_SPEED_MPS,
+  SUMMON_BOOKEND_SECONDS,
+  SUMMON_MAX_DURATION_MS,
   WGS84_A,
   WGS84_F,
   geodesicM,
   haversineM,
   round2,
+  computeGearRuns,
+  computeFlagRuns,
+  flagRunsOverlap,
+  detectSummon,
 };
 Object.freeze(module.exports);

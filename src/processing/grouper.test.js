@@ -479,3 +479,148 @@ test('groupIntoDrives: trailing pre-roll chain extends the drive; parked tail ex
     'SentryClips/2026-07-04_20-55-50/2026-07-04_20-45-51-front.mp4',
   ]);
 });
+
+// ─── Summon detection (Drive-leading; Rust port pending) ─────────────────────
+// End-to-end through groupIntoDrives with the real ASS shape from
+// 2026-07-15: leading/trailing Park trimmed by the splitter, hazard runs in
+// raw frame space, SEI speeds at crawl. flagRuns totals match gearRuns totals
+// exactly as the worker emits them (same raw SEI frame sequence).
+
+function summonClip(file, gearRunPairs, flagRuns, { speed = 2.0, n = 100, baseLat = 37.0 } = {}) {
+  const clip = clipWithGearRuns(file, gearRunPairs, baseLat);
+  clip.points = clip.points.slice(0, n);
+  while (clip.points.length < n) clip.points.push([baseLat + clip.points.length * 1e-6, -122.0]);
+  clip.speeds = new Array(n).fill(speed);
+  clip.flagRuns = flagRuns;
+  return clip;
+}
+
+const ASS_START_RUNS = [
+  { flags: 0, frames: 27 },
+  { flags: 3, frames: 123 },  // hazards through the P→D shift
+  { flags: 0, frames: 17 },
+  { flags: 1, frames: 873 },  // left signal while maneuvering out
+  { flags: 0, frames: 746 },
+];
+const ASS_END_RUNS = [
+  { flags: 0, frames: 471 },
+  { flags: 3, frames: 82 },   // hazards through the stop and D→P shift
+];
+
+test('summon: hazard-bookended pedal-free crawl across two clips is flagged', () => {
+  const clipA = summonClip(
+    '2026-07-15/2026-07-15_20-49-54-front.mp4',
+    [[GEAR_PARK, 60], [GEAR_DRIVE, 1726]],
+    ASS_START_RUNS,
+  );
+  const clipB = summonClip(
+    '2026-07-15/2026-07-15_20-50-43-front.mp4',
+    [[GEAR_DRIVE, 500], [GEAR_PARK, 53]],
+    ASS_END_RUNS,
+  );
+  const drives = drivesOf([clipA, clipB]);
+  assert.equal(drives.length, 1);
+  assert.equal(drives[0].summon, true);
+});
+
+test('summon: missing flagRuns or pedal input never flags', () => {
+  // Same drive shape without flag evidence (pre-flags extraction) — the
+  // summary must omit the flag entirely rather than guess.
+  const bareA = summonClip(
+    '2026-07-15/2026-07-15_20-49-54-front.mp4',
+    [[GEAR_PARK, 60], [GEAR_DRIVE, 1726]],
+    undefined,
+  );
+  const bareB = summonClip(
+    '2026-07-15/2026-07-15_20-50-43-front.mp4',
+    [[GEAR_DRIVE, 500], [GEAR_PARK, 53]],
+    undefined,
+  );
+  const bareDrives = drivesOf([bareA, bareB]);
+  assert.equal(bareDrives.length, 1);
+  assert.equal(bareDrives[0].summon, undefined);
+
+  // Hazard bookends but a human touched the accelerator mid-drive.
+  const pedalRuns = [
+    { flags: 3, frames: 150 },
+    { flags: 0, frames: 800 },
+    { flags: 8, frames: 36 },
+    { flags: 0, frames: 718 },
+    { flags: 3, frames: 82 },
+  ];
+  const pedalClip = summonClip(
+    '2026-07-16/2026-07-16_09-00-00-front.mp4',
+    [[GEAR_PARK, 60], [GEAR_DRIVE, 1726]],
+    pedalRuns,
+  );
+  const pedalDrives = drivesOf([pedalClip]);
+  assert.equal(pedalDrives.length, 1);
+  assert.equal(pedalDrives[0].summon, undefined);
+});
+
+test('summon: reverse-only summon (negative SEI speeds) is flagged', () => {
+  // Backing out of a garage: P -> R -> P with hazard bookends. Reverse gear
+  // reports NEGATIVE SEI speeds, which the locked display stats ignore — the
+  // detector must still see the movement via absolute SEI speed.
+  const clip = summonClip(
+    '2026-07-20/2026-07-20_09-00-00-front.mp4',
+    [[GEAR_PARK, 90], [2 /* GEAR_REVERSE */, 300], [GEAR_PARK, 60]],
+    [
+      { flags: 3, frames: 120 },
+      { flags: 0, frames: 240 },
+      { flags: 3, frames: 90 },
+    ],
+    { speed: -1.5 },
+  );
+  const drives = drivesOf([clip]);
+  assert.equal(drives.length, 1);
+  assert.equal(drives[0].summon, true);
+  // Speed stats use the SEI magnitude (Drive-leading divergence from Rusty,
+  // which drops negative samples): a 1.5 m/s reverse crawl reads 3.36 mph,
+  // not 0 — and reverse-only data still counts as having SEI speeds.
+  assert.equal(drives[0].maxSpeedMph, 3.36);
+  assert.equal(drives[0].avgSpeedMph, 3.36);
+});
+
+test('summon: reverse summon ending seconds before the human drives off splits and flags', () => {
+  // Real 2026-07-27 20:04 shape. Clip 1: hazards in P, P->R under hazards
+  // (leading P too short to split), backs out, shifts D, creeps toward the
+  // user. Clip 2: creep finishes, hazards through the stop and D->P, ~3 s of
+  // Park, then the human gets in (brake, accel to 20%) and drives off, FSD
+  // engaging at the end. The mid-clip park must split the summon into its
+  // own drive; pedal input stays outside the summon segment's frame range.
+  const clipA = summonClip(
+    '2026-07-27/2026-07-27_20-04-00-front.mp4',
+    [[GEAR_PARK, 46], [2 /* R */, 727], [GEAR_DRIVE, 917]],
+    [
+      { flags: 0, frames: 11 },
+      { flags: 3, frames: 113 },  // hazards spanning P->R
+      { flags: 0, frames: 394 },
+      { flags: 2, frames: 256 },  // right signal while maneuvering
+      { flags: 0, frames: 301 },
+      { flags: 2, frames: 615 },
+    ],
+    { speed: 2.0 },
+  );
+  const clipB = summonClip(
+    '2026-07-27/2026-07-27_20-04-46-front.mp4',
+    [[GEAR_DRIVE, 120], [GEAR_PARK, 84], [GEAR_DRIVE, 1469]],
+    [
+      { flags: 2, frames: 81 },
+      { flags: 3, frames: 89 },   // hazards through the stop and D->P
+      { flags: 4, frames: 70 },   // human brake to shift
+      { flags: 0, frames: 200 },
+      { flags: 8, frames: 690 },  // human accelerator
+      { flags: 0, frames: 112 },
+      { flags: 1, frames: 431 },
+    ],
+    { speed: 0.3 },
+  );
+  // Fast departure after the park — only the first points (summon tail) crawl.
+  clipB.speeds = clipB.speeds.map((s, i) => (i < 10 ? 0.3 : 5.4));
+
+  const drives = drivesOf([clipA, clipB]);
+  assert.equal(drives.length, 2);
+  assert.equal(drives[0].summon, true);       // clip A + clip B's pre-park segment
+  assert.equal(drives[1].summon, undefined);  // the human/FSD drive after the park
+});

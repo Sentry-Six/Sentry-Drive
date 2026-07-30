@@ -150,3 +150,41 @@ test('setDriveTags keeps tag filtering truthful after an in-session edit', async
   assert.equal(index.listDriveSummaries({ tag: 'errand' }).total, 0);
   assert.deepEqual(index.getDriveTags(), {});
 });
+
+test('summon drives filter via the synthetic tag and survive tag edits', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sentry-drive-index-'));
+  const index = createDriveIndex({
+    dbPath: path.join(dir, 'index.sqlite'),
+    sourcePath: path.join(dir, 'unused.json'),
+  });
+  t.after(() => {
+    index.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  index.putDrive(
+    { id: 1, startTime: '2026-07-15T20:49:56', source: 'sei', tags: [], summon: true },
+    { points: [] },
+  );
+  index.putDrive(
+    { id: 2, startTime: '2026-07-15T21:00:00', source: 'sei', tags: ['Work'] },
+    { points: [] },
+  );
+
+  // The synthetic entry lives in the filter column only — the summary keeps
+  // user tags untouched.
+  const summonPage = index.listDriveSummaries({ tag: 'summon' });
+  assert.equal(summonPage.total, 1);
+  assert.equal(summonPage.drives[0].id, 1);
+  assert.deepEqual(summonPage.drives[0].tags, []);
+
+  // An in-session user tag edit must not knock the drive out of the Summon
+  // filter (setDriveTags re-reads the summary to re-append the synthetic tag).
+  index.setDriveTags('2026-07-15T20:49:56', ['Errand']);
+  assert.equal(index.listDriveSummaries({ tag: 'summon' }).total, 1);
+  assert.equal(index.listDriveSummaries({ tag: 'Errand' }).total, 1);
+
+  // Clearing tags on a non-summon drive never invents a summon entry.
+  index.setDriveTags('2026-07-15T21:00:00', []);
+  assert.equal(index.listDriveSummaries({ tag: 'summon' }).total, 1);
+});

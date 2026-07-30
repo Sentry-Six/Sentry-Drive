@@ -82,6 +82,7 @@ async function groupIndexedDrives(index, options = {}) {
     fsdPercentSum: 0,
     seiDriveCount: 0,
     importedDriveCount: 0,
+    summonDriveCount: 0,
   };
   let offset = 0;
   while (offset < nextDriveId) {
@@ -89,6 +90,7 @@ async function groupIndexedDrives(index, options = {}) {
     for (const drive of page.drives) {
       aggregates.totalDistanceMi += drive.distanceMi ?? 0;
       aggregates.totalDurationMs += drive.durationMs ?? 0;
+      if (drive.summon) aggregates.summonDriveCount++;
       if (drive.source === 'sei') {
         aggregates.seiDriveCount++;
         aggregates.seiDistanceM += (drive.distanceKm ?? 0) * 1000;

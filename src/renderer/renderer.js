@@ -19,6 +19,7 @@ let removeOutputListener = null;
 let processingStartTime = null;
 let cpuCount = 1;
 let allTags = [];          // deduplicated, sorted list of all tag names
+let hasSummonDrives = false; // any summon-detected drive in the loaded data (pins the Summon filter)
 // Drive list filters. Defaults are all-off — the app does no filtering until
 // the user asks. Applied SERVER-side (in the loader's SQL): the renderer only
 // ever holds one page, so filtering here would silently search 250 drives
@@ -170,6 +171,7 @@ function scheduleMarkerColorUpdate(color) {
 const DRIVE_LINE_COLOR_DEFAULTS = {
   manual:   '#2266cc',
   fsd:      '#22cc55',
+  summon:   '#facc15',
   imported: '#a855f7',
   overview: '#3b82f6',
 };
@@ -1041,7 +1043,7 @@ function initFooter() {
   });
 
   // Drive line colors — one swatch per palette role, sharing the same popup.
-  const LINE_COLOR_TITLES = { manual: 'Manual', fsd: 'Full Self-Driving', imported: 'Imported', overview: 'All Drives' };
+  const LINE_COLOR_TITLES = { manual: 'Manual', fsd: 'Full Self-Driving', summon: 'Summon', imported: 'Imported', overview: 'All Drives' };
   const lineSwatches = document.querySelectorAll('.line-color-swatch');
   const syncLineSwatches = () => {
     lineSwatches.forEach((b) => { b.style.background = driveLineColors[b.dataset.linecolor]; });
@@ -1665,6 +1667,7 @@ async function applyLoadedDriveData(result, filePath) {
   drivePageState = state;
   drives = state.drives;
   overviewRoutes = result.overviewRoutes ?? [];
+  hasSummonDrives = (result.aggregates?.summonDriveCount ?? 0) > 0;
   refreshAllTags(result.driveTags ?? {});
   renderTagFilter();
   document.getElementById('date-filter').classList.remove('hidden');
@@ -1910,15 +1913,27 @@ function initViewDrivesTab() {
     if (!loadedFilePath) return;
     checkOverlay.classList.remove('hidden');
   });
-  document.getElementById('btn-check-drives-confirm').addEventListener('click', () => {
+  document.getElementById('btn-check-bridge').addEventListener('click', () => {
     checkOverlay.classList.add('hidden');
     repairGPS();
+  });
+  document.getElementById('btn-check-summon').addEventListener('click', () => {
+    checkOverlay.classList.add('hidden');
+    checkSummon();
   });
   document.getElementById('btn-check-drives-cancel').addEventListener('click', () => {
     checkOverlay.classList.add('hidden');
   });
   checkOverlay.addEventListener('click', (e) => {
     if (e.target === checkOverlay) checkOverlay.classList.add('hidden');
+  });
+
+  const resultOverlay = document.getElementById('check-result-overlay');
+  document.getElementById('btn-check-result-ok').addEventListener('click', () => {
+    resultOverlay.classList.add('hidden');
+  });
+  resultOverlay.addEventListener('click', (e) => {
+    if (e.target === resultOverlay) resultOverlay.classList.add('hidden');
   });
 
   const revertOverlay = document.getElementById('revert-overlay');
@@ -2737,6 +2752,14 @@ async function revertGPS() {
   alert('Reverted to backup successfully.');
 }
 
+// In-app result dialog for the Check Drives flows — replaces the native
+// alert() popups so completion reports render inside the application.
+function showCheckResult(title, message) {
+  document.getElementById('check-result-title').textContent = title;
+  document.getElementById('check-result-msg').textContent = message;
+  document.getElementById('check-result-overlay').classList.remove('hidden');
+}
+
 async function repairGPS() {
   if (!loadedFilePath) return;
 
@@ -2794,7 +2817,7 @@ async function repairGPS() {
     const result = await window.electronAPI.repairGPS({ filePath: loadedFilePath, useRouting });
 
     if (!result.success) {
-      alert(`Failed to repair GPS data:\n${result.error}`);
+      showCheckResult('Bridge Gaps failed', result.error);
       return;
     }
 
@@ -2825,7 +2848,119 @@ async function repairGPS() {
         msgs.push(`  • …and ${bridgedDrives.length - sample.length} more`);
       }
     }
-    alert(msgs.length > 0 ? `Repair complete:\n${msgs.join('\n')}` : 'No issues found.');
+    showCheckResult('Bridge Gaps complete', msgs.length > 0 ? msgs.join('\n') : 'No issues found.');
+  } finally {
+    if (removeProgressListener) removeProgressListener();
+    btn.textContent = 'Check Drives';
+    btn.disabled = false;
+    progressEl.classList.add('hidden');
+    updateRevertButton();
+  }
+}
+
+// Check for Summon — backfill blinker/brake evidence for parking-speed
+// drives whose routes predate the flags extraction, then reload so the
+// grouper's summon detection can tag them. Reads only the candidate drives'
+// clips, so it's fast next to a reprocess-all.
+async function checkSummon() {
+  if (!loadedFilePath) {
+    showCheckResult('Check for Summon', 'Load a drive-data.json first — Check for Summon works on the loaded drive data.');
+    return;
+  }
+  // The IPC half of this feature lives in the main process, which only loads
+  // at app launch — a window reload (Ctrl+R) picks up this UI but not the
+  // bridge. Without this guard the call rejects silently.
+  if (typeof window.electronAPI.checkSummon !== 'function') {
+    showCheckResult('Check for Summon', 'Check for Summon needs a full app restart to finish installing.\n\nQuit Sentry Drive completely and relaunch it, then run the check again.');
+    return;
+  }
+
+  const clipsDir = (document.getElementById('clips-dir').value ||
+    localStorage.getItem('lastClipsDir') || '').trim();
+  if (!clipsDir) {
+    showCheckResult('Check for Summon', 'Check for Summon needs the Clips Directory (set it on the Process tab) so the original clips can be re-read.');
+    return;
+  }
+
+  const btn = document.getElementById('btn-repair-gps');
+  btn.textContent = 'Checking…';
+  btn.disabled = true;
+
+  const progressEl = document.getElementById('repair-progress');
+  const phaseEl = document.getElementById('repair-phase');
+  const pctEl = document.getElementById('repair-pct');
+  const barEl = document.getElementById('repair-bar');
+  const etaEl = document.getElementById('repair-eta');
+
+  let removeProgressListener = null;
+  try {
+    progressEl.classList.remove('hidden');
+    phaseEl.textContent = 'Starting…';
+    pctEl.textContent = '';
+    etaEl.textContent = '';
+    barEl.style.width = '0%';
+
+    removeProgressListener = window.electronAPI.onRepairProgress(({ phase, current, total, etaSec }) => {
+      phaseEl.textContent = phase;
+      if (total > 0) {
+        const pct = Math.round((current / total) * 100);
+        pctEl.textContent = `${pct}%`;
+        barEl.style.width = `${pct}%`;
+        if (etaSec > 0) {
+          const m = Math.floor(etaSec / 60);
+          const s = etaSec % 60;
+          etaEl.textContent = m > 0 ? `${m}m ${s}s left` : `${s}s left`;
+        } else {
+          etaEl.textContent = '';
+        }
+      }
+    });
+
+    const result = await window.electronAPI.checkSummon({ filePath: loadedFilePath, clipsDir });
+    if (!result.success) {
+      showCheckResult('Check for Summon failed', result.error);
+      return;
+    }
+
+    const summonBefore = drives.filter((d) => d.summon).length;
+    let summonTotal = null;
+    if (result.updatedRoutes > 0) {
+      showLoading();
+      const reloaded = await window.electronAPI.loadAndGroupDrives(loadedFilePath);
+      if (reloaded.success) {
+        await applyLoadedDriveData(reloaded, loadedFilePath);
+        summonTotal = reloaded.aggregates?.summonDriveCount ?? null;
+      }
+      hideLoading();
+    }
+
+    const msgs = [];
+    msgs.push(`Checked ${result.candidateDrives} candidate drive(s), read ${result.clipsScanned} clip(s).`);
+    if (result.missingClips > 0) {
+      msgs.push(`${result.missingClips} clip(s) were missing from the clips directory (moved or deleted) and were skipped.`);
+    }
+    const summonDrives = drives.filter((d) => d.summon);
+    const summonCount = summonTotal ?? summonDrives.length;
+    if (result.updatedRoutes === 0) {
+      msgs.push('No drives needed new evidence — anything detectable was already tagged.');
+    } else if (summonCount > 0) {
+      msgs.push('');
+      msgs.push(`${summonCount} drive(s) carry the Summon tag${summonCount > summonBefore ? ` (${summonCount - summonBefore} new)` : ''}:`);
+      const sample = summonDrives.slice(0, 8);
+      for (const d of sample) {
+        msgs.push(`  • ${new Date(d.startTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`);
+      }
+      if (summonCount > sample.length) {
+        msgs.push(`  • …and ${summonCount - sample.length} more`);
+      }
+    } else {
+      msgs.push('Evidence was added, but none of the candidates matched the summon signature (hazard bookends, no pedals).');
+    }
+    showCheckResult('Check for Summon complete', msgs.join('\n'));
+  } catch (err) {
+    // Surface everything — a silent failure here looks like the feature
+    // simply didn't run (the exact bug this catch was added for).
+    showCheckResult('Check for Summon failed', String(err?.message ?? err));
   } finally {
     if (removeProgressListener) removeProgressListener();
     btn.textContent = 'Check Drives';
@@ -2973,7 +3108,9 @@ function renderSelectedDriveStats(drive) {
     <div class="map-stat"><span class="map-stat-val">${durStr}</span><span class="map-stat-lbl">Duration</span></div>
     <div class="map-stat"><span class="map-stat-val">${speedVal(drive.avgSpeedMph ?? 0)}</span><span class="map-stat-lbl">Avg ${speedShort().toUpperCase()}</span></div>
     <div class="map-stat"><span class="map-stat-val">${speedVal(drive.maxSpeedMph ?? 0)}</span><span class="map-stat-lbl">Max ${speedShort().toUpperCase()}</span></div>
-    <div class="map-stat"><span class="map-stat-val" style="color:${fsdScoreColor(fsdScore)}">${fsdScore}%</span><span class="map-stat-lbl">${isTessie ? 'FSD*' : 'FSD Usage'}</span></div>
+    ${drive.summon
+      ? `<div class="map-stat" title="Detected Summon: hazard lights bookend the drive, no pedal input, parking-lot speed throughout"><span class="map-stat-val" style="color:var(--line-summon, #facc15)">Summon</span><span class="map-stat-lbl">FSD Usage</span></div>`
+      : `<div class="map-stat"><span class="map-stat-val" style="color:${fsdScoreColor(fsdScore)}">${fsdScore}%</span><span class="map-stat-lbl">${isTessie ? 'FSD*' : 'FSD Usage'}</span></div>`}
   `;
   if (apPct > 0 && !isTessie) {
     summary += `<div class="map-stat"><span class="map-stat-val">${apPct}%</span><span class="map-stat-lbl">Autopilot</span></div>`;
@@ -2987,11 +3124,19 @@ function renderSelectedDriveStats(drive) {
     </div>
   `;
 
+  // Summon drives are one driverless mode end to end — one yellow slice and
+  // a "Summon" row instead of the misleading "Manual 100%" the raw apStates
+  // would produce.
+  const isSummon = !!drive.summon;
   const slices = [];
-  if (fsdDistM > 0)    slices.push({ color: 'var(--line-fsd, #22cc55)',   pct: (fsdDistM / totalDistM) * 100 });
-  if (apDistM > 0)     slices.push({ color: 'var(--ap-blue, #3e6ae1)', pct: (apDistM / totalDistM) * 100 });
-  if (taccDistM > 0)   slices.push({ color: '#f59e0b',                    pct: (taccDistM / totalDistM) * 100 });
-  if (manualDistM > 0) slices.push({ color: 'rgba(148, 163, 184, 0.55)',  pct: (manualDistM / totalDistM) * 100 });
+  if (isSummon) {
+    slices.push({ color: 'var(--line-summon, #facc15)', pct: 100 });
+  } else {
+    if (fsdDistM > 0)    slices.push({ color: 'var(--line-fsd, #22cc55)',   pct: (fsdDistM / totalDistM) * 100 });
+    if (apDistM > 0)     slices.push({ color: 'var(--ap-blue, #3e6ae1)', pct: (apDistM / totalDistM) * 100 });
+    if (taccDistM > 0)   slices.push({ color: '#f59e0b',                    pct: (taccDistM / totalDistM) * 100 });
+    if (manualDistM > 0) slices.push({ color: 'rgba(148, 163, 184, 0.55)',  pct: (manualDistM / totalDistM) * 100 });
+  }
 
   let cursor = 0;
   const gradientStops = slices.map((s) => {
@@ -3025,6 +3170,20 @@ function renderSelectedDriveStats(drive) {
       <div class="map-stats-tessie-note">
         *Imported from Tessie. Excluded from aggregate FSD score and
         disengagement counts (those use dashcam telemetry only).
+      </div>
+    `;
+  } else if (isSummon) {
+    details += `
+      <div class="map-stats-chart-wrap">
+        <div class="map-stats-chart" style="--donut-bg: conic-gradient(${gradientStops});">
+          <div class="map-stats-chart-center">
+            <span class="map-stats-chart-val" style="color:var(--line-summon, #facc15)">Summon</span>
+            <span class="map-stats-chart-lbl" style="color:var(--line-summon, #facc15)">100%</span>
+          </div>
+        </div>
+        <div class="map-stats-legend">
+          ${detailsRow('Summon', 'mode-summon', metersToDistStr(totalDistM), 100)}
+        </div>
       </div>
     `;
   } else if (slices.length > 0) {
@@ -3811,6 +3970,7 @@ function buildDriveItem(drive) {
       <span class="drive-chip"><span class="material-icons">straighten</span>${distVal(drive.distanceMi)} ${distShort()}</span>
       <span class="drive-chip"><span class="material-icons">schedule</span>${durStr}</span>
       ${fsdChip}
+      ${drive.summon ? '<span class="drive-chip drive-chip--summon" title="Detected Summon: hazard lights bookend the drive, no pedal input, parking-lot speed throughout"><span class="material-icons">settings_remote</span>Summon</span>' : ''}
       ${drive.bridged ? '<span class="drive-chip drive-chip--bridged" title="A GPS gap in this drive was bridged by Check Drives"><span class="material-icons">route</span>Bridged</span>' : ''}
     </div>
     <div class="drive-item-tags">
@@ -4359,6 +4519,7 @@ function applyDriveLineColors() {
   const root = document.documentElement.style;
   root.setProperty('--line-manual', c.manual);
   root.setProperty('--line-fsd', c.fsd);
+  root.setProperty('--line-summon', c.summon);
   root.setProperty('--line-imported', c.imported);
   root.setProperty('--line-overview', c.overview);
   whenMapReady(() => {
@@ -4458,7 +4619,12 @@ function drawSelectedDrive(drive) {
     trailRuns.push({ from, to, role, color, dashed, w });
   };
 
-  if (hasFSD) {
+  if (drive.summon) {
+    // Summon drives are driverless end to end (autopilot_state stays 0 in
+    // SEI during summon), so the whole route renders in the summon color
+    // rather than being segmented by FSD engagement.
+    pushSeg(0, latLngs.length - 1, 'summon', false, 5);
+  } else if (hasFSD) {
     // Split into segments by FSD engagement
     let i = 0;
     while (i < pts.length) {
@@ -5160,10 +5326,15 @@ function updateReplayData(idx) {
     }
   }
 
-  // FSD
+  // FSD readout. Summon drives report autopilot_state 0 the whole way, so
+  // instead of a misleading "Off" the readout names the actual drive mode.
   const fsdEl = document.getElementById('replay-fsd-val');
   const fsdSpan = document.getElementById('replay-fsd-span');
-  if (drive.fsdStates && drive.fsdStates[idx] !== undefined) {
+  if (drive.summon) {
+    fsdSpan.style.display = '';
+    fsdEl.textContent = 'Summon';
+    fsdEl.className = 'fsd-summon';
+  } else if (drive.fsdStates && drive.fsdStates[idx] !== undefined) {
     fsdSpan.style.display = '';
     const engaged = drive.fsdStates[idx] !== 0;
     fsdEl.textContent = engaged ? 'Active' : 'Off';
@@ -5196,7 +5367,11 @@ function refreshAllTags(driveTags) {
 
 function renderTagFilter() {
   const container = document.getElementById('tag-filter');
-  if (allTags.length === 0) {
+  // The detector's synthetic "summon" tag is pinned right after "All" when
+  // any summon drive exists — unless the user already has their own summon
+  // tag, which filters identically (the index column carries both).
+  const pinSummon = hasSummonDrives && !allTags.includes('summon');
+  if (allTags.length === 0 && !pinSummon) {
     container.classList.add('hidden');
     container.innerHTML = '';
     return;
@@ -5204,6 +5379,9 @@ function renderTagFilter() {
 
   container.classList.remove('hidden');
   let html = `<button class="tag-filter-btn${driveFilters.tag === '' ? ' active' : ''}" data-tag="">All</button>`;
+  if (pinSummon) {
+    html += `<button class="tag-filter-btn${driveFilters.tag === 'summon' ? ' active' : ''}" data-tag="summon">Summon</button>`;
+  }
   for (const t of allTags) {
     html += `<button class="tag-filter-btn${driveFilters.tag === t ? ' active' : ''}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`;
   }
