@@ -82,6 +82,7 @@ async function groupIndexedDrives(index, options = {}) {
     fsdPercentSum: 0,
     seiDriveCount: 0,
     importedDriveCount: 0,
+    summonDriveCount: 0,
   };
   const seiRanges = [];
   let offset = 0;
@@ -90,7 +91,13 @@ async function groupIndexedDrives(index, options = {}) {
     for (const drive of page.drives) {
       aggregates.totalDistanceMi += drive.distanceMi ?? 0;
       aggregates.totalDurationMs += drive.durationMs ?? 0;
-      if (drive.source === 'sei') {
+      if (drive.summon) {
+        // Summon drives count toward totals but are EXCLUDED from FSD
+        // analytics: the car drives itself with autopilot_state unset, so
+        // folding them in as "0% FSD" drives would dilute the score and the
+        // per-drive averages with trips no human (or FSD) ever drove.
+        aggregates.summonDriveCount++;
+      } else if (drive.source === 'sei') {
         const start = Date.parse(drive.startTime);
         const end = Date.parse(drive.endTime);
         if (Number.isFinite(start) && Number.isFinite(end) && end > start) {

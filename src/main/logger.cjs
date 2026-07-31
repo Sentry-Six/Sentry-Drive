@@ -46,7 +46,7 @@ function flushNow() {
   try {
     fs.appendFileSync(logFile, text);
     fileBytes += Buffer.byteLength(text);
-    if (fileBytes >= MAX_FILE_BYTES) fs.appendFileSync(logFile, '(log file size cap reached — further entries kept in memory only)\n');
+    if (fileBytes >= MAX_FILE_BYTES) fs.appendFileSync(logFile, '(log file size cap reached - further entries kept in memory only)\n');
   } catch { /* disk issues must never break the app */ }
 }
 
@@ -79,6 +79,26 @@ function fmt(v) {
   try { return JSON.stringify(v); } catch { return String(v); }
 }
 
+// Log lines must be ASCII-safe: the console echo is decoded with the
+// terminal's legacy codepage on Windows (UTF-8 "—" renders as "ΓÇö" under
+// CP437/850), and exported .txt files land in arbitrary editors. Typographic
+// punctuation is decoration, so transliterate it; everything else (paths,
+// names, real data) passes through untouched.
+const ASCII_PUNCT = [
+  [/[‒-―─━]/g, '-'], // figure/en/em/bar dashes, box-drawing lines
+  [/[‘’]/g, "'"],             // curly single quotes
+  [/[“”]/g, '"'],             // curly double quotes
+  [/…/g, '...'],                   // ellipsis
+  [/[→➡]/g, '->'],           // rightwards arrows
+  [/[•·]/g, '*'],            // bullets
+  [/ /g, ' '],                     // no-break space
+];
+function asciiPunct(text) {
+  let out = text;
+  for (const [re, sub] of ASCII_PUNCT) out = out.replace(re, sub);
+  return out;
+}
+
 // Scrub anything privacy-sensitive from EXPORTED logs (the .txt users paste for
 // support): API tokens/keys, GPS coordinates, and reverse-geocoded addresses.
 // Applied only in getLogText — the live terminal + on-disk session log keep
@@ -97,7 +117,7 @@ function redact(text) {
 }
 
 function add(level, scope, args) {
-  const text = args.map(fmt).join(' ').slice(0, MAX_ENTRY_LEN);
+  const text = asciiPunct(args.map(fmt).join(' ')).slice(0, MAX_ENTRY_LEN);
   const line = `[${ts()}] [${level.toUpperCase().padEnd(5)}] [${scope}] ${text}`;
   entries.push(line);
   if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES);
@@ -126,7 +146,7 @@ module.exports = {
   error: (scope, ...args) => add('error', scope, args),
   getLogText() {
     const parts = [
-      `Sentry Drive logs — exported ${ts()}`,
+      `Sentry Drive logs - exported ${ts()}`,
       `version ${appInfo.version} | ${process.platform} ${process.arch}` +
         `${appInfo.osBuild ? ` (${appInfo.osBuild})` : ''} | ` +
         `electron ${process.versions.electron ?? 'n/a'} | node ${process.versions.node}`,
@@ -142,11 +162,11 @@ module.exports = {
           const buf = Buffer.alloc(len);
           fs.readSync(fd, buf, 0, len, stat.size - len);
           fs.closeSync(fd);
-          parts.push('─'.repeat(78), `PREVIOUS SESSION${stat.size > len ? ' (tail)' : ''}:`, redact(buf.toString('utf8').trimEnd()));
+          parts.push('-'.repeat(78), `PREVIOUS SESSION${stat.size > len ? ' (tail)' : ''}:`, redact(buf.toString('utf8').trimEnd()));
         }
       }
     } catch { /* export must never fail on the extras */ }
-    parts.push('─'.repeat(78), 'CURRENT SESSION:', redact(entries.join('\n')), '');
+    parts.push('-'.repeat(78), 'CURRENT SESSION:', redact(entries.join('\n')), '');
     return parts.join('\n');
   },
 };

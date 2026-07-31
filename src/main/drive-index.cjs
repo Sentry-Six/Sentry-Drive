@@ -8,7 +8,7 @@ const { chain } = require('stream-chain');
 const { parser } = require('stream-json/parser.js');
 const AssemblerModule = require('stream-json/assembler.js');
 const Assembler = AssemblerModule.Assembler ?? AssemblerModule;
-const { DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
+const { DRIVE_GAP_MS, GAP_FILL_MAX_MS } = require('../shared/drive-calc.cjs');
 const { parseClipTimestampMs } = require('../shared/event-gap-fill.cjs');
 const { normalizeClipPath } = require('../shared/clip-path.cjs');
 const {
@@ -22,6 +22,29 @@ function abortError() {
   err.name = 'AbortError';
   err.code = 'ABORT_ERR';
   return err;
+}
+
+// Tags are stored as a delimited, case-folded string ("|home|work|") so a
+// single LIKE '%|tag|%' matches whole tags only — "work" must not match
+// "homework". Filtering has to happen in SQL: the renderer only ever holds
+// one page, so filtering there would silently search 250 drives out of
+// thousands.
+function encodeTagSet(tags) {
+  if (!Array.isArray(tags) || tags.length === 0) return '';
+  const clean = tags
+    .map((t) => String(t ?? '').trim().toLowerCase())
+    .filter(Boolean);
+  return clean.length ? `|${clean.join('|')}|` : '';
+}
+
+// Inclusive end date: any timestamp on the end date sorts before the next
+// day's bare date string ("2026-07-26T23:59" < "2026-07-27"), so a bare
+// `< nextDay` keeps the comparison index-friendly.
+function nextDayString(date) {
+  const d = new Date(`${String(date).slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
 }
 
 class DriveIndex {
@@ -54,6 +77,7 @@ class DriveIndex {
         id INTEGER PRIMARY KEY,
         start_time TEXT NOT NULL,
         source TEXT NOT NULL,
+        tags TEXT NOT NULL DEFAULT '',
         summary BLOB NOT NULL,
         detail BLOB NOT NULL
       );
@@ -88,8 +112,8 @@ class DriveIndex {
     `);
     this.getMetaStmt = this.db.prepare('SELECT value FROM meta WHERE key = ?');
     this.insertDriveStmt = this.db.prepare(`
-      INSERT INTO drives(id, start_time, source, summary, detail)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO drives(id, start_time, source, tags, summary, detail)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
     this.deleteDriveStmt = this.db.prepare('DELETE FROM drives WHERE id = ?');
     this.getDriveDetailStmt = this.db.prepare('SELECT detail FROM drives WHERE id = ?');
@@ -108,8 +132,13 @@ class DriveIndex {
 
   insertRoute(route, sequence) {
     const normalizedFile = normalizeClipPath(route?.file);
+    // Event-folder routes are STORED, not dropped: Rusty's gap-fill writes
+    // admitted SavedClips/SentryClips clips into drive-data.json, and the
+    // grouper decides per-window which ones fill real RecentClips gaps
+    // (groupIntoDrives' admission). Their timestamps come from the clip
+    // basename via parseFileTimestampMs, so windowing places them correctly.
     if (!normalizedFile) return 'dropped';
-    const timestampMs = parseClipTimestampMs(normalizedFile);
+    const timestampMs = parseFileTimestampMs(normalizedFile);
     if (timestampMs == null) return 'dropped';
     const result = this.insertRouteStmt.run(
       sequence,
@@ -165,10 +194,18 @@ class DriveIndex {
   }
 
   putDrive(summary, detail) {
+    // Summon-detected drives get a synthetic "summon" entry in the FILTER
+    // column only — summary.tags stays user-authored, so the tag editor
+    // never shows (or persists) a pill the user didn't add. A duplicate from
+    // a user's own "summon" tag is harmless: the LIKE match is identical.
+    const filterTags = summary.summon
+      ? [...(summary.tags ?? []), 'summon']
+      : summary.tags;
     this.insertDriveStmt.run(
       summary.id,
       summary.startTime,
       summary.source ?? 'sei',
+      encodeTagSet(filterTags),
       v8.serialize(summary),
       v8.serialize(detail),
     );
@@ -178,16 +215,70 @@ class DriveIndex {
     this.deleteDriveStmt.run(id);
   }
 
-  listDriveSummaries({ offset = 0, limit = 250 } = {}) {
+  /**
+   * Keep a drive's filterable tags current after an in-session tag edit.
+   * The summary blob still carries the tags baked in at index time, but the
+   * renderer holds its own updated copy for display — this only has to keep
+   * tag FILTERING truthful until the next load rebuilds the index.
+   */
+  setDriveTags(startTime, tags) {
+    // Keep the synthetic summon filter entry (see putDrive) across in-session
+    // tag edits — rewriting the column from user tags alone would silently
+    // drop a summon drive out of the Summon filter until the next regroup.
+    const row = this.db.prepare('SELECT summary FROM drives WHERE start_time = ?')
+      .get(String(startTime));
+    const isSummon = row ? Boolean(v8.deserialize(row.summary)?.summon) : false;
+    const filterTags = isSummon ? [...(tags ?? []), 'summon'] : tags;
+    this.db.prepare('UPDATE drives SET tags = ? WHERE start_time = ?')
+      .run(encodeTagSet(filterTags), String(startTime));
+    const all = this.getDriveTags();
+    if (Array.isArray(tags) && tags.length > 0) all[startTime] = tags;
+    else delete all[startTime];
+    this.setMeta('driveTags', all);
+  }
+
+  /**
+   * Page through drives, newest first. Optional filters (all default to off,
+   * matching the app's unfiltered default):
+   *   tag       — only drives carrying this tag (whole-tag match)
+   *   startDate — YYYY-MM-DD, inclusive
+   *   endDate   — YYYY-MM-DD, inclusive
+   * `total` reflects the filtered set, so the pager stays honest.
+   */
+  listDriveSummaries({ offset = 0, limit = 250, tag = '', startDate = '', endDate = '' } = {}) {
     const boundedLimit = Math.max(1, Math.min(Number(limit) || 250, 1000));
     const boundedOffset = Math.max(0, Number(offset) || 0);
-    const total = Number(this.db.prepare('SELECT COUNT(*) AS total FROM drives').get().total);
+
+    const where = [];
+    const params = [];
+    const tagTerm = String(tag ?? '').trim().toLowerCase();
+    if (tagTerm) {
+      where.push('tags LIKE ?');
+      params.push(`%|${tagTerm}|%`);
+    }
+    if (startDate) {
+      where.push('start_time >= ?');
+      params.push(String(startDate).slice(0, 10));
+    }
+    if (endDate) {
+      const stop = nextDayString(endDate);
+      if (stop) {
+        where.push('start_time < ?');
+        params.push(stop);
+      }
+    }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    const total = Number(
+      this.db.prepare(`SELECT COUNT(*) AS total FROM drives ${clause}`).get(...params).total,
+    );
     const rows = this.db.prepare(`
       SELECT summary
       FROM drives
+      ${clause}
       ORDER BY start_time DESC, id DESC
       LIMIT ? OFFSET ?
-    `).all(boundedLimit, boundedOffset);
+    `).all(...params, boundedLimit, boundedOffset);
     return {
       total,
       offset: boundedOffset,
@@ -268,10 +359,15 @@ class DriveIndex {
       FROM routes
       ORDER BY timestamp_ms, sequence
     `).iterate();
+    // Windows split on gaps wider than the GAP-FILL cap, not DRIVE_GAP_MS:
+    // a 9-19 min recording dropout that event pre-rolls can fill must stay
+    // inside ONE window or the grouper can never bridge it. groupIntoDrives
+    // re-splits at DRIVE_GAP_MS within each window, so files without event
+    // routes group exactly as before — the wider window only batches more.
     let window = [];
     let previousMs = null;
     for (const row of rows) {
-      if (previousMs != null && row.timestamp_ms - previousMs > DRIVE_GAP_MS) {
+      if (previousMs != null && row.timestamp_ms - previousMs > GAP_FILL_MAX_MS) {
         yield window;
         window = [];
       }

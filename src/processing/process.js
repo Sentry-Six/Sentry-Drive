@@ -110,7 +110,7 @@ async function main() {
   // In --reprocess-all mode we still read the file so user-authored driveTags
   // survive a reprocess, but processedFiles/routes are discarded so every
   // clip is re-extracted.
-  let existingData = { processedFiles: [], routes: [], driveTags: {} };
+  let existingData = { processedFiles: [], routes: [], driveTags: {}, extraSections: {} };
   try {
     let loaded;
     if (readDriveData) {
@@ -120,7 +120,12 @@ async function main() {
       loaded = JSON.parse(await readFile(OUTPUT_PATH, "utf-8"));
     }
     if (REPROCESS_ALL) {
-      existingData = { processedFiles: [], routes: [], driveTags: loaded.driveTags || {} };
+      existingData = {
+        processedFiles: [],
+        routes: [],
+        driveTags: loaded.driveTags || {},
+        extraSections: loaded.extraSections || {},
+      };
       console.log(`Reprocess-all mode: discarding ${loaded.processedFiles?.length || 0} processed files / ${loaded.routes?.length || 0} routes (preserving ${Object.keys(loaded.driveTags || {}).length} drive tags)`);
     } else {
       existingData = loaded;
@@ -139,6 +144,22 @@ async function main() {
     }
     // No existing data, start fresh
   }
+
+  // The fallback JSON.parse path returns the raw file shape (unmodeled
+  // sections as top-level keys); fold them into extraSections so the writers
+  // below echo them back instead of dropping them. readDriveData already
+  // returns them collected.
+  if (!existingData.extraSections || typeof existingData.extraSections !== "object") {
+    const known = new Set(["processedFiles", "processedFileCount", "routes", "driveTags", "extraSections"]);
+    existingData.extraSections = {};
+    for (const k of Object.keys(existingData)) {
+      if (!known.has(k)) {
+        existingData.extraSections[k] = existingData[k];
+        delete existingData[k];
+      }
+    }
+  }
+  const extraSections = existingData.extraSections;
 
   const processedSet = new Set();
   if (existingData.processedFiles) {
@@ -237,7 +258,7 @@ async function main() {
       checkpointBusy = true;
       const routes = Array.from(routeMap.values());
       const doneAt = totalDone;
-      pendingCheckpoint = streamWriteJSON(OUTPUT_PATH, processedFiles, routes, driveTags)
+      pendingCheckpoint = streamWriteJSON(OUTPUT_PATH, processedFiles, routes, driveTags, extraSections)
         .then(() => console.log(`\n  Checkpoint saved (${doneAt} files)`))
         .catch(() => {})
         .finally(() => {
@@ -302,7 +323,7 @@ async function main() {
   // Save drive-data.json (same format as Sentry USB)
   // Stream JSON to disk to avoid exceeding Node's max string length on large datasets
   console.log(`\nSaving to ${OUTPUT_PATH}...`);
-  await streamWriteJSON(OUTPUT_PATH, processedFiles, routes, driveTags);
+  await streamWriteJSON(OUTPUT_PATH, processedFiles, routes, driveTags, extraSections);
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`\nDone in ${elapsed}s`);
@@ -330,7 +351,7 @@ function routeForDisk(r) {
 // The tmp name carries a per-call sequence number: a pid-only name once let
 // an overlapping checkpoint and final save share (and corrupt) one tmp file,
 // crashing the rename with ENOENT when the other call consumed it first.
-async function streamWriteJSON(filePath, processedFiles, routes, driveTags) {
+async function streamWriteJSON(filePath, processedFiles, routes, driveTags, _extraSections) {
   return writeDriveDataJSON(filePath, {
     processedFiles,
     routes,

@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.off('load-progress', listener);
   },
   repairGPS: (args) => ipcRenderer.invoke('repair-gps', args),
+  checkSummon: (args) => ipcRenderer.invoke('check-summon', args),
   checkOnline: () => ipcRenderer.invoke('check-online'),
   revertGPS: (fp) => ipcRenderer.invoke('revert-gps', fp),
   hasGPSBackup: (fp) => ipcRenderer.invoke('has-gps-backup', fp),

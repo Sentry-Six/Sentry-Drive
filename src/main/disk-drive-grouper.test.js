@@ -196,3 +196,54 @@ test('detail query enforces a fixed point budget and preserves aligned state arr
   assert.equal(detail.gearStates.length, detail.points.length);
   assert.equal(detail.fsdStates.length, detail.points.length);
 });
+
+test('summon drives count in totals but are excluded from FSD aggregates', async (t) => {
+  // A summon drive (hazard bookends, no pedals, crawl speed) and a normal
+  // dashcam drive an hour later. The summon must appear in totalDistanceMi /
+  // summonDriveCount but stay out of every FSD-analytics accumulator —
+  // otherwise it dilutes the lifetime score as a fake "0% FSD" drive.
+  const n = 100;
+  const summonRoute = {
+    file: 'RecentClips/2026-07-28_12-00-00-front.mp4',
+    date: '2026-07-28_12-00-00',
+    points: Array.from({ length: n }, (_, i) => [39.1 + i * 1e-6, -76.7]),
+    speeds: new Array(n).fill(1.5),
+    gearRuns: [{ gear: 0, frames: 90 }, { gear: 1, frames: 300 }, { gear: 0, frames: 60 }],
+    rawFrameCount: 450,
+    rawParkCount: 150,
+    flagRuns: [
+      { flags: 3, frames: 120 },
+      { flags: 0, frames: 240 },
+      { flags: 3, frames: 90 },
+    ],
+  };
+  const routes = [
+    summonRoute,
+    route('RecentClips/2026-07-28_13-00-00-front.mp4', 39.4),
+  ];
+  const fixture = makeIndex(routes);
+  t.after(() => {
+    fixture.index.close();
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  });
+  await indexDriveData(fixture.index);
+  const result = await groupIndexedDrives(fixture.index);
+
+  const listed = fixture.index.listDriveSummaries({ offset: 0, limit: 10 });
+  const summonDrive = listed.drives.find((d) => d.summon === true);
+  const normalDrive = listed.drives.find((d) => !d.summon);
+  assert.ok(summonDrive, 'summon drive must exist and be tagged');
+  assert.ok(normalDrive, 'normal drive must exist');
+
+  const agg = result.aggregates;
+  assert.equal(agg.summonDriveCount, 1);
+  assert.equal(agg.seiDriveCount, 1); // the normal drive only
+  // FSD denominator excludes the summon drive's distance…
+  assert.equal(agg.seiDistanceM, (normalDrive.distanceKm ?? 0) * 1000);
+  assert.equal(agg.fsdPercentSum, normalDrive.fsdPercent ?? 0);
+  // …but lifetime totals still include it.
+  assert.equal(
+    agg.totalDistanceMi,
+    (summonDrive.distanceMi ?? 0) + (normalDrive.distanceMi ?? 0),
+  );
+});

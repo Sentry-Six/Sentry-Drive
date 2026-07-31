@@ -551,6 +551,45 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   color: var(--warn);
 }
 
+/* ── Date-range filter (defaults to no filtering) ──────────────────────── */
+#date-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+#date-filter.hidden { display: none; }
+.date-filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.date-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color-scheme: dark; /* dark native calendar + icon */
+}
+.date-input:focus { outline: none; border-color: var(--accent); }
+.date-filter-sep { color: var(--text-dim); font-size: 11px; }
+.date-clear {
+  display: inline-flex;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px;
+}
+.date-clear:hover { color: var(--danger); }
+
 #drives-list {
   display: flex;
   flex-direction: column;
@@ -778,6 +817,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .drive-chip--blue  { background: rgba(52, 211, 153, 0.15); color: var(--blue-light); border-color: rgba(52, 211, 153, 0.22); }
 .drive-chip--slate { background: rgba(255, 255, 255, 0.05); color: var(--text-muted); border-color: rgba(255, 255, 255, 0.1); }
 .drive-chip--bridged { background: rgba(251, 191, 36, 0.12); color: var(--warn); border-color: rgba(251, 191, 36, 0.25); }
+.drive-chip--summon  { background: rgba(250, 204, 21, 0.12); color: var(--line-summon, #facc15); border-color: rgba(250, 204, 21, 0.28); }
 
 .drive-badge {
   display: inline-block;
@@ -1315,6 +1355,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .map-stats-row-label.mode-ap     { color: var(--ap-blue-light); }
 .map-stats-row-label.mode-tacc   { color: #f59e0b; }
 .map-stats-row-label.mode-manual { color: var(--text-muted); }
+.map-stats-row-label.mode-summon { color: var(--line-summon, #facc15); }
 
 .map-stats-row-dist {
   font-family: var(--font-mono);
@@ -1420,6 +1461,25 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   letter-spacing: 0.07em;
   color: var(--text-muted);
   white-space: nowrap;
+}
+
+/* Info affordance beside a stat value (e.g. Summon's N/A FSD usage). Sized
+   off the value's own font so it tracks the clamp() as the panel narrows,
+   and vertically centered against the digits rather than the line box. */
+.map-stat-info {
+  font-size: 0.5em;
+  line-height: 1;
+  margin-left: 0.22em;
+  vertical-align: middle;
+  color: var(--text-dim);
+  cursor: help;
+  opacity: 0.75;
+  transition: opacity 0.15s, color 0.15s;
+}
+.map-stat-info:hover,
+.map-stat-info:focus-visible {
+  opacity: 1;
+  color: var(--text-muted);
 }
 
 /* ── Replay Controls ───────────────────────────────────────────────────── */
@@ -1589,6 +1649,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .replay-data .gear-n { color: #f59e0b; }
 .replay-data .fsd-on { color: #34d399; }
 .replay-data .fsd-off { color: var(--text-muted); }
+.replay-data .fsd-summon { color: var(--line-summon, #facc15); }
 
 /* ── Map Legend ─────────────────────────────────────────────────────────── */
 #map-legend {
@@ -2105,6 +2166,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 /* ── Reprocess-All / Check Drives / Revert Confirm Modals ─────────────── */
 #reprocess-overlay,
 #check-drives-overlay,
+#check-result-overlay,
 #revert-overlay,
 #remove-drive-overlay,
 #remove-drives-overlay,
@@ -2135,6 +2197,64 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   gap: 12px;
   box-shadow: var(--modal-shadow);
   text-align: center;
+}
+
+/* Check Drives result report — multi-line, left-aligned, scrolls if long. */
+.check-result-msg {
+  width: 100%;
+  max-height: 40vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Check Drives menu options — stacked full-width cards inside the modal. */
+.check-drives-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.check-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
+}
+.check-option:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.check-option > .material-icons {
+  font-size: 22px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.check-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.check-option-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.check-option-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
 }
 
 /* Import Drives — a floating window with the settings-modal chrome
@@ -3012,9 +3132,12 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 
 /* ── Loading Overlay ───────────────────────────────────────────────────── */
 #loading-overlay {
-  position: absolute;
+  /* Fixed + above every modal (highest sibling is 9600): a data load must
+     block the whole app — panel tabs, footer links, settings — not just the
+     map it used to cover when it lived inside #map-container. */
+  position: fixed;
   inset: 0;
-  z-index: 800;
+  z-index: 9700;
   display: flex;
   align-items: center;
   justify-content: center;

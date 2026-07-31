@@ -16,6 +16,17 @@ export {
   AUTOPILOT_FSD,
   AUTOPILOT_AUTOSTEER,
   AUTOPILOT_TACC,
+  FLAG_BLINKER_LEFT,
+  FLAG_BLINKER_RIGHT,
+  FLAG_BRAKE,
+  FLAG_ACCEL,
+} from "../shared/drive-calc.cjs";
+
+import {
+  FLAG_BLINKER_LEFT as F_LEFT,
+  FLAG_BLINKER_RIGHT as F_RIGHT,
+  FLAG_BRAKE as F_BRAKE,
+  FLAG_ACCEL as F_ACCEL,
 } from "../shared/drive-calc.cjs";
 
 /**
@@ -71,6 +82,7 @@ function extractFromMdat(buf, offset, size) {
   const apStates = [];
   const speeds = [];
   const accelPositions = [];
+  const flags = [];
 
   const end = offset + size;
   let cursor = offset;
@@ -95,13 +107,19 @@ function extractFromMdat(buf, offset, size) {
         apStates.push(result.apState);
         speeds.push(Math.round(result.speed * 10) / 10);
         accelPositions.push(Math.round(result.accelPos * 100) / 100);
+        flags.push(
+          (result.blinkerLeft ? F_LEFT : 0) |
+          (result.blinkerRight ? F_RIGHT : 0) |
+          (result.brake ? F_BRAKE : 0) |
+          (result.accelPos > 0 ? F_ACCEL : 0),
+        );
       }
     }
 
     cursor += nalSize;
   }
 
-  return { points, gears, apStates, speeds, accelPositions };
+  return { points, gears, apStates, speeds, accelPositions, flags };
 }
 
 /**
@@ -149,11 +167,14 @@ function stripEmulationBytes(buf, start, end) {
 /**
  * Decode protobuf SeiMetadata to extract lat (field 11), lon (field 12),
  * gear_state (field 2), autopilot_state (field 10), vehicle_speed_mps (field 4),
- * accelerator_pedal_position (field 5).
+ * accelerator_pedal_position (field 5), blinker_on_left/right (fields 7/8),
+ * brake_applied (field 9). proto3 omits zero/false fields from the wire, so
+ * absent simply decodes as off.
  */
 function decodeSeiGPS(data) {
   let i = 0;
   let lat = 0, lon = 0, gear = 0, apState = 0, speed = 0, accelPos = 0;
+  let blinkerLeft = false, blinkerRight = false, brake = false;
   const len = data.length;
 
   while (i < len) {
@@ -170,6 +191,9 @@ function decodeSeiGPS(data) {
         if (vn === 0) return null;
         i += vn;
         if (fieldNum === 2) gear = val & 0xff;
+        else if (fieldNum === 7) blinkerLeft = val !== 0;
+        else if (fieldNum === 8) blinkerRight = val !== 0;
+        else if (fieldNum === 9) brake = val !== 0;
         else if (fieldNum === 10) apState = val & 0xff;
         break;
       }
@@ -206,7 +230,7 @@ function decodeSeiGPS(data) {
     Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
 
   if (!ok) return null;
-  return { lat, lon, gear, apState, speed, accelPos };
+  return { lat, lon, gear, apState, speed, accelPos, blinkerLeft, blinkerRight, brake };
 }
 
 /**

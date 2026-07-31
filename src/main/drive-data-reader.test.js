@@ -109,3 +109,42 @@ test('threshold constant is sane (under V8 max string length)', () => {
   assert.ok(FAST_PARSE_LIMIT_BYTES < 536_870_888, 'must stay under V8 string cap');
   assert.ok(FAST_PARSE_LIMIT_BYTES >= 256 * 1024 * 1024, 'should cover typical files');
 });
+
+test('unmodeled top-level sections are captured verbatim (both paths)', async () => {
+  // Rusty's exports carry sections Drive doesn't model (telemetrySamples,
+  // chargeTags, chargeCosts, …). They must round-trip through read-modify-
+  // write untouched — dropping them shrank the shared file by ~40 MB once.
+  const withExtras = {
+    formatVersion: 3, // scalar BEFORE the known sections
+    ...FIXTURE,
+    telemetrySamples: [
+      { ts: 1752606000, batteryPct: 81.5, hvacOn: 1, source: 'state' },
+      { ts: 1752606060, batteryPct: 81, hvacOn: 0, source: 'body-controller-state' },
+    ],
+    chargeTags: { '2026-05-17T20:00:00': ['home', 'üñïçødé'] },
+    chargeCosts: { '2026-05-17T20:00:00': 4.2 },
+    exportedBy: 'rusty',
+    partial: null,
+    complete: true,
+  };
+  const file = writeFixture(JSON.stringify(withExtras));
+  const fast = await readDriveData(file, { wantProcessedFiles: true });
+  const streamed = await readDriveData(file, { wantProcessedFiles: true, forceStreaming: true });
+  assert.deepEqual(fast, streamed);
+  assert.deepEqual(fast.extraSections, {
+    formatVersion: 3,
+    telemetrySamples: withExtras.telemetrySamples,
+    chargeTags: withExtras.chargeTags,
+    chargeCosts: withExtras.chargeCosts,
+    exportedBy: 'rusty',
+    partial: null,
+    complete: true,
+  });
+  // Known sections never leak into extras.
+  assert.equal('routes' in fast.extraSections, false);
+  assert.equal('driveTags' in fast.extraSections, false);
+  assert.equal('processedFiles' in fast.extraSections, false);
+  // And a file with no extras yields an empty object.
+  const plain = await readDriveData(writeFixture(JSON.stringify(FIXTURE)), { forceStreaming: true });
+  assert.deepEqual(plain.extraSections, {});
+});

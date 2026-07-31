@@ -5,9 +5,15 @@ import { GEAR_PARK, AUTOPILOT_OFF, AUTOPILOT_FSD, AUTOPILOT_AUTOSTEER, AUTOPILOT
 import {
   geodesicM,
   round2,
+  detectSummon,
   DRIVE_GAP_MS,
   PARK_GAP_SECONDS,
   CLIP_DURATION_MS,
+  GAP_FILL_MIN_MS,
+  GAP_FILL_MAX_MS,
+  GAP_FILL_ADJ_MS,
+  GAP_FILL_DUP_MS,
+  GAP_FILL_MIN_SPEED_MPS,
   NULL_ISLAND_DEG,
   MAX_FROM_MEDIAN_M,
   MAX_JUMP_M,
@@ -26,12 +32,12 @@ const {
   isEventFolderPath,
   parseClipTimestampMs,
   telemetryHasDriving,
-  selectGapFill,
+  selectGapFill: selectGapFillCanonical,
 } = eventGapFill;
 const { normalizeClipPath } = clipPath;
 const { rollUpDriveTelemetry } = driveTelemetry;
 
-export { isEventFolderPath };
+export { isEventFolderPath, telemetryHasDriving };
 
 // Sentry-USB is Go; its `[]uint8` fields (gearStates, autopilotStates) are
 // serialized by encoding/json as base64 strings. We normalize on read so the
@@ -59,6 +65,48 @@ function parseFileTimestamp(filePath) {
   return timestampMs == null ? null : new Date(timestampMs);
 }
 
+// Compatibility surface retained for callers/tests added before the gap-fill
+// implementation moved into the shared CommonJS module.
+export function parseClipTimestamp(filePath) {
+  return parseFileTimestamp(filePath);
+}
+
+export function fillableHoles(sortedTsMs) {
+  const holes = [];
+  for (let index = 1; index < sortedTsMs.length; index++) {
+    const gap = sortedTsMs[index] - sortedTsMs[index - 1];
+    if (gap > GAP_FILL_MIN_MS && gap <= GAP_FILL_MAX_MS) {
+      holes.push([sortedTsMs[index - 1], sortedTsMs[index]]);
+    }
+  }
+  return holes;
+}
+
+export function tsInHoles(holes, timestampMs) {
+  for (const [start, end] of holes) {
+    if (timestampMs > start && timestampMs < end) return true;
+    if (start >= timestampMs) break;
+  }
+  return false;
+}
+
+export function selectGapFill(recentSortedTsMs, candidates) {
+  return selectGapFillCanonical(
+    recentSortedTsMs,
+    candidates.map((candidate) => ({
+      ...candidate,
+      timestampMs: candidate.timestampMs ?? candidate.ts,
+    })),
+  );
+}
+
+export function selectGapFillEvents(recentSortedTsMs, candidates) {
+  return selectGapFill(
+    recentSortedTsMs,
+    candidates.map((candidate) => ({ ...candidate, driving: null })),
+  );
+}
+
 // geodesicM (WGS-84 ellipsoidal distance), round2, and every drive-calc
 // constant come from ../shared/drive-calc.cjs (imported above) — the single
 // source of truth. Grouping thresholds still mirror Sentry-USB-Rusty; the
@@ -71,6 +119,12 @@ function parseFileTimestamp(filePath) {
 export function groupIntoDrives(routes) {
   // Deduplicate routes by normalized file path, decoding Go-serialized base64
   // byte fields so downstream code always sees Uint8Array.
+  // Partition SavedClips/SentryClips event-folder routes off BEFORE dedup —
+  // parity with Rust group_clips. They contain (a) clips duplicating
+  // RecentClips data under a path dedup-by-path can't catch and (b) parked
+  // Sentry-mode recordings the gear splitter would surface as spurious
+  // drives. The only event routes admitted are gap-fills (below); the rest
+  // stay dropped exactly as before.
   const seen = new Set();
   const unique = [];
   const eventCandidates = [];
@@ -93,13 +147,16 @@ export function groupIntoDrives(routes) {
     });
   }
 
-  // Parse timestamps and sort. The entries in `unique` are already our own
-  // clones (built in the dedup loop above, never the caller's objects), so
-  // attach the timestamp in place instead of spread-cloning every route a
-  // second time — on a large library that second copy was pure peak waste.
+  // Parse timestamps and sort. Clip-basename timestamps (parseClipTimestamp):
+  // identical to the old whole-path scan for RecentClips paths, and the only
+  // correct reading for event paths, whose event-FOLDER timestamp comes
+  // first. The entries in `unique` are already our own clones (built in the
+  // dedup loop above, never the caller's objects), so attach the timestamp in
+  // place instead of spread-cloning every route a second time — on a large
+  // library that second copy was pure peak waste.
   const timed = [];
   for (const r of unique) {
-    const t = parseFileTimestamp(r.file);
+    const t = parseClipTimestamp(r.file);
     if (t) {
       r.timestamp = t;
       timed.push(r);
@@ -413,7 +470,11 @@ function buildDriveStats(clips, idx) {
   let maxSpeedMps = 0;
   const speedSamples = [];
 
-  const hasSEISpeeds = allPoints.some((p) => p.seiSpeed > 0);
+  // SEI speed is SIGNED — negative in Reverse. Speed stats use the MAGNITUDE
+  // (deliberate divergence from Rusty, which still drops negative samples and
+  // so reports 0 mph for a reverse-only move; Drive leads here like it did on
+  // geodesic distance). Channel presence likewise counts reverse-only data.
+  const hasSEISpeeds = allPoints.some((p) => p.seiSpeed !== 0);
 
   for (let i = 1; i < allPoints.length; i++) {
     const p0 = allPoints[i - 1];
@@ -423,8 +484,8 @@ function buildDriveStats(clips, idx) {
     totalDistanceM += d;
 
     if (hasSEISpeeds) {
-      const speed = p1.seiSpeed;
-      if (speed >= 0 && speed < SEI_SPEED_MAX_MPS) {
+      const speed = Math.abs(p1.seiSpeed);
+      if (speed < SEI_SPEED_MAX_MPS) {
         speedSamples.push(speed);
         if (speed > maxSpeedMps) maxSpeedMps = speed;
       }
@@ -577,6 +638,33 @@ function buildDriveStats(clips, idx) {
   const r2 = round2;
   const pct = (part) => totalDistanceM > 0 ? Math.round((part / totalDistanceM) * 1000) / 10 : 0;
 
+  // Summon detection — evidence lives in raw SEI frame space (flagRuns +
+  // park-split segment bounds), so it is immune to GPS dedup and to the
+  // fraction-based frame→point index mapping the splitter uses. Clips without
+  // flagRuns (pre-flags extractions, imports) make the drive unverifiable and
+  // detectSummon returns false. Speed inputs come straight from the drive
+  // stats: maxSpeedMps is magnitude-based (reverse counts — see above), and
+  // hasSeiSpeeds gates out GPS-derived speeds, which jitter past walking pace
+  // on a car that barely moved.
+  const summonEvidence = clips.map((clip) => {
+    const runs = clip.flagRuns;
+    let totalFrames = clip.subClipFrames?.totalFrames ?? clip.rawFrameCount ?? 0;
+    if (!(totalFrames > 0) && Array.isArray(runs)) {
+      totalFrames = runs.reduce((sum, r) => sum + (r.frames ?? 0), 0);
+    }
+    return {
+      flagRuns: runs,
+      startFrame: clip.subClipFrames?.startFrame ?? 0,
+      endFrame: clip.subClipFrames?.endFrame ?? totalFrames,
+      totalFrames,
+    };
+  });
+  const summon = detectSummon(summonEvidence, {
+    maxSpeedMps: hasSEISpeeds ? maxSpeedMps : 0,
+    durationMs,
+    hasSeiSpeeds: hasSEISpeeds,
+  });
+
   // Geocoding-quality endpoints — Drive-leading enhancement (no Rust
   // counterpart; used ONLY for reverse-geocode labels, never for the locked
   // distance/speed stats). A single raw GPS fix carries 3–8 m of noise and
@@ -643,6 +731,7 @@ function buildDriveStats(clips, idx) {
     // Provenance: "sei" (native dashcam extraction) or "tessie" (imported).
     // Defaults to "sei" on old files that predate the source field.
     source: firstClip.source ?? "sei",
+    ...(summon ? { summon: true } : {}),
     ...(firstClip.externalSignature ? { externalSignature: firstClip.externalSignature } : {}),
     ...(firstClip.tessieAutopilotPercent != null ? { tessieAutopilotPercent: firstClip.tessieAutopilotPercent } : {}),
     ...telemetry,

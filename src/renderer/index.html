@@ -112,6 +112,14 @@
 
         <div id="tag-filter" class="hidden"></div>
 
+        <div id="date-filter" class="hidden">
+          <span class="date-filter-label">Dates</span>
+          <input type="date" id="filter-date-start" class="date-input" title="From date (inclusive)" />
+          <span class="date-filter-sep">–</span>
+          <input type="date" id="filter-date-end" class="date-input" title="To date (inclusive)" />
+          <button id="btn-clear-dates" class="date-clear hidden" title="Clear date filter" type="button">&times;</button>
+        </div>
+
         <div id="drives-list"></div>
         <div id="drive-pager" class="hidden">
           <button id="drive-page-prev" type="button" title="Previous drives"><span class="material-icons">chevron_left</span></button>
@@ -155,7 +163,7 @@
             <a id="link-github" class="footer-link" title="GitHub" href="#">
               <svg class="footer-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.64 7.64 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
             </a>
-            <button id="link-discord" class="footer-link" title="Discord (coming soon)" disabled>
+            <button id="link-discord" class="footer-link" title="Discord">
               <svg class="footer-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M13.55 3.15A13.2 13.2 0 0 0 10.3 2a9.2 9.2 0 0 0-.42.86 12.3 12.3 0 0 0-3.76 0A9.2 9.2 0 0 0 5.7 2a13.2 13.2 0 0 0-3.25 1.15C.36 6.46-.22 9.68.07 12.86a13.4 13.4 0 0 0 4.1 2.11 10 10 0 0 0 .87-1.43 8.6 8.6 0 0 1-1.37-.67c.12-.08.23-.17.34-.27a9.5 9.5 0 0 0 8.18 0c.11.1.22.19.34.27a8.6 8.6 0 0 1-1.37.67c.27.5.56.98.87 1.43a13.4 13.4 0 0 0 4.1-2.11c.34-3.67-.58-6.85-2.42-9.71zM5.34 10.96c-.83 0-1.5-.77-1.5-1.72s.66-1.72 1.5-1.72 1.52.78 1.5 1.72c0 .95-.66 1.72-1.5 1.72zm5.32 0c-.83 0-1.5-.77-1.5-1.72s.66-1.72 1.5-1.72 1.52.78 1.5 1.72c0 .95-.66 1.72-1.5 1.72z"/></svg>
             </button>
           </div>
@@ -328,6 +336,10 @@
                   <button class="car-color-swatch line-color-swatch" data-linecolor="fsd" type="button"></button>
                 </div>
                 <div class="settings-row">
+                  <span class="settings-row-label">Summon</span>
+                  <button class="car-color-swatch line-color-swatch" data-linecolor="summon" type="button"></button>
+                </div>
+                <div class="settings-row">
                   <span class="settings-row-label">Imported</span>
                   <button class="car-color-swatch line-color-swatch" data-linecolor="imported" type="button"></button>
                 </div>
@@ -445,18 +457,45 @@
       </div>
     </div>
 
-    <!-- ── Check Drives Confirm Modal ──────────────────────────────── -->
+    <!-- ── Check Drives Menu Modal ─────────────────────────────────── -->
     <div id="check-drives-overlay" class="hidden">
       <div class="reprocess-modal">
         <div class="reprocess-modal-icon halo-amber"><span class="material-icons">build</span></div>
-        <div class="reprocess-modal-title">Check Drives?</div>
+        <div class="reprocess-modal-title">Check Drives</div>
         <div class="reprocess-modal-msg">
-          This scans for GPS gaps and bridges missing segments. A backup of your current drive data is written first (.bak), so you can revert if needed.
+          Pick a check to run. A backup of your current drive data is written first (.bak), so you can revert if needed.
         </div>
-        <div class="reprocess-modal-warning">This is an ALPHA feature and may produce unexpected results.</div>
+        <div class="check-drives-options">
+          <button id="btn-check-bridge" class="check-option">
+            <span class="material-icons">route</span>
+            <span class="check-option-text">
+              <span class="check-option-title">Bridge Gaps</span>
+              <span class="check-option-desc">Scan for GPS gaps and bridge missing segments with road routes (or straight lines offline).</span>
+            </span>
+          </button>
+          <button id="btn-check-summon" class="check-option">
+            <span class="material-icons">settings_remote</span>
+            <span class="check-option-text">
+              <span class="check-option-title">Check for Summon</span>
+              <span class="check-option-desc">Re-read parking-speed drives' clips for blinker and brake evidence, then tag Summon drives.</span>
+            </span>
+          </button>
+        </div>
+        <div class="reprocess-modal-warning">These are ALPHA features and may produce unexpected results.</div>
         <div class="reprocess-modal-actions">
-          <button id="btn-check-drives-confirm" class="btn-primary btn-update-full">Check Drives</button>
           <button id="btn-check-drives-cancel" class="update-skip-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Check Drives Result Modal (in-app completion report) ──────── -->
+    <div id="check-result-overlay" class="hidden">
+      <div class="reprocess-modal">
+        <div class="reprocess-modal-icon halo-amber"><span class="material-icons">build</span></div>
+        <div id="check-result-title" class="reprocess-modal-title">Check complete</div>
+        <div id="check-result-msg" class="check-result-msg"></div>
+        <div class="reprocess-modal-actions">
+          <button id="btn-check-result-ok" class="btn-primary btn-update-full">OK</button>
         </div>
       </div>
     </div>
@@ -669,16 +708,6 @@
           <button id="btn-zone-cancel" type="button">Cancel</button>
         </span>
       </div>
-      <div id="loading-overlay" class="hidden">
-        <div class="loading-content">
-          <div class="loading-spinner"></div>
-          <div class="loading-text">Loading drive data...</div>
-          <div id="load-progress" class="hidden">
-            <div class="load-progress-track"><div id="load-bar"></div></div>
-            <div id="load-detail"></div>
-          </div>
-        </div>
-      </div>
       <button id="btn-back-overview" class="hidden"><span class="material-icons">arrow_back</span></button>
       <div id="map-overlay-bottom">
         <div id="map-stats" class="hidden"></div>
@@ -740,6 +769,20 @@
     <div class="car-color-hex-row">
       <span class="settings-row-label">Hex</span>
       <input type="text" id="inp-car-hex" class="settings-hex-input" maxlength="7" spellcheck="false" placeholder="#ffffff" />
+    </div>
+  </div>
+
+  <!-- Full-window modal barrier: while drive data loads, nothing in the app
+       (panel tabs, footer, settings, map) accepts input. Lives at body level
+       so no panel/stacking context can leak out from under it. -->
+  <div id="loading-overlay" class="hidden">
+    <div class="loading-content">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">Loading drive data...</div>
+      <div id="load-progress" class="hidden">
+        <div class="load-progress-track"><div id="load-bar"></div></div>
+        <div id="load-detail"></div>
+      </div>
     </div>
   </div>
 
