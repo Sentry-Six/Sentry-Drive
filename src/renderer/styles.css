@@ -3526,22 +3526,24 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .charging-session-button:hover {
   background: rgba(255, 255, 255, 0.045);
 }
+/* Same badge the map draws: solid fill, 2px white ring, white numerals.
+   Colors mirror the charging-sites circle layers (#22c55e other,
+   #e82127 supercharger) so the list and the map read as one set. */
 .charging-visit-count {
   width: 40px;
   height: 40px;
   display: grid;
   place-items: center;
-  border: 2px solid currentColor;
+  border: 2px solid #ffffff;
   border-radius: 50%;
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.11);
+  color: #ffffff;
+  background: #22c55e;
   font-family: var(--font-mono);
   font-size: 14px;
   font-weight: 800;
 }
 .charging-site.is-supercharger .charging-visit-count {
-  color: #e82127;
-  background: rgba(232, 33, 39, 0.12);
+  background: #e82127;
 }
 .charging-site-copy { min-width: 0; }
 .charging-site-name {

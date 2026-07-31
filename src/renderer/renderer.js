@@ -398,12 +398,17 @@ function initMap() {
       type: 'raster', tiles: [url], tileSize: 256, maxzoom: 20,
       ...(sourceId === 'basemap' ? { attribution: '&copy; Google' } : {}),
     });
-    map.addLayer({ id: sourceId, type: 'raster', source: sourceId }, beforeLayerId);
+    // A missing anchor would throw; without one the layer lands on top,
+    // which is right for neither raster.
+    const before = beforeLayerId && map.getLayer(beforeLayerId) ? beforeLayerId : undefined;
+    map.addLayer({ id: sourceId, type: 'raster', source: sourceId }, before);
   });
-  // Basemap sits under the route layers; the label overlay above them.
+  // Paint order: basemap → route lines → privacy zones → label overlay →
+  // charging bubbles. Both rasters are re-anchored on rebuild so a layer
+  // switch can't reshuffle that.
   const applyMapTiles = () => {
     setRasterTiles('basemap', gmapsUrls()[currentBaseLayer], 'overview-dim');
-    setRasterTiles('labels-overlay', gmapsLabelOverlayUrl());
+    setRasterTiles('labels-overlay', gmapsLabelOverlayUrl(), 'charging-sites-other');
   };
 
   // Re-point both rasters when the label settings change.
@@ -497,6 +502,23 @@ function initMap() {
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': ['get', 'color'], 'line-opacity': 0.95, 'line-width': SELECTED_LINE_WIDTH, 'line-dasharray': [1.6, 1] },
     });
+    // Privacy zone circles (Settings → Privacy) — visible only while that
+    // tab is open or a zone is being placed. Amber, distinct from the route
+    // palette.
+    map.addSource('privacy-zones', { type: 'geojson', data: EMPTY_FC });
+    map.addLayer({
+      id: 'privacy-zones-fill', type: 'fill', source: 'privacy-zones',
+      paint: { 'fill-color': '#f59e0b', 'fill-opacity': 0.12 },
+    });
+    map.addLayer({
+      id: 'privacy-zones-line', type: 'line', source: 'privacy-zones',
+      paint: { 'line-color': '#f59e0b', 'line-width': 2, 'line-dasharray': [2, 1.5], 'line-opacity': 0.8 },
+    });
+    // City/street labels above every drive line (transparent overlay tiles).
+    map.addLayer({ id: 'labels-overlay', type: 'raster', source: 'labels-overlay' });
+    // Charging bubbles go in LAST, above the label overlay: they're
+    // interactive pins, not map furniture, and the Google label tiles were
+    // otherwise painting street/city names straight over them.
     map.addLayer({
       id: 'charging-sites-other',
       type: 'circle',
@@ -538,20 +560,6 @@ function initMap() {
         'icon-ignore-placement': true,
       },
     });
-    // Privacy zone circles (Settings → Privacy) — visible only while that
-    // tab is open or a zone is being placed. Amber, distinct from the route
-    // palette.
-    map.addSource('privacy-zones', { type: 'geojson', data: EMPTY_FC });
-    map.addLayer({
-      id: 'privacy-zones-fill', type: 'fill', source: 'privacy-zones',
-      paint: { 'fill-color': '#f59e0b', 'fill-opacity': 0.12 },
-    });
-    map.addLayer({
-      id: 'privacy-zones-line', type: 'line', source: 'privacy-zones',
-      paint: { 'line-color': '#f59e0b', 'line-width': 2, 'line-dasharray': [2, 1.5], 'line-opacity': 0.8 },
-    });
-    // City/street labels above every drive line (transparent overlay tiles).
-    map.addLayer({ id: 'labels-overlay', type: 'raster', source: 'labels-overlay' });
     mapReady = true;
     for (const fn of pendingMapTasks.splice(0)) fn();
   });
