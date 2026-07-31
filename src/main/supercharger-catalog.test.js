@@ -117,6 +117,34 @@ test('matches only charging sites within 250 metres and uses the catalog name', 
   ]);
 });
 
+test('a catalog name that only repeats the brand keeps the name the car reported', () => {
+  // Most OSM Supercharger nodes are literally named "Tesla Supercharger",
+  // which is less useful than the street the car reported charging at.
+  const station = (name) => ({
+    stationId: 'node/1', name, latitude: 40, longitude: -76,
+  });
+  const matchOne = (siteName, catalogName) => matchChargingSites(
+    [{ siteId: 's', latitude: 40, longitude: -76, displayName: siteName }],
+    { stations: [station(catalogName)] },
+  )[0];
+
+  // Generic catalog name loses to the car's street address...
+  assert.equal(matchOne('150 Anza Blvd', 'Tesla Supercharger').displayName, '150 Anza Blvd');
+  assert.equal(matchOne('150 Anza Blvd', 'tesla  supercharger').displayName, '150 Anza Blvd');
+  // ...but a catalog name that identifies the site still wins.
+  assert.equal(
+    matchOne('150 Anza Blvd', 'Mountain View Supercharger').displayName,
+    'Mountain View Supercharger',
+  );
+  // With nothing but placeholders on the site, the brand is the best we have.
+  assert.equal(matchOne('Charging location', 'Tesla Supercharger').displayName, 'Tesla Supercharger');
+  assert.equal(matchOne('Unknown location', 'Tesla Supercharger').displayName, 'Tesla Supercharger');
+  // A nameless catalog entry never erases a real reported name.
+  assert.equal(matchOne('150 Anza Blvd', '').displayName, '150 Anza Blvd');
+  // Matching still flags the site regardless of which name won.
+  assert.equal(matchOne('150 Anza Blvd', 'Tesla Supercharger').isSupercharger, true);
+});
+
 test('manual refresh atomically replaces valid cache and retains prior data on failure', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sentry-superchargers-'));
   const bundledPath = path.join(dir, 'bundled.json');

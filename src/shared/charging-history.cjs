@@ -7,6 +7,12 @@ const SITE_GROUPING_METRES = 150;
 const TERMINAL_STATES = new Set(['complete', 'stopped', 'disconnected', 'nopower']);
 const ACTIVE_STATES = new Set(['starting', 'charging']);
 
+// Stand-ins for a site the car never named. Exported so consumers can tell
+// "no name reported" from a real one instead of string-matching these.
+const UNKNOWN_SITE_LABEL = 'Unknown location';
+const UNNAMED_SITE_LABEL = 'Charging location';
+const PLACEHOLDER_SITE_LABELS = new Set([UNKNOWN_SITE_LABEL, UNNAMED_SITE_LABEL]);
+
 function finiteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
@@ -223,7 +229,7 @@ function groupChargingSites(inputSessions, radiusMetres = SITE_GROUPING_METRES) 
           siteId: 'unknown',
           latitude: null,
           longitude: null,
-          displayName: 'Unknown location',
+          displayName: UNKNOWN_SITE_LABEL,
           sessions: [],
           coordinateCount: 0,
         };
@@ -239,7 +245,7 @@ function groupChargingSites(inputSessions, radiusMetres = SITE_GROUPING_METRES) 
           siteId: `site-${session.sessionId}`,
           latitude,
           longitude,
-          displayName: session.locationName || 'Charging location',
+          displayName: session.locationName || UNNAMED_SITE_LABEL,
           sessions: [],
           coordinateCount: 0,
         };
@@ -277,9 +283,12 @@ function groupChargingSites(inputSessions, radiusMetres = SITE_GROUPING_METRES) 
 module.exports = {
   ACTIVE_STATES,
   LOCATION_FALLBACK_SECONDS,
+  PLACEHOLDER_SITE_LABELS,
   SESSION_GAP_SECONDS,
   SITE_GROUPING_METRES,
   TERMINAL_STATES,
+  UNKNOWN_SITE_LABEL,
+  UNNAMED_SITE_LABEL,
   createChargingSessionBuilder,
   groupChargingSites,
   haversineMetres,

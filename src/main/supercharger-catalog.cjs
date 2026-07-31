@@ -3,7 +3,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { fsyncFile } = require('../shared/atomic-write.cjs');
-const { haversineMetres } = require('../shared/charging-history.cjs');
+const {
+  haversineMetres,
+  PLACEHOLDER_SITE_LABELS,
+} = require('../shared/charging-history.cjs');
 const { renameWithRetry } = require('./drive-data-writer.cjs');
 
 const OSM_ATTRIBUTION = '© OpenStreetMap contributors';
@@ -128,6 +131,21 @@ function normalizeOverpassCatalog(payload, generatedAt = new Date().toISOString(
   });
 }
 
+// Most OSM Supercharger nodes carry no real name — 59% of the catalog (and
+// 92% of the Bay Area / Sacramento stations) is literally named "Tesla
+// Supercharger", which identifies nothing. The car, meanwhile, reports the
+// street it charged at ("150 Anza Blvd"). So a catalog name only wins when
+// it says more than the brand does; otherwise keep what the car reported.
+const GENERIC_CATALOG_NAME = /^tesla\s+supercharger$/i;
+
+function preferredSiteName(catalogName, reportedName) {
+  const catalog = text(catalogName);
+  const reported = text(reportedName);
+  if (catalog && !GENERIC_CATALOG_NAME.test(catalog)) return catalog;
+  if (reported && !PLACEHOLDER_SITE_LABELS.has(reported)) return reported;
+  return catalog || reported || 'Tesla Supercharger';
+}
+
 function matchChargingSites(sites, catalog, radiusMetres = 250) {
   const stations = Array.isArray(catalog?.stations) ? catalog.stations : [];
   return sites.map((site) => {
@@ -153,7 +171,7 @@ function matchChargingSites(sites, catalog, radiusMetres = 250) {
     }
     return {
       ...site,
-      displayName: nearest.name || site.displayName,
+      displayName: preferredSiteName(nearest.name, site.displayName),
       isSupercharger: true,
       chargerType: 'supercharger',
       catalogStationId: nearest.stationId,

@@ -18,6 +18,38 @@
           "description": "Supercharger classification works offline from a bundled OpenStreetMap snapshot. Settings > Map UI can filter Superchargers and other chargers independently or manually refresh the free catalog without a Tesla login or paid API."
         },
         {
+          "type": "improvement",
+          "description": "Supercharger visits are named by the address your car reported for the stop — \"150 Anza Blvd\" rather than a row of identical \"Tesla Supercharger\" entries. Most Superchargers carry no distinct name in the map catalog, so the car's own location wins unless the catalog knows something more specific."
+        },
+        {
+          "type": "feature",
+          "description": "The drive list can now be filtered by tag, by date range, or both — pick a tag pill and set a From/To date above the list. Filtering searches your whole history rather than just the drives currently on screen, and nothing is filtered until you ask for it."
+        },
+        {
+          "type": "feature",
+          "description": "Summon drives are detected and marked. A drive the car made on its own — hazards bookending it, no pedal input, parking-lot speed throughout — gets a Summon chip in the list and its own map line color, and is kept out of your FSD statistics so a driverless drive can't dilute your score. Check Drives > Check for Summon re-reads older parking-speed drives to tag them retroactively."
+        },
+        {
+          "type": "fix",
+          "description": "Drives no longer cut off partway through when the dashcam stopped recording mid-route. Where a gap in RecentClips is covered by Saved or Sentry event clips, those clips now complete the drive, matching how Sentry USB processes the same footage — a drive that previously ended at a recording gap now shows its full route, distance, and duration."
+        },
+        {
+          "type": "improvement",
+          "description": "While drive data loads, the rest of the app no longer accepts clicks — the loading overlay covers the whole window instead of only the map, so tabs, settings, and footer buttons can't be triggered mid-load."
+        },
+        {
+          "type": "fix",
+          "description": "The letters on the FSD event markers (A and D) are now genuinely centered in their circles. Each badge is drawn as a single pre-rendered image with the letter placed from its actual painted pixels — earlier attempts corrected the position in the page, where the browser rounded it straight back off-center."
+        },
+        {
+          "type": "improvement",
+          "description": "The Discord button in the footer now opens the Sentry Six Discord invite instead of sitting greyed out."
+        },
+        {
+          "type": "fix",
+          "description": "App log lines no longer show garbled punctuation in Windows terminals and exported log files."
+        },
+        {
           "type": "fix",
           "description": "Drive-data edits and processing checkpoints now preserve charging telemetry, charge costs, and future supplemental JSON sections instead of rewriting only routes and tags."
         }
