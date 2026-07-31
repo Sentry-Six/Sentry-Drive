@@ -3572,32 +3572,6 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   color: var(--text-dim);
 }
-.charging-cluster-marker {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  padding: 0;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.48);
-  font: 800 14px/1 "Noto Sans Mono", monospace;
-  cursor: pointer;
-  user-select: none;
-  transition: filter 120ms ease, box-shadow 120ms ease;
-}
-.charging-cluster-marker.is-supercharger { background: #e82127; }
-.charging-cluster-marker.is-other { background: #22c55e; }
-.charging-cluster-marker.is-mixed { background: #8b5cf6; }
-.charging-cluster-marker:hover {
-  filter: brightness(1.12);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.58);
-}
-.charging-cluster-marker:focus-visible {
-  outline: 3px solid rgba(255, 255, 255, 0.72);
-  outline-offset: 2px;
-}
 .settings-catalog-row {
   display: flex;
   align-items: center;

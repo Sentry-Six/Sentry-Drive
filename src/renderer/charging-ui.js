@@ -13,17 +13,19 @@ var CHARGING_MAP_LAYER_IDS = [
   'charging-sites-other',
   'charging-sites-supercharger',
   'charging-site-counts',
+  'charging-clusters-other',
+  'charging-clusters-supercharger',
+  'charging-clusters-mixed',
+  'charging-cluster-counts',
 ];
-var chargingClusterMarkers = new Map();
-var chargingClusterRefreshFrame = null;
 
 function initChargingTab() {
   document.getElementById('charging-osm-attribution').addEventListener('click', () => {
     window.electronAPI.openExternal('https://www.openstreetmap.org/copyright');
   });
-  map.on('moveend', scheduleChargingClusterMarkerRefresh);
-  map.on('sourcedata', (event) => {
-    if (event.sourceId === 'charging-sites') scheduleChargingClusterMarkerRefresh();
+  map.on('styleimagemissing', (event) => {
+    const count = window.ChargingView.chargingCountFromImageId(event.id);
+    if (count != null) addChargingCountImages([{ visitCount: count }]);
   });
   renderChargingSites();
 }
@@ -321,23 +323,6 @@ function addChargingCountImages(sites) {
   }
 }
 
-function clearChargingClusterMarkers() {
-  if (chargingClusterRefreshFrame != null) {
-    cancelAnimationFrame(chargingClusterRefreshFrame);
-    chargingClusterRefreshFrame = null;
-  }
-  for (const entry of chargingClusterMarkers.values()) entry.marker.remove();
-  chargingClusterMarkers.clear();
-}
-
-function scheduleChargingClusterMarkerRefresh() {
-  if (chargingClusterRefreshFrame != null) return;
-  chargingClusterRefreshFrame = requestAnimationFrame(() => {
-    chargingClusterRefreshFrame = null;
-    refreshChargingClusterMarkers();
-  });
-}
-
 async function expandChargingCluster(clusterId, coordinates) {
   const source = map?.getSource('charging-sites');
   if (!source || activeMainTab !== 'charging') return;
@@ -350,84 +335,15 @@ async function expandChargingCluster(clusterId, coordinates) {
   }
 }
 
-function createChargingClusterMarker(clusterId, coordinates) {
-  const element = document.createElement('button');
-  element.type = 'button';
-  element.className = 'charging-cluster-marker';
-  element.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const entry = chargingClusterMarkers.get(clusterId);
-    if (entry) expandChargingCluster(clusterId, entry.coordinates);
-  });
-  return {
-    element,
-    marker: new maplibregl.Marker({ element, anchor: 'center' })
-      .setLngLat(coordinates)
-      .addTo(map),
-    coordinates,
-  };
-}
-
-function refreshChargingClusterMarkers() {
-  if (!mapReady || activeMainTab !== 'charging' || !map.getSource('charging-sites')) {
-    clearChargingClusterMarkers();
-    return;
-  }
-
-  let features;
-  try {
-    features = map.querySourceFeatures('charging-sites');
-  } catch (error) {
-    console.warn('Charging clusters:', error);
-    return;
-  }
-
-  const visibleClusters = new Map();
-  for (const feature of features) {
-    const properties = feature.properties ?? {};
-    const clusterId = Number(properties.cluster_id);
-    const coordinates = feature.geometry?.coordinates;
-    if (!properties.cluster || !Number.isFinite(clusterId)
-      || !Array.isArray(coordinates) || coordinates.length < 2) continue;
-    if (!visibleClusters.has(clusterId)) visibleClusters.set(clusterId, feature);
-  }
-
-  for (const [clusterId, feature] of visibleClusters) {
-    const presentation = window.ChargingView.getChargingClusterPresentation(feature.properties);
-    let entry = chargingClusterMarkers.get(clusterId);
-    if (!entry) {
-      entry = createChargingClusterMarker(clusterId, feature.geometry.coordinates);
-      chargingClusterMarkers.set(clusterId, entry);
-    }
-    entry.coordinates = feature.geometry.coordinates;
-    entry.marker.setLngLat(entry.coordinates);
-    entry.element.className = `charging-cluster-marker is-${presentation.type}`;
-    entry.element.textContent = presentation.label;
-    entry.element.style.width = `${presentation.sizePx}px`;
-    entry.element.style.height = `${presentation.sizePx}px`;
-    entry.element.setAttribute('aria-label', presentation.accessibleLabel);
-    entry.element.title = presentation.accessibleLabel;
-  }
-
-  for (const [clusterId, entry] of chargingClusterMarkers) {
-    if (visibleClusters.has(clusterId)) continue;
-    entry.marker.remove();
-    chargingClusterMarkers.delete(clusterId);
-  }
-}
-
 function updateChargingMap(sites, options = {}) {
   const fit = options.fit !== false;
   whenMapReady(() => {
     const geojson = window.ChargingView.toChargingGeoJSON(sites);
     addChargingCountImages(sites);
-    clearChargingClusterMarkers();
     map.getSource('charging-sites').setData(geojson);
     const visibility = activeMainTab === 'charging' && geojson.features.length > 0 ? 'visible' : 'none';
     for (const layerId of CHARGING_MAP_LAYER_IDS) map.setLayoutProperty(layerId, 'visibility', visibility);
     document.getElementById('charging-map-legend').classList.toggle('hidden', visibility === 'none');
-    if (visibility === 'visible') scheduleChargingClusterMarkerRefresh();
     if (!fit || activeMainTab !== 'charging' || geojson.features.length === 0) return;
     if (geojson.features.length === 1) {
       map.easeTo({ center: geojson.features[0].geometry.coordinates, zoom: 12 });
@@ -470,7 +386,6 @@ function enterChargingMapMode() {
 
 function leaveChargingMapMode() {
   document.body.classList.remove('charging-mode');
-  clearChargingClusterMarkers();
   whenMapReady(() => {
     for (const layerId of CHARGING_MAP_LAYER_IDS) map.setLayoutProperty(layerId, 'visibility', 'none');
     for (const layerId of ['selected-solid', 'selected-dashed', 'traveled-solid', 'traveled-dashed']) {

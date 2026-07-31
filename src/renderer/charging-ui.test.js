@@ -1,43 +1,35 @@
 import test from 'node:test';
-import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import assert from 'node:assert/strict';
 
 const chargingUiSource = fs.readFileSync(new URL('./charging-ui.js', import.meta.url), 'utf8');
 
-function loadChargingUi(Marker) {
+function loadChargingUi(map) {
   const context = vm.createContext({
     console,
-    document: {
-      createElement() {
-        return { addEventListener() {} };
-      },
-    },
-    map: { id: 'test-map' },
-    maplibregl: { Marker },
+    map,
   });
   vm.runInContext(chargingUiSource, context, { filename: 'charging-ui.js' });
+  context.activeMainTab = 'charging';
   return context;
 }
 
-test('positions a charging cluster marker before attaching it to the map', () => {
-  class LifecycleCheckingMarker {
-    setLngLat(coordinates) {
-      this.coordinates = coordinates;
-      return this;
-    }
+test('expands a rendered charging cluster at its map-source coordinate', async () => {
+  let easeOptions = null;
+  const map = {
+    getSource() {
+      return { getClusterExpansionZoom: async () => 8 };
+    },
+    easeTo(options) {
+      easeOptions = options;
+    },
+  };
+  const context = loadChargingUi(map);
 
-    addTo(map) {
-      if (!this.coordinates) throw new Error('Marker attached before it was positioned');
-      this.map = map;
-      return this;
-    }
-  }
+  await context.expandChargingCluster(17, [-77.04, 38.91]);
 
-  const context = loadChargingUi(LifecycleCheckingMarker);
-  const entry = context.createChargingClusterMarker(17, [-77.04, 38.91]);
-
-  assert.deepEqual(Array.from(entry.coordinates), [-77.04, 38.91]);
-  assert.deepEqual(Array.from(entry.marker.coordinates), [-77.04, 38.91]);
-  assert.equal(entry.marker.map, context.map);
+  assert.deepEqual(Array.from(easeOptions.center), [-77.04, 38.91]);
+  assert.equal(easeOptions.zoom, 8);
+  assert.equal(easeOptions.duration, 450);
 });

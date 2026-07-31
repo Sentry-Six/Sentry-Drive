@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import chargingView from './charging-view.cjs';
 
 const {
+  buildChargingClusterLayers,
   buildChargingCurve,
   buildChargingSourceOptions,
+  chargingCountFromImageId,
   filterAndSortChargingSites,
   getChargingClusterPresentation,
   toChargingGeoJSON,
@@ -107,6 +109,38 @@ test('configures charging clusters to sum visits and charger classifications', (
       otherSiteCount: ['+', ['case', ['==', ['get', 'isSupercharger'], false], 1, 0]],
     },
   });
+});
+
+test('renders charging clusters as native map circles with native count icons', () => {
+  const layers = buildChargingClusterLayers();
+
+  assert.deepEqual(layers.map((layer) => layer.id), [
+    'charging-clusters-other',
+    'charging-clusters-supercharger',
+    'charging-clusters-mixed',
+    'charging-cluster-counts',
+  ]);
+  assert.deepEqual(layers.slice(0, 3).map((layer) => layer.type), ['circle', 'circle', 'circle']);
+  assert.equal(layers[3].type, 'symbol');
+  assert.ok(layers.every((layer) => layer.source === 'charging-sites'));
+  assert.ok(layers.every((layer) => layer.layout.visibility === 'none'));
+  assert.deepEqual(layers.slice(0, 3).map((layer) => layer.filter), [
+    ['all', ['has', 'point_count'], ['==', ['get', 'superchargerSiteCount'], 0], ['>', ['get', 'otherSiteCount'], 0]],
+    ['all', ['has', 'point_count'], ['>', ['get', 'superchargerSiteCount'], 0], ['==', ['get', 'otherSiteCount'], 0]],
+    ['all', ['has', 'point_count'], ['>', ['get', 'superchargerSiteCount'], 0], ['>', ['get', 'otherSiteCount'], 0]],
+  ]);
+  assert.deepEqual(layers[3].layout['icon-image'], [
+    'concat',
+    'charging-count-',
+    ['to-string', ['get', 'clusterVisitCount']],
+  ]);
+});
+
+test('recognizes only dynamically generated charging-count image ids', () => {
+  assert.equal(chargingCountFromImageId('charging-count-35'), 35);
+  assert.equal(chargingCountFromImageId('charging-count-0'), 0);
+  assert.equal(chargingCountFromImageId('charging-count-3.5'), null);
+  assert.equal(chargingCountFromImageId('vehicle-35'), null);
 });
 
 test('presents all-Supercharger, all-other, and mixed clusters by summed visits', () => {

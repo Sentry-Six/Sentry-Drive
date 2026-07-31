@@ -517,6 +517,7 @@ function initMap() {
         'circle-opacity': 0.94,
       },
     });
+    for (const layer of window.ChargingView.buildChargingClusterLayers()) map.addLayer(layer);
     map.addLayer({
       id: 'charging-site-counts',
       type: 'symbol',
@@ -629,9 +630,18 @@ function initMap() {
     }
     if (activeMainTab === 'charging') {
       const features = map.queryRenderedFeatures(e.point, {
-        layers: ['charging-site-counts', 'charging-sites-supercharger', 'charging-sites-other'],
+        layers: CHARGING_MAP_LAYER_IDS,
       });
-      const siteId = features[0]?.properties?.siteId;
+      const feature = features[0];
+      if (feature?.properties?.cluster) {
+        const clusterId = Number(feature.properties.cluster_id);
+        const coordinates = feature.geometry?.coordinates;
+        if (Number.isFinite(clusterId) && Array.isArray(coordinates)) {
+          expandChargingCluster(clusterId, coordinates);
+        }
+        return;
+      }
+      const siteId = feature?.properties?.siteId;
       if (siteId) selectChargingSite(siteId, { fromMap: true });
       return;
     }

@@ -53,6 +53,60 @@
     };
   }
 
+  function buildChargingClusterLayers() {
+    const radius = ['interpolate', ['linear'], ['get', 'clusterVisitCount'], 2, 18, 10, 22, 50, 26];
+    const circleLayer = (id, color, filter) => ({
+      id,
+      type: 'circle',
+      source: 'charging-sites',
+      filter,
+      layout: { visibility: 'none' },
+      paint: {
+        'circle-color': color,
+        'circle-radius': radius,
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+        'circle-opacity': 0.94,
+      },
+    });
+    return [
+      circleLayer(
+        'charging-clusters-other',
+        '#22c55e',
+        ['all', ['has', 'point_count'], ['==', ['get', 'superchargerSiteCount'], 0], ['>', ['get', 'otherSiteCount'], 0]],
+      ),
+      circleLayer(
+        'charging-clusters-supercharger',
+        '#e82127',
+        ['all', ['has', 'point_count'], ['>', ['get', 'superchargerSiteCount'], 0], ['==', ['get', 'otherSiteCount'], 0]],
+      ),
+      circleLayer(
+        'charging-clusters-mixed',
+        '#8b5cf6',
+        ['all', ['has', 'point_count'], ['>', ['get', 'superchargerSiteCount'], 0], ['>', ['get', 'otherSiteCount'], 0]],
+      ),
+      {
+        id: 'charging-cluster-counts',
+        type: 'symbol',
+        source: 'charging-sites',
+        filter: ['has', 'point_count'],
+        layout: {
+          visibility: 'none',
+          'icon-image': ['concat', 'charging-count-', ['to-string', ['get', 'clusterVisitCount']]],
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+        },
+      },
+    ];
+  }
+
+  function chargingCountFromImageId(imageId) {
+    const match = /^charging-count-(\d+)$/.exec(String(imageId));
+    if (!match) return null;
+    const count = Number(match[1]);
+    return Number.isSafeInteger(count) ? count : null;
+  }
+
   function getChargingClusterPresentation(properties = {}) {
     const visitCount = Math.max(0, Math.round(Number(properties.clusterVisitCount) || 0));
     const superchargerSiteCount = Math.max(0, Number(properties.superchargerSiteCount) || 0);
@@ -98,8 +152,10 @@
   }
 
   return {
+    buildChargingClusterLayers,
     buildChargingCurve,
     buildChargingSourceOptions,
+    chargingCountFromImageId,
     filterAndSortChargingSites,
     getChargingClusterPresentation,
     toChargingGeoJSON,
