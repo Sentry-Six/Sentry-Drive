@@ -8,12 +8,18 @@ const {
   parseClipTimestampMs,
 } = require('./clip-path.cjs');
 
-const GEAR_PARK = 0;
-const GAP_FILL_MIN_MS = 90 * 1000;
-const GAP_FILL_MAX_MS = 30 * 60 * 1000;
-const GAP_FILL_ADJ_MS = 3 * 60 * 1000;
-const GAP_FILL_DUP_MS = 30 * 1000;
-const GAP_FILL_MIN_SPEED_MPS = 0.5;
+// Constants come from the frozen single-source module, never local copies:
+// they are parity-bound to Sentry-USB-Rusty and lock-tested in
+// drive-calc.test.js, so a second definition here could silently drift.
+const {
+  GEAR_PARK,
+  GAP_FILL_MIN_MS,
+  GAP_FILL_MAX_MS,
+  GAP_FILL_ADJ_MS,
+  GAP_FILL_DUP_MS,
+  GAP_FILL_MIN_SPEED_MPS,
+} = require('./drive-calc.cjs');
+
 function decodeGearStates(field) {
   if (typeof field === 'string') return Buffer.from(field, 'base64');
   return field ?? [];
