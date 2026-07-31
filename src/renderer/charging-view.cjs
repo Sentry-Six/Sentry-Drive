@@ -38,6 +38,42 @@
     };
   }
 
+  function buildChargingSourceOptions(data) {
+    return {
+      type: 'geojson',
+      data,
+      cluster: true,
+      clusterRadius: 42,
+      clusterMaxZoom: 13,
+      clusterProperties: {
+        clusterVisitCount: ['+', ['coalesce', ['get', 'visitCount'], 0]],
+        superchargerSiteCount: ['+', ['case', ['==', ['get', 'isSupercharger'], true], 1, 0]],
+        otherSiteCount: ['+', ['case', ['==', ['get', 'isSupercharger'], false], 1, 0]],
+      },
+    };
+  }
+
+  function getChargingClusterPresentation(properties = {}) {
+    const visitCount = Math.max(0, Math.round(Number(properties.clusterVisitCount) || 0));
+    const superchargerSiteCount = Math.max(0, Number(properties.superchargerSiteCount) || 0);
+    const otherSiteCount = Math.max(0, Number(properties.otherSiteCount) || 0);
+    const type = superchargerSiteCount > 0 && otherSiteCount > 0
+      ? 'mixed'
+      : superchargerSiteCount > 0 ? 'supercharger' : 'other';
+    const typeLabel = type === 'supercharger'
+      ? 'Supercharger'
+      : type === 'mixed' ? 'Mixed charger' : 'Other charger';
+    const sizePx = Math.min(60, 40 + Math.ceil(Math.log2(Math.max(1, visitCount))) * 2);
+
+    return {
+      type,
+      visitCount,
+      label: String(visitCount),
+      sizePx,
+      accessibleLabel: `${typeLabel} cluster, ${visitCount} charging visits. Zoom in to expand.`,
+    };
+  }
+
   function buildChargingCurve(samples, width, height) {
     const points = samples.filter((sample) => (
       Number.isFinite(sample?.timestamp) && Number.isFinite(sample?.powerKw)
@@ -63,7 +99,9 @@
 
   return {
     buildChargingCurve,
+    buildChargingSourceOptions,
     filterAndSortChargingSites,
+    getChargingClusterPresentation,
     toChargingGeoJSON,
   };
 }));

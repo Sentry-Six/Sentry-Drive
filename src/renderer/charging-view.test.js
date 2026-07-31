@@ -4,7 +4,9 @@ import chargingView from './charging-view.cjs';
 
 const {
   buildChargingCurve,
+  buildChargingSourceOptions,
   filterAndSortChargingSites,
+  getChargingClusterPresentation,
   toChargingGeoJSON,
 } = chargingView;
 
@@ -88,6 +90,55 @@ test('creates mappable point features with classification and visit count', () =
       },
     ],
   });
+});
+
+test('configures charging clusters to sum visits and charger classifications', () => {
+  const data = { type: 'FeatureCollection', features: [] };
+
+  assert.deepEqual(buildChargingSourceOptions(data), {
+    type: 'geojson',
+    data,
+    cluster: true,
+    clusterRadius: 42,
+    clusterMaxZoom: 13,
+    clusterProperties: {
+      clusterVisitCount: ['+', ['coalesce', ['get', 'visitCount'], 0]],
+      superchargerSiteCount: ['+', ['case', ['==', ['get', 'isSupercharger'], true], 1, 0]],
+      otherSiteCount: ['+', ['case', ['==', ['get', 'isSupercharger'], false], 1, 0]],
+    },
+  });
+});
+
+test('presents all-Supercharger, all-other, and mixed clusters by summed visits', () => {
+  assert.deepEqual(getChargingClusterPresentation({
+    clusterVisitCount: 12,
+    superchargerSiteCount: 2,
+    otherSiteCount: 0,
+  }), {
+    type: 'supercharger',
+    visitCount: 12,
+    label: '12',
+    sizePx: 48,
+    accessibleLabel: 'Supercharger cluster, 12 charging visits. Zoom in to expand.',
+  });
+
+  assert.equal(getChargingClusterPresentation({
+    clusterVisitCount: 3,
+    superchargerSiteCount: 0,
+    otherSiteCount: 2,
+  }).type, 'other');
+
+  assert.equal(getChargingClusterPresentation({
+    clusterVisitCount: 7,
+    superchargerSiteCount: 1,
+    otherSiteCount: 1,
+  }).type, 'mixed');
+
+  assert.equal(getChargingClusterPresentation({
+    clusterVisitCount: Number.MAX_SAFE_INTEGER,
+    superchargerSiteCount: 1,
+    otherSiteCount: 1,
+  }).sizePx, 60);
 });
 
 test('builds a bounded charging-power curve from valid samples', () => {

@@ -437,7 +437,7 @@ function initMap() {
     map.addSource('overview', { type: 'geojson', data: EMPTY_FC });
     map.addSource('selected-route', { type: 'geojson', data: EMPTY_FC });
     map.addSource('selected-traveled', { type: 'geojson', data: EMPTY_FC });
-    map.addSource('charging-sites', { type: 'geojson', data: EMPTY_FC });
+    map.addSource('charging-sites', window.ChargingView.buildChargingSourceOptions(EMPTY_FC));
     // Dim-grey context lines under a selected drive (hidden in overview mode).
     map.addLayer({
       id: 'overview-dim', type: 'line', source: 'overview',
@@ -493,7 +493,7 @@ function initMap() {
       id: 'charging-sites-other',
       type: 'circle',
       source: 'charging-sites',
-      filter: ['==', ['get', 'isSupercharger'], false],
+      filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'isSupercharger'], false]],
       layout: { visibility: 'none' },
       paint: {
         'circle-color': '#22c55e',
@@ -507,7 +507,7 @@ function initMap() {
       id: 'charging-sites-supercharger',
       type: 'circle',
       source: 'charging-sites',
-      filter: ['==', ['get', 'isSupercharger'], true],
+      filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'isSupercharger'], true]],
       layout: { visibility: 'none' },
       paint: {
         'circle-color': '#e82127',
@@ -521,6 +521,7 @@ function initMap() {
       id: 'charging-site-counts',
       type: 'symbol',
       source: 'charging-sites',
+      filter: ['!', ['has', 'point_count']],
       layout: {
         visibility: 'none',
         'icon-image': ['concat', 'charging-count-', ['to-string', ['get', 'visitCount']]],
