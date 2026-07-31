@@ -34,6 +34,7 @@
 
       <div id="tab-bar">
         <button class="tab-btn active" data-tab="drives">View Drives</button>
+        <button class="tab-btn" data-tab="charging">Charging</button>
         <button class="tab-btn" data-tab="processing">Processing</button>
       </div>
 
@@ -125,6 +126,25 @@
           <button id="btn-multi-clear" type="button" title="Clear selection"><span class="material-icons">close</span></button>
         </div>
 
+      </div>
+
+      <!-- Charging Tab -->
+      <div id="tab-charging" class="tab-pane">
+        <div class="charging-heading">
+          <div>
+            <div class="charging-title">Charging history</div>
+            <div id="charging-summary" class="charging-summary"></div>
+          </div>
+          <span class="material-icons charging-heading-icon">ev_station</span>
+        </div>
+        <div id="charging-empty" class="charging-empty">
+          <span class="material-icons">battery_charging_full</span>
+          <span>Load drive data to view charging history.</span>
+        </div>
+        <div id="charging-sites-list"></div>
+        <button id="charging-osm-attribution" class="charging-attribution hidden" type="button">
+          © OpenStreetMap contributors
+        </button>
       </div>
 
       <!-- ── Panel Footer (always visible) ──────────────────────────── -->
@@ -251,6 +271,21 @@
                   <span class="settings-checkbox-label">Show road labels</span>
                   <input type="checkbox" id="chk-show-road-labels" class="settings-checkbox" />
                 </label>
+                <label class="settings-checkbox-row" title="Catalog-confirmed Tesla Supercharger locations in charging history">
+                  <span class="settings-checkbox-label">Show Superchargers</span>
+                  <input type="checkbox" id="chk-show-superchargers" class="settings-checkbox" />
+                </label>
+                <label class="settings-checkbox-row" title="Charging history locations not matched to a Supercharger">
+                  <span class="settings-checkbox-label">Show other charging locations</span>
+                  <input type="checkbox" id="chk-show-other-chargers" class="settings-checkbox" />
+                </label>
+                <div class="settings-catalog-row">
+                  <div>
+                    <span class="settings-row-label">Supercharger locations</span>
+                    <span id="supercharger-catalog-status" class="settings-row-hint">Bundled for offline use</span>
+                  </div>
+                  <button id="btn-refresh-superchargers" class="btn-line-colors-reset" type="button">Refresh locations</button>
+                </div>
               </div>
             </div>
             <div class="settings-section">
@@ -680,6 +715,11 @@
         <span class="legend-item"><span class="legend-swatch fsd-off"></span>Manual</span>
         <span class="legend-item legend-tessie hidden"><span class="legend-swatch legend-swatch-tessie"></span>Imported</span>
       </div>
+      <div id="charging-map-legend" class="charging-map-legend hidden">
+        <span><i class="charging-legend-dot is-supercharger"></i>Supercharger</span>
+        <span><i class="charging-legend-dot is-other"></i>Other charger</span>
+        <span class="charging-legend-note">Number = visits</span>
+      </div>
 
     </div>
 
@@ -705,6 +745,8 @@
   <script src="../../assets/vendor/maplibre/maplibre-gl.js"></script>
   <script src="../../assets/vendor/iro.min.js"></script>
   <script src="drive-page-model.cjs"></script>
+  <script src="charging-view.cjs"></script>
+  <script src="charging-ui.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

@@ -18,6 +18,14 @@ function makeSource() {
       speeds: [1, 2],
     }],
     driveTags: {},
+    telemetrySamples: [
+      { ts: 1_000, lat: 40, lng: -76, locationName: 'Charge stop' },
+      { ts: 1_010, chargingState: 'charging', chargeEnergyAddedKwh: 2 },
+      { ts: 1_020, chargingState: 'complete' },
+    ],
+    chargeCosts: {
+      1010: { amount: 3, currency: '$' },
+    },
   }));
   return { root, cacheRoot, sourcePath };
 }
@@ -44,6 +52,8 @@ test('loader service owns a disposable index and serves bounded queries', async 
   assert.equal(loaded.hiddenTessieCount, 0);
   assert.deepEqual(loaded.hiddenTessieDrives, []);
   assert.equal(loaded.drives.length, 1);
+  assert.equal(loaded.chargingSessionCount, 1);
+  assert.equal(loaded.chargingSiteCount, 1);
   assert.ok(messages.some((message) => message.type === 'progress' && message.payload.phase === 'reading'));
   assert.ok(messages.some((message) => message.type === 'progress' && message.payload.phase === 'grouping'));
 
@@ -59,6 +69,21 @@ test('loader service owns a disposable index and serves bounded queries', async 
     payload: { id: 0, maxPoints: 100 },
   });
   assert.equal(detail.fullPointCount, 2);
+
+  const chargingSites = await service.handle({ type: 'charging-sites' });
+  assert.equal(chargingSites.length, 1);
+  const chargingSessions = await service.handle({
+    type: 'charging-sessions',
+    payload: { siteId: chargingSites[0].siteId },
+  });
+  assert.equal(chargingSessions.length, 1);
+  assert.equal('chargeRateSamples' in chargingSessions[0], false);
+  const chargingDetail = await service.handle({
+    type: 'charging-session',
+    payload: { sessionId: chargingSessions[0].sessionId },
+  });
+  assert.equal(chargingDetail.chargeRateSamples.length, 1);
+  assert.equal(chargingDetail.cost.amount, 3);
 
   await service.close();
   assert.deepEqual(fs.readdirSync(fixture.cacheRoot), []);

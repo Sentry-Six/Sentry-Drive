@@ -1,6 +1,29 @@
 {
   "versions": [
     {
+      "version": "1.5.0",
+      "date": "2026-07-31",
+      "title": "Charging History",
+      "changes": [
+        {
+          "type": "feature",
+          "description": "A permanent Charging tab turns the charging telemetry already stored in drive-data.json into a location history. Repeated visits are grouped into counted map markers, with catalog-confirmed Tesla Superchargers in red and every other charger in green."
+        },
+        {
+          "type": "feature",
+          "description": "Open a charging location to see every session newest-first, then expand a session for battery change, energy, peak power, duration, recorded cost, and its charging-power curve."
+        },
+        {
+          "type": "improvement",
+          "description": "Supercharger classification works offline from a bundled OpenStreetMap snapshot. Settings > Map UI can filter Superchargers and other chargers independently or manually refresh the free catalog without a Tesla login or paid API."
+        },
+        {
+          "type": "fix",
+          "description": "Drive-data edits and processing checkpoints now preserve charging telemetry, charge costs, and future supplemental JSON sections instead of rewriting only routes and tags."
+        }
+      ]
+    },
+    {
       "version": "1.4.2",
       "date": "2026-07-26",
       "title": "Privacy Zones, Multi-Select & Map Polish",

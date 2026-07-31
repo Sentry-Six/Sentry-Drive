@@ -4,21 +4,20 @@
 // Uses worker threads for parallel extraction across all CPU cores
 
 import { Worker } from "node:worker_threads";
-import { readdir, readFile, rename, unlink } from "node:fs/promises";
-import { createWriteStream } from "node:fs";
+import { readdir, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { groupIntoDrives, encodeByteField } from "./grouper.js";
 import { discoverProcessingFiles } from "./clip-discovery.js";
 import processResult from "./process-result.cjs";
 import clipPath from "../shared/clip-path.cjs";
-import { fsyncFile, tempLooksComplete } from "../shared/atomic-write.cjs";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { buildProcessedRoute } = processResult;
 const { normalizeClipPath } = clipPath;
+const { writeDriveDataJSON } = createRequire(import.meta.url)("../main/drive-data-writer.cjs");
 
 // Large-file-safe reader shared with the main process (native JSON.parse under
 // V8's string cap, stream-json above it). Loaded defensively: it pulls in
@@ -331,75 +330,14 @@ function routeForDisk(r) {
 // The tmp name carries a per-call sequence number: a pid-only name once let
 // an overlapping checkpoint and final save share (and corrupt) one tmp file,
 // crashing the rename with ENOENT when the other call consumed it first.
-let writeSeq = 0;
 async function streamWriteJSON(filePath, processedFiles, routes, driveTags) {
-  const tmpPath = `${filePath}.${process.pid}.${++writeSeq}.tmp`;
-  await new Promise((resolve, reject) => {
-    const ws = createWriteStream(tmpPath);
-    let settled = false;
-    const fail = (err) => {
-      if (settled) return;
-      settled = true;
-      try { ws.destroy(); } catch {}
-      unlink(tmpPath).catch(() => {}).then(() => reject(err));
-    };
-    ws.on('error', fail);
-
-    const write = (chunk) => {
-      if (!ws.write(chunk)) return new Promise((r) => ws.once('drain', r));
-      return null;
-    };
-
-    (async () => {
-      try {
-        await write('{"processedFiles":');
-        await write(JSON.stringify(processedFiles));
-
-        await write(',"routes":[');
-        for (let i = 0; i < routes.length; i++) {
-          await write((i > 0 ? ',' : '') + JSON.stringify(routeForDisk(routes[i])));
-        }
-        await write(']');
-
-        await write(',"driveTags":');
-        await write(JSON.stringify(driveTags));
-
-        await write('}');
-        ws.end(() => {
-          if (!settled) { settled = true; resolve(); }
-        });
-      } catch (err) {
-        fail(err);
-      }
-    })();
+  return writeDriveDataJSON(filePath, {
+    processedFiles,
+    routes,
+    driveTags,
+  }, {
+    routeTransform: routeForDisk,
   });
-
-  // Durability + integrity gate before the rename (same as writeDriveDataJSON):
-  // flush the temp to disk, then refuse to let a truncated checkpoint replace
-  // good data. fsync is best-effort (non-fatal on filesystems that reject it).
-  try { await fsyncFile(tmpPath); } catch { /* non-fatal on some filesystems */ }
-  if (!tempLooksComplete(tmpPath)) {
-    await unlink(tmpPath).catch(() => {});
-    throw new Error('drive-data write failed its integrity check (incomplete temp); original file left intact');
-  }
-
-  // Windows throws transient EPERM/EBUSY while a reader holds the destination
-  // open — and the viewer's streaming read of a large drive-data.json can hold
-  // it for several seconds. Back off exponentially (≈11s total) so a slow
-  // reader doesn't fail the checkpoint.
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await rename(tmpPath, filePath);
-      return;
-    } catch (err) {
-      const transient = err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES';
-      if (!transient || attempt >= 12) {
-        await unlink(tmpPath).catch(() => {});
-        throw err;
-      }
-      await new Promise((r) => setTimeout(r, Math.min(1500, 50 * 2 ** attempt)));
-    }
-  }
 }
 
 main().catch((err) => {

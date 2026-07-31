@@ -82,6 +82,18 @@ class DriveLoaderClient {
     return this.request('detail', { id, maxPoints });
   }
 
+  listChargingSites() {
+    return this.request('charging-sites');
+  }
+
+  listChargingSessions(siteId) {
+    return this.request('charging-sessions', { siteId });
+  }
+
+  getChargingSession(sessionId) {
+    return this.request('charging-session', { sessionId });
+  }
+
   cancel() {
     return this.request('cancel');
   }

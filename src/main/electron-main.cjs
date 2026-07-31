@@ -19,7 +19,25 @@ let driveLoaderClient = null;
 // here would crash with ERR_STRING_TOO_LONG on >512 MiB files — the shared
 // reader fixes that everywhere at once.
 const { readDriveData } = require('./drive-data-reader.cjs');
-const { fsyncFile, tempLooksComplete } = require('../shared/atomic-write.cjs');
+const {
+  readTopLevelValues,
+  writeDriveDataJSON: writeDriveDataJSONShared,
+} = require('./drive-data-writer.cjs');
+const {
+  createSuperchargerCatalog,
+  matchChargingSites,
+} = require('./supercharger-catalog.cjs');
+
+let superchargerCatalog = null;
+function getSuperchargerCatalog() {
+  if (!superchargerCatalog) {
+    superchargerCatalog = createSuperchargerCatalog({
+      bundledPath: path.join(app.getAppPath(), 'assets', 'tesla-superchargers.json'),
+      cachePath: path.join(app.getPath('userData'), 'catalogs', 'tesla-superchargers.json'),
+    });
+  }
+  return superchargerCatalog;
+}
 
 // ─── Logging ─────────────────────────────────────────────────────────────────
 // Terminal echo + in-memory buffer; exported from Settings → Support → Logs.
@@ -617,6 +635,70 @@ ipcMain.handle('get-drive-detail', async (_e, arg) => {
   }
 });
 
+function staleDriveData(gen) {
+  return gen != null && gen !== driveDetailGen;
+}
+
+ipcMain.handle('list-charging-sites', async (_e, { gen } = {}) => {
+  try {
+    if (staleDriveData(gen)) {
+      return { success: false, error: 'Drive data was reloaded', code: 'STALE_DRIVE_DATA' };
+    }
+    const sites = await getDriveLoaderClient().listChargingSites();
+    return {
+      success: true,
+      sites: matchChargingSites(sites, getSuperchargerCatalog().getCatalog()),
+      catalog: getSuperchargerCatalog().getStatus(),
+    };
+  } catch (err) {
+    return { success: false, error: err.message, code: err.code };
+  }
+});
+
+ipcMain.handle('list-charging-sessions', async (_e, { gen, siteId } = {}) => {
+  try {
+    if (staleDriveData(gen)) {
+      return { success: false, error: 'Drive data was reloaded', code: 'STALE_DRIVE_DATA' };
+    }
+    return {
+      success: true,
+      sessions: await getDriveLoaderClient().listChargingSessions(siteId),
+    };
+  } catch (err) {
+    return { success: false, error: err.message, code: err.code };
+  }
+});
+
+ipcMain.handle('get-charging-session', async (_e, { gen, sessionId } = {}) => {
+  try {
+    if (staleDriveData(gen)) {
+      return { success: false, error: 'Drive data was reloaded', code: 'STALE_DRIVE_DATA' };
+    }
+    const session = await getDriveLoaderClient().getChargingSession(sessionId);
+    return session
+      ? { success: true, ...session }
+      : { success: false, error: 'Charging session not found' };
+  } catch (err) {
+    return { success: false, error: err.message, code: err.code };
+  }
+});
+
+ipcMain.handle('get-supercharger-catalog-status', () => {
+  try {
+    return { success: true, ...getSuperchargerCatalog().getStatus() };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('refresh-supercharger-catalog', async () => {
+  try {
+    return await getSuperchargerCatalog().refresh();
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount, reprocessAll }) => {
   if (activeChild) return { success: false, error: 'Processing already running' };
 
@@ -754,22 +836,6 @@ function withDriveDataLock(fn) {
 // destination open. A streaming read of a large drive-data.json can hold it
 // for several seconds, so back off exponentially (≈11s total) rather than
 // giving up after a few fixed 40ms beats and failing the write.
-function renameWithRetry(from, to, attempts = 12) {
-  return new Promise((resolve, reject) => {
-    const tryOnce = (n) => {
-      try { fs.renameSync(from, to); resolve(); }
-      catch (err) {
-        if (n > 0 && (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES')) {
-          setTimeout(() => tryOnce(n - 1), Math.min(1500, 40 * 2 ** (attempts - n)));
-        } else {
-          reject(err);
-        }
-      }
-    };
-    tryOnce(attempts);
-  });
-}
-
 // Merge freshly imported clips into drive-data.json under the write lock.
 // The API imports fetch for minutes; merging against a re-read of the file
 // (rather than the snapshot taken before the fetch) keeps writes made in the
@@ -817,76 +883,10 @@ function saveImportedClips(filePath, clips, onProgress, tagsToMerge) {
   });
 }
 
-function writeDriveDataJSON(filePath, data) {
-  // Write to a unique temp file, then atomically rename over the target so
-  // readers (the streaming loader, get/set-drive-tags, etc.) never see a
-  // half-written/truncated file — the cause of intermittent "Unexpected end of
-  // JSON input" errors when a read overlapped a write.
-  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  return new Promise((resolve, reject) => {
-    const ws = fs.createWriteStream(tmpPath);
-    let settled = false;
-    const fail = (err) => {
-      if (settled) return;
-      settled = true;
-      try { ws.destroy(); } catch {}
-      fs.unlink(tmpPath, () => reject(err));
-    };
-    ws.on('error', fail);
-    ws.on('finish', async () => {
-      if (settled) return;
-      settled = true;
-      // Durability + integrity gate BEFORE the rename replaces the good file:
-      //  - fsync flushes the temp to physical disk, closing the window where a
-      //    power loss after the rename surfaces a temp whose bytes were still
-      //    only in the OS write cache (non-fatal if the filesystem rejects it).
-      //  - tempLooksComplete refuses to let a truncated write (full disk /
-      //    dropped network share) clobber real data — the original is kept.
-      try { await fsyncFile(tmpPath); } catch { /* fsync unsupported on some shares — non-fatal */ }
-      if (!tempLooksComplete(tmpPath)) {
-        fs.unlink(tmpPath, () => {});
-        reject(new Error('drive-data write failed its integrity check (incomplete temp); original file left intact'));
-        return;
-      }
-      renameWithRetry(tmpPath, filePath).then(() => { noteOwnWrite(filePath); resolve(); },
-        (err) => fs.unlink(tmpPath, () => reject(err)));
-    });
-
-    const write = (chunk) => {
-      // Respect backpressure — wait for drain on full buffers.
-      if (!ws.write(chunk)) return new Promise((r) => ws.once('drain', r));
-      return null;
-    };
-
-    (async () => {
-      try {
-        await write('{\n');
-
-        // processedFiles
-        await write('  "processedFiles": ');
-        await write(JSON.stringify(data.processedFiles ?? [], null, 2).replace(/\n/g, '\n  '));
-        await write(',\n');
-
-        // routes — one compact object per line to avoid one huge string
-        const routes = Array.isArray(data.routes) ? data.routes : [];
-        await write('  "routes": [');
-        for (let i = 0; i < routes.length; i++) {
-          await write(i === 0 ? '\n    ' : ',\n    ');
-          await write(JSON.stringify(routes[i]));
-        }
-        if (routes.length > 0) await write('\n  ');
-        await write('],\n');
-
-        // driveTags
-        await write('  "driveTags": ');
-        await write(JSON.stringify(data.driveTags ?? {}, null, 2).replace(/\n/g, '\n  '));
-
-        await write('\n}\n');
-        ws.end();
-      } catch (err) {
-        fail(err);
-      }
-    })();
+function writeDriveDataJSON(filePath, data, options = {}) {
+  return writeDriveDataJSONShared(filePath, data, {
+    ...options,
+    onRenamed: noteOwnWrite,
   });
 }
 
@@ -944,28 +944,22 @@ async function decodeRoutesByteFields(routes) {
 
 ipcMain.handle('set-drive-tags', (_e, { filePath, driveKey, tags }) => withDriveDataLock(async () => {
   try {
-    const data = await readDriveData(filePath, { wantProcessedFiles: true });
-    if (!data.driveTags) data.driveTags = {};
+    const selected = await readTopLevelValues(filePath, ['driveTags']);
+    const driveTags = selected.values.driveTags
+      && typeof selected.values.driveTags === 'object'
+      && !Array.isArray(selected.values.driveTags)
+      ? selected.values.driveTags
+      : {};
 
     if (tags.length === 0) {
-      delete data.driveTags[driveKey];
+      delete driveTags[driveKey];
     } else {
-      data.driveTags[driveKey] = tags;
+      driveTags[driveKey] = tags;
     }
 
-    // Byte fields read from disk are normally already wire-format base64
-    // strings, so a full routesToWireFormat pass only spread-copied every
-    // route on each tag edit. Encode in place, and only the rare legacy
-    // array-form field — keeps the on-disk format canonical without copies.
-    const { encode } = await getByteFieldCodec();
-    for (const r of data.routes ?? []) {
-      if (!r) continue;
-      const ap = encode(r.autopilotStates);
-      if (ap !== r.autopilotStates) r.autopilotStates = ap;
-      const gs = encode(r.gearStates);
-      if (gs !== r.gearStates) r.gearStates = gs;
-    }
-    await writeDriveDataJSON(filePath, data);
+    await writeDriveDataJSON(filePath, { driveTags }, {
+      sourceSections: selected.sections,
+    });
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };

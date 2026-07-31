@@ -16,6 +16,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadAndGroupDrives: (fp) => ipcRenderer.invoke('load-and-group-drives', fp),
   listDriveSummaries: (query) => ipcRenderer.invoke('list-drive-summaries', query),
   getDriveDetail: (driveId, gen) => ipcRenderer.invoke('get-drive-detail', { driveId, gen }),
+  listChargingSites: (args) => ipcRenderer.invoke('list-charging-sites', args),
+  listChargingSessions: (args) => ipcRenderer.invoke('list-charging-sessions', args),
+  getChargingSession: (args) => ipcRenderer.invoke('get-charging-session', args),
+  getSuperchargerCatalogStatus: () => ipcRenderer.invoke('get-supercharger-catalog-status'),
+  refreshSuperchargerCatalog: () => ipcRenderer.invoke('refresh-supercharger-catalog'),
   onLoadProgress: (cb) => {
     const listener = (_ev, data) => cb(data);
     ipcRenderer.on('load-progress', listener);

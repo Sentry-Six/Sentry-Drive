@@ -55,3 +55,36 @@ test('client rejects every pending request when the utility process exits', asyn
   await assert.rejects(first, (error) => error.code === 'DRIVE_LOADER_EXITED');
   await assert.rejects(second, (error) => error.code === 'DRIVE_LOADER_EXITED');
 });
+
+test('client exposes charging site, session list, and detail requests', async () => {
+  const child = new FakeChild();
+  const client = createDriveLoaderClient({
+    fork: () => child,
+    workerPath: 'worker.cjs',
+    cacheRoot: 'cache',
+  });
+
+  const sitesPending = client.listChargingSites();
+  assert.deepEqual(child.sent[0], { id: 1, type: 'charging-sites', payload: {} });
+  child.emit('message', { id: 1, ok: true, result: [{ siteId: 'one' }] });
+  assert.deepEqual(await sitesPending, [{ siteId: 'one' }]);
+
+  const sessionsPending = client.listChargingSessions('one');
+  assert.deepEqual(child.sent[1], {
+    id: 2,
+    type: 'charging-sessions',
+    payload: { siteId: 'one' },
+  });
+  child.emit('message', { id: 2, ok: true, result: [{ sessionId: 'session-one' }] });
+  assert.deepEqual(await sessionsPending, [{ sessionId: 'session-one' }]);
+
+  const detailPending = client.getChargingSession('session-one');
+  assert.deepEqual(child.sent[2], {
+    id: 3,
+    type: 'charging-session',
+    payload: { sessionId: 'session-one' },
+  });
+  child.emit('message', { id: 3, ok: true, result: { sessionId: 'session-one' } });
+  assert.deepEqual(await detailPending, { sessionId: 'session-one' });
+  await client.close();
+});

@@ -11,6 +11,10 @@ const Assembler = AssemblerModule.Assembler ?? AssemblerModule;
 const { DRIVE_GAP_MS } = require('../shared/drive-calc.cjs');
 const { parseClipTimestampMs } = require('../shared/event-gap-fill.cjs');
 const { normalizeClipPath } = require('../shared/clip-path.cjs');
+const {
+  createChargingSessionBuilder,
+  groupChargingSites,
+} = require('../shared/charging-history.cjs');
 const parseFileTimestampMs = parseClipTimestampMs;
 
 function abortError() {
@@ -55,6 +59,23 @@ class DriveIndex {
       );
       CREATE INDEX IF NOT EXISTS drives_start_time
         ON drives(start_time DESC, id DESC);
+      CREATE TABLE IF NOT EXISTS charging_sites (
+        site_id TEXT PRIMARY KEY,
+        visit_count INTEGER NOT NULL,
+        latest_visit TEXT,
+        summary BLOB NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS charging_sites_order
+        ON charging_sites(visit_count DESC, latest_visit DESC);
+      CREATE TABLE IF NOT EXISTS charging_sessions (
+        session_id TEXT PRIMARY KEY,
+        site_id TEXT NOT NULL,
+        start_timestamp REAL NOT NULL,
+        summary BLOB NOT NULL,
+        detail BLOB NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS charging_sessions_site_time
+        ON charging_sessions(site_id, start_timestamp DESC);
     `);
     this.insertRouteStmt = this.db.prepare(`
       INSERT OR IGNORE INTO routes
@@ -72,6 +93,17 @@ class DriveIndex {
     `);
     this.deleteDriveStmt = this.db.prepare('DELETE FROM drives WHERE id = ?');
     this.getDriveDetailStmt = this.db.prepare('SELECT detail FROM drives WHERE id = ?');
+    this.insertChargingSiteStmt = this.db.prepare(`
+      INSERT INTO charging_sites(site_id, visit_count, latest_visit, summary)
+      VALUES (?, ?, ?, ?)
+    `);
+    this.insertChargingSessionStmt = this.db.prepare(`
+      INSERT INTO charging_sessions(session_id, site_id, start_timestamp, summary, detail)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    this.getChargingSessionStmt = this.db.prepare(
+      'SELECT detail FROM charging_sessions WHERE session_id = ?',
+    );
   }
 
   insertRoute(route, sequence) {
@@ -119,6 +151,8 @@ class DriveIndex {
       routeCount: 0,
       droppedCount: 0,
       duplicateCount: 0,
+      chargingSessionCount: 0,
+      chargingSiteCount: 0,
     });
   }
 
@@ -185,6 +219,49 @@ class DriveIndex {
     };
   }
 
+  putChargingHistory(sites, sessions) {
+    for (const site of sites) {
+      this.insertChargingSiteStmt.run(
+        site.siteId,
+        site.visitCount,
+        site.latestVisit,
+        v8.serialize(site),
+      );
+    }
+    for (const session of sessions) {
+      const { chargeRateSamples: _samples, ...summary } = session;
+      this.insertChargingSessionStmt.run(
+        session.sessionId,
+        session.siteId,
+        session.startTimestamp,
+        v8.serialize(summary),
+        v8.serialize(session),
+      );
+    }
+  }
+
+  listChargingSites() {
+    return this.db.prepare(`
+      SELECT summary
+      FROM charging_sites
+      ORDER BY visit_count DESC, latest_visit DESC, site_id
+    `).all().map((row) => v8.deserialize(row.summary));
+  }
+
+  listChargingSessions(siteId) {
+    return this.db.prepare(`
+      SELECT summary
+      FROM charging_sessions
+      WHERE site_id = ?
+      ORDER BY start_timestamp DESC, session_id DESC
+    `).all(siteId).map((row) => v8.deserialize(row.summary));
+  }
+
+  getChargingSession(sessionId) {
+    const row = this.getChargingSessionStmt.get(sessionId);
+    return row ? v8.deserialize(row.detail) : null;
+  }
+
   *iterateTimeWindows() {
     const rows = this.db.prepare(`
       SELECT timestamp_ms, payload
@@ -238,6 +315,8 @@ function indexDriveData(index, options = {}) {
     let duplicateCount = 0;
     let routeSequence = 0;
     let driveTags = {};
+    let chargeCosts = {};
+    const chargingBuilder = createChargingSessionBuilder();
 
     let depth = 0;
     let currentTopKey = null;
@@ -290,8 +369,12 @@ function indexDriveData(index, options = {}) {
               if (disposition === 'inserted') routeCount++;
               else if (disposition === 'duplicate') duplicateCount++;
               else droppedCount++;
+            } else if (currentTopKey === 'telemetrySamples') {
+              chargingBuilder.add(assembler.current);
             } else if (currentTopKey === 'driveTags') {
               driveTags = assembler.current;
+            } else if (currentTopKey === 'chargeCosts') {
+              chargeCosts = assembler.current;
             }
             assembler = null;
           }
@@ -302,11 +385,19 @@ function indexDriveData(index, options = {}) {
       if (name === 'startObject' || name === 'startArray') {
         const before = depth;
         depth++;
-        if (before === 2 && name === 'startObject' && currentTopKey === 'routes') {
+        if (
+          before === 2
+          && name === 'startObject'
+          && (currentTopKey === 'routes' || currentTopKey === 'telemetrySamples')
+        ) {
           assembler = new Assembler();
           assemblerExitDepth = before;
           assembler.consume(token);
-        } else if (before === 1 && name === 'startObject' && currentTopKey === 'driveTags') {
+        } else if (
+          before === 1
+          && name === 'startObject'
+          && (currentTopKey === 'driveTags' || currentTopKey === 'chargeCosts')
+        ) {
           assembler = new Assembler();
           assemblerExitDepth = before;
           assembler.consume(token);
@@ -324,7 +415,16 @@ function indexDriveData(index, options = {}) {
     pipeline.once('end', () => {
       if (settled) return;
       try {
-        const counts = { processedFileCount, routeCount, droppedCount, duplicateCount };
+        const charging = groupChargingSites(chargingBuilder.finish(chargeCosts));
+        index.putChargingHistory(charging.sites, charging.sessions);
+        const counts = {
+          processedFileCount,
+          routeCount,
+          droppedCount,
+          duplicateCount,
+          chargingSessionCount: charging.sessions.length,
+          chargingSiteCount: charging.sites.length,
+        };
         index.setMeta('counts', counts);
         index.setMeta('driveTags', driveTags);
         index.commitIndexing();

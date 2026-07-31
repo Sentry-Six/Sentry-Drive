@@ -26,6 +26,14 @@ let fsdEventMarkers = [];  // DOM markers for FSD events (toggleable in Settings
 let showMapLabels = true;               // city/neighborhood labels on base maps
 let showRoadLabels = true;              // street/highway names on base maps
 let applyMapLabelsSetting = () => {};   // bound to the real basemap at map init
+let activeMainTab = 'drives';
+let chargingSites = [];
+let chargingCatalogStatus = null;
+let selectedChargingSiteId = null;
+let selectedChargingSessionId = null;
+let showSuperchargers = localStorage.getItem('showSuperchargers') !== 'false';
+let showOtherChargers = localStorage.getItem('showOtherChargers') !== 'false';
+let driveCameraBeforeCharging = null;
 
 // Replay state
 let replayMarker = null;
@@ -231,6 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initTabs();
   initProcessingTab();
   initViewDrivesTab();
+  initChargingTab();
   initFooter();
   initChangelogModal();
   loadDefaultPaths();
@@ -428,6 +437,7 @@ function initMap() {
     map.addSource('overview', { type: 'geojson', data: EMPTY_FC });
     map.addSource('selected-route', { type: 'geojson', data: EMPTY_FC });
     map.addSource('selected-traveled', { type: 'geojson', data: EMPTY_FC });
+    map.addSource('charging-sites', { type: 'geojson', data: EMPTY_FC });
     // Dim-grey context lines under a selected drive (hidden in overview mode).
     map.addLayer({
       id: 'overview-dim', type: 'line', source: 'overview',
@@ -478,6 +488,45 @@ function initMap() {
       filter: ['==', ['get', 'dashed'], true],
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': ['get', 'color'], 'line-opacity': 0.95, 'line-width': SELECTED_LINE_WIDTH, 'line-dasharray': [1.6, 1] },
+    });
+    map.addLayer({
+      id: 'charging-sites-other',
+      type: 'circle',
+      source: 'charging-sites',
+      filter: ['==', ['get', 'isSupercharger'], false],
+      layout: { visibility: 'none' },
+      paint: {
+        'circle-color': '#22c55e',
+        'circle-radius': ['interpolate', ['linear'], ['get', 'visitCount'], 1, 17, 10, 22, 50, 26],
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+        'circle-opacity': 0.94,
+      },
+    });
+    map.addLayer({
+      id: 'charging-sites-supercharger',
+      type: 'circle',
+      source: 'charging-sites',
+      filter: ['==', ['get', 'isSupercharger'], true],
+      layout: { visibility: 'none' },
+      paint: {
+        'circle-color': '#e82127',
+        'circle-radius': ['interpolate', ['linear'], ['get', 'visitCount'], 1, 17, 10, 22, 50, 26],
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+        'circle-opacity': 0.94,
+      },
+    });
+    map.addLayer({
+      id: 'charging-site-counts',
+      type: 'symbol',
+      source: 'charging-sites',
+      layout: {
+        visibility: 'none',
+        'icon-image': ['concat', 'charging-count-', ['to-string', ['get', 'visitCount']]],
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
     });
     // Privacy zone circles (Settings → Privacy) — visible only while that
     // tab is open or a zone is being placed. Amber, distinct from the route
@@ -577,6 +626,14 @@ function initMap() {
       }
       return;
     }
+    if (activeMainTab === 'charging') {
+      const features = map.queryRenderedFeatures(e.point, {
+        layers: ['charging-site-counts', 'charging-sites-supercharger', 'charging-sites-other'],
+      });
+      const siteId = features[0]?.properties?.siteId;
+      if (siteId) selectChargingSite(siteId, { fromMap: true });
+      return;
+    }
     const TOL_PX = 10;
     const box = [
       [e.point.x - TOL_PX, e.point.y - TOL_PX],
@@ -624,15 +681,22 @@ function resizeVehicleMarkerToZoom() {
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 function initTabs() {
   document.querySelectorAll('.tab-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const tab = btn.dataset.tab;
-      document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-      document.querySelectorAll('.tab-pane').forEach((p) => p.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById(`tab-${tab}`).classList.add('active');
-      setTimeout(() => map.resize(), 50);
-    });
+    btn.addEventListener('click', () => switchMainTab(btn.dataset.tab));
   });
+}
+
+function switchMainTab(tab) {
+  if (!document.getElementById(`tab-${tab}`)) return;
+  const wasCharging = activeMainTab === 'charging';
+  activeMainTab = tab;
+  document.querySelectorAll('.tab-btn').forEach((button) => {
+    button.classList.toggle('active', button.dataset.tab === tab);
+  });
+  document.querySelectorAll('.tab-pane').forEach((pane) => pane.classList.remove('active'));
+  document.getElementById(`tab-${tab}`).classList.add('active');
+  if (tab === 'charging') enterChargingMapMode();
+  else if (wasCharging) leaveChargingMapMode();
+  setTimeout(() => map.resize(), 50);
 }
 
 // ─── Footer & Settings ───────────────────────────────────────────────────────
@@ -1142,6 +1206,23 @@ function initFooter() {
     applyMapLabelsSetting();
   });
 
+  const superchargersChk = document.getElementById('chk-show-superchargers');
+  const otherChargersChk = document.getElementById('chk-show-other-chargers');
+  superchargersChk.checked = showSuperchargers;
+  otherChargersChk.checked = showOtherChargers;
+  superchargersChk.addEventListener('change', () => {
+    showSuperchargers = superchargersChk.checked;
+    localStorage.setItem('showSuperchargers', String(showSuperchargers));
+    renderChargingSites();
+  });
+  otherChargersChk.addEventListener('change', () => {
+    showOtherChargers = otherChargersChk.checked;
+    localStorage.setItem('showOtherChargers', String(showOtherChargers));
+    renderChargingSites();
+  });
+  document.getElementById('btn-refresh-superchargers').addEventListener('click', refreshSuperchargerCatalog);
+  updateSuperchargerCatalogStatus();
+
   // Auto-load drive data setting (default: true, preserve existing behavior for existing users)
   const autoLoadChk = document.getElementById('chk-autoload-drive-data');
   autoLoadChk.checked = localStorage.getItem('autoLoadDriveData') !== 'false';
@@ -1639,6 +1720,7 @@ async function applyLoadedDriveData(result, filePath) {
   renderDriveStats(drives, result);
   await renderDriveList(drives);
   renderOverviewOnMap();
+  await loadChargingSites();
   updateDrivePager();
   document.getElementById('btn-repair-gps').disabled = false;
   updateRevertButton();
@@ -1653,12 +1735,7 @@ async function autoLoadDriveData(filePath) {
 
     await applyLoadedDriveData(result, filePath);
 
-    // Switch to drives tab
-    document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-    document.querySelectorAll('.tab-pane').forEach((p) => p.classList.remove('active'));
-    document.querySelector('[data-tab="drives"]').classList.add('active');
-    document.getElementById('tab-drives').classList.add('active');
-    setTimeout(() => map.resize(), 50);
+    switchMainTab('drives');
   } catch {
     // File may no longer exist — clear saved path
     localStorage.removeItem('lastDriveDataPath');
@@ -4171,6 +4248,12 @@ let overviewBounds = null;
 function updateOverviewStyleState() {
   if (!mapReady) {
     whenMapReady(updateOverviewStyleState);
+    return;
+  }
+  if (activeMainTab === 'charging') {
+    map.setLayoutProperty('overview-native', 'visibility', 'none');
+    map.setLayoutProperty('overview-imported', 'visibility', 'none');
+    map.setLayoutProperty('overview-dim', 'visibility', 'none');
     return;
   }
   const selected = selectedDriveId != null;

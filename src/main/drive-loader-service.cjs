@@ -95,6 +95,15 @@ class LoaderService {
       case 'detail':
         if (!this.index) throw Object.assign(new Error('No drive data is loaded'), { code: 'NO_DRIVE_DATA' });
         return this.index.getDriveDetail(payload.id, payload.maxPoints);
+      case 'charging-sites':
+        if (!this.index) throw Object.assign(new Error('No drive data is loaded'), { code: 'NO_DRIVE_DATA' });
+        return this.index.listChargingSites();
+      case 'charging-sessions':
+        if (!this.index) throw Object.assign(new Error('No drive data is loaded'), { code: 'NO_DRIVE_DATA' });
+        return this.index.listChargingSessions(payload.siteId);
+      case 'charging-session':
+        if (!this.index) throw Object.assign(new Error('No drive data is loaded'), { code: 'NO_DRIVE_DATA' });
+        return this.index.getChargingSession(payload.sessionId);
       case 'cancel':
         this.abortController?.abort();
         return { canceled: true };

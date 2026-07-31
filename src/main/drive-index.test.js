@@ -48,6 +48,8 @@ test('indexes routes on disk with normalized deduplication and bounded time wind
     routeCount: 3,
     droppedCount: 0,
     duplicateCount: 2,
+    chargingSessionCount: 0,
+    chargingSiteCount: 0,
   });
   const windows = [...index.iterateTimeWindows()];
   assert.equal(windows.length, 2);
@@ -84,4 +86,52 @@ test('reports byte progress and cancellation without returning partial success',
     { name: 'AbortError' },
   );
   assert.ok(progress.length >= 1);
+});
+
+test('indexes charging summaries separately from detailed curve samples', async (t) => {
+  const fixture = makeFixture();
+  fs.writeFileSync(fixture.sourcePath, JSON.stringify({
+    processedFiles: [],
+    routes: [],
+    driveTags: {},
+    telemetrySamples: [
+      { ts: 1_000, lat: 40, lng: -76, locationName: 'North charger', batteryPct: 10 },
+      { ts: 1_010, chargingState: 'charging', chargeEnergyAddedKwh: 0.1 },
+      { ts: 1_020, chargerPowerKw: 50, chargeRateMph: 220, chargeEnergyAddedKwh: 2, batteryPct: 25 },
+      { ts: 1_030, chargingState: 'complete', batteryPct: 30 },
+      { ts: 2_000, lat: 40.0006, lng: -76.0004, locationName: 'North charger' },
+      { ts: 2_010, chargingState: 'charging', chargeEnergyAddedKwh: 1 },
+      { ts: 2_020, chargingState: 'stopped' },
+      { ts: 3_000, chargingState: 'charging', chargeEnergyAddedKwh: 3 },
+      { ts: 3_010, chargingState: 'complete' },
+    ],
+    chargeCosts: {
+      1010: { amount: 4.5, currency: '$' },
+    },
+  }));
+  const index = createDriveIndex(fixture);
+  t.after(() => {
+    index.close();
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  });
+
+  const counts = await indexDriveData(index);
+  assert.equal(counts.chargingSessionCount, 3);
+  assert.equal(counts.chargingSiteCount, 2);
+
+  const sites = index.listChargingSites();
+  assert.deepEqual(sites.map((site) => [site.siteId, site.visitCount]), [
+    ['site-charge-1010-1', 2],
+    ['unknown', 1],
+  ]);
+
+  const summaries = index.listChargingSessions('site-charge-1010-1');
+  assert.equal(summaries.length, 2);
+  assert.equal(summaries[0].sessionId, 'charge-2010-2');
+  assert.equal('chargeRateSamples' in summaries[0], false);
+
+  const detail = index.getChargingSession('charge-1010-1');
+  assert.equal(detail.cost.amount, 4.5);
+  assert.equal(detail.chargeRateSamples.length, 2);
+  assert.equal(index.getChargingSession('missing'), null);
 });
