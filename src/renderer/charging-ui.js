@@ -350,7 +350,7 @@ async function expandChargingCluster(clusterId, coordinates) {
   }
 }
 
-function createChargingClusterMarker(clusterId) {
+function createChargingClusterMarker(clusterId, coordinates) {
   const element = document.createElement('button');
   element.type = 'button';
   element.className = 'charging-cluster-marker';
@@ -362,8 +362,10 @@ function createChargingClusterMarker(clusterId) {
   });
   return {
     element,
-    marker: new maplibregl.Marker({ element, anchor: 'center' }).addTo(map),
-    coordinates: null,
+    marker: new maplibregl.Marker({ element, anchor: 'center' })
+      .setLngLat(coordinates)
+      .addTo(map),
+    coordinates,
   };
 }
 
@@ -395,7 +397,7 @@ function refreshChargingClusterMarkers() {
     const presentation = window.ChargingView.getChargingClusterPresentation(feature.properties);
     let entry = chargingClusterMarkers.get(clusterId);
     if (!entry) {
-      entry = createChargingClusterMarker(clusterId);
+      entry = createChargingClusterMarker(clusterId, feature.geometry.coordinates);
       chargingClusterMarkers.set(clusterId, entry);
     }
     entry.coordinates = feature.geometry.coordinates;
