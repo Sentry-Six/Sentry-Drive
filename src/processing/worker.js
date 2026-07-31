@@ -24,7 +24,7 @@ parentPort.on("message", async (msg) => {
     const data = await extractGPSFromFile(f.fullPath);
     if (data && data.points.length > 0) {
       const gearRuns = computeGearRuns(data.gears);
-      const flagRuns = computeFlagRuns(data.flags);
+      const flagRuns = computeFlagRuns(data.flags, data.speeds);
       const rawFrameCount = data.gears.length;
       let rawParkCount = 0;
       for (const g of data.gears) {

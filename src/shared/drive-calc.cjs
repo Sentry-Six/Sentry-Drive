@@ -83,9 +83,12 @@ const FLAG_ACCEL = 8;         // accelerator_pedal_position > 0 (human-only inpu
 // Summon detection thresholds, verified against real Actually Smart Summon
 // footage (2026-07-15 20:49/20:50): hazards = both blinker bits in the same
 // frame, held 1-4 s spanning BOTH gear transitions; accel/brake stay 0 the
-// whole drive; speed peaked at 2.7 m/s (Tesla caps summon near 6 mph);
-// autopilot_state stays 0 during summon, so it plays no part here.
-const SUMMON_MAX_SPEED_MPS = 3.5;
+// whole drive; autopilot_state stays 0 during summon, so it plays no part
+// here. Speed cap: Tesla limits summon to ~6 mph on older firmware and 8 mph
+// (3.58 m/s) on newer cars — 4.5 m/s (10.1 mph) gives the 8 mph ceiling the
+// same headroom the previous 3.5 gate gave the 6 mph one (observed ASS peak
+// on the 6 mph firmware: 2.7 m/s).
+const SUMMON_MAX_SPEED_MPS = 4.5;
 const SUMMON_BOOKEND_SECONDS = 10;      // hazards must appear this close to each end
 const SUMMON_MAX_DURATION_MS = 10 * 60 * 1000;
 
@@ -191,22 +194,58 @@ function computeGearRuns(gears) {
  * points, and the summon detector needs those frames, not the survivors.
  * Shared by the extraction worker and the Check for Summon backfill.
  */
-function computeFlagRuns(flags) {
+function computeFlagRuns(flags, speeds) {
   if (!flags || flags.length === 0) return [];
   const runs = [];
+  const r1 = (v) => Math.round(v * 10) / 10;
   let currentFlags = flags[0];
   let count = 1;
+  // Per-run max |SEI speed| (maxMps) travels with the run so the summon
+  // detector can gate speed in FRAME space: the park splitter slices point
+  // arrays by frame fraction, and on deduped points that slice overshoots
+  // into the next segment — a summon's stats can inherit the following
+  // drive's speed samples (observed live: a 6 mph summon read 9 mph).
+  let maxAbs = speeds ? Math.abs(speeds[0] ?? 0) : 0;
   for (let i = 1; i < flags.length; i++) {
     if (flags[i] === currentFlags) {
       count++;
+      if (speeds) {
+        const a = Math.abs(speeds[i] ?? 0);
+        if (a > maxAbs) maxAbs = a;
+      }
     } else {
-      runs.push({ flags: currentFlags, frames: count });
+      runs.push(speeds
+        ? { flags: currentFlags, frames: count, maxMps: r1(maxAbs) }
+        : { flags: currentFlags, frames: count });
       currentFlags = flags[i];
       count = 1;
+      maxAbs = speeds ? Math.abs(speeds[i] ?? 0) : 0;
     }
   }
-  runs.push({ flags: currentFlags, frames: count });
+  runs.push(speeds
+    ? { flags: currentFlags, frames: count, maxMps: r1(maxAbs) }
+    : { flags: currentFlags, frames: count });
   return runs;
+}
+
+/**
+ * Frame-space max |SEI speed| over the flag runs overlapping a segment's
+ * [startFrame, endFrame) — null when any overlapping run predates per-run
+ * speed evidence (pre-maxMps extraction), so callers can fall back.
+ */
+function segmentMaxSpeed(c) {
+  let frame = 0;
+  let max = 0;
+  for (const run of c.flagRuns) {
+    const start = frame;
+    const end = frame + run.frames;
+    frame = end;
+    if (end <= c.startFrame) continue;
+    if (start >= c.endFrame) break;
+    if (!Number.isFinite(run.maxMps)) return null;
+    if (run.maxMps > max) max = run.maxMps;
+  }
+  return max;
 }
 
 /**
@@ -244,11 +283,6 @@ function flagRunsOverlap(flagRuns, fromFrame, toFrame, mask, requireAll) {
  */
 function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
   if (!Array.isArray(clipEvidence) || clipEvidence.length === 0) return false;
-  // GPS-derived speeds jitter well past walking pace on a parked car — only
-  // SEI speed is trustworthy at summon magnitudes. Flag data always ships
-  // alongside SEI speed, so this only rejects degenerate inputs.
-  if (!hasSeiSpeeds) return false;
-  if (!(maxSpeedMps > 0) || maxSpeedMps > SUMMON_MAX_SPEED_MPS) return false;
   if (!(durationMs > 0) || durationMs > SUMMON_MAX_DURATION_MS) return false;
 
   // Every clip needs flag evidence — a single pre-flags clip (older
@@ -260,6 +294,27 @@ function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
       return false;
     }
   }
+
+  // Speed gate, frame-accurate when possible: per-run maxMps evidence is
+  // immune to the dedup point-slice overshoot that can leak the following
+  // drive's speed into a summon segment's stats. Legacy evidence (no maxMps)
+  // falls back to the drive stats — and there GPS-derived speeds are still
+  // untrustworthy at summon magnitudes, so SEI presence is required.
+  let speedMps = 0;
+  let frameAccurate = true;
+  for (const c of clipEvidence) {
+    const m = segmentMaxSpeed(c);
+    if (m === null) {
+      frameAccurate = false;
+      break;
+    }
+    if (m > speedMps) speedMps = m;
+  }
+  if (!frameAccurate) {
+    if (!hasSeiSpeeds) return false;
+    speedMps = maxSpeedMps;
+  }
+  if (!(speedMps > 0) || speedMps > SUMMON_MAX_SPEED_MPS) return false;
 
   const HAZARD = FLAG_BLINKER_LEFT | FLAG_BLINKER_RIGHT;
   const PEDAL = FLAG_BRAKE | FLAG_ACCEL;
@@ -337,6 +392,7 @@ module.exports = {
   computeGearRuns,
   computeFlagRuns,
   flagRunsOverlap,
+  segmentMaxSpeed,
   detectSummon,
 };
 Object.freeze(module.exports);

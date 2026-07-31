@@ -1417,6 +1417,25 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   white-space: nowrap;
 }
 
+/* Info affordance beside a stat value (e.g. Summon's N/A FSD usage). Sized
+   off the value's own font so it tracks the clamp() as the panel narrows,
+   and vertically centered against the digits rather than the line box. */
+.map-stat-info {
+  font-size: 0.5em;
+  line-height: 1;
+  margin-left: 0.22em;
+  vertical-align: middle;
+  color: var(--text-dim);
+  cursor: help;
+  opacity: 0.75;
+  transition: opacity 0.15s, color 0.15s;
+}
+.map-stat-info:hover,
+.map-stat-info:focus-visible {
+  opacity: 1;
+  color: var(--text-muted);
+}
+
 /* ── Replay Controls ───────────────────────────────────────────────────── */
 #replay-bar {
   background: var(--map-glass-bg);

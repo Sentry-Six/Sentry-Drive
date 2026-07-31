@@ -3109,7 +3109,7 @@ function renderSelectedDriveStats(drive) {
     <div class="map-stat"><span class="map-stat-val">${speedVal(drive.avgSpeedMph ?? 0)}</span><span class="map-stat-lbl">Avg ${speedShort().toUpperCase()}</span></div>
     <div class="map-stat"><span class="map-stat-val">${speedVal(drive.maxSpeedMph ?? 0)}</span><span class="map-stat-lbl">Max ${speedShort().toUpperCase()}</span></div>
     ${drive.summon
-      ? `<div class="map-stat" title="Detected Summon: hazard lights bookend the drive, no pedal input, parking-lot speed throughout"><span class="map-stat-val" style="color:var(--line-summon, #facc15)">Summon</span><span class="map-stat-lbl">FSD Usage</span></div>`
+      ? `<div class="map-stat"><span class="map-stat-val" style="color:var(--text-dim)">N/A<span class="map-stat-info material-icons" tabindex="0" role="img" aria-label="Summon does not affect your FSD stats." title="Summon does not affect your FSD stats.">info</span></span><span class="map-stat-lbl">FSD Usage</span></div>`
       : `<div class="map-stat"><span class="map-stat-val" style="color:${fsdScoreColor(fsdScore)}">${fsdScore}%</span><span class="map-stat-lbl">${isTessie ? 'FSD*' : 'FSD Usage'}</span></div>`}
   `;
   if (apPct > 0 && !isTessie) {
@@ -3178,7 +3178,7 @@ function renderSelectedDriveStats(drive) {
         <div class="map-stats-chart" style="--donut-bg: conic-gradient(${gradientStops});">
           <div class="map-stats-chart-center">
             <span class="map-stats-chart-val" style="color:var(--line-summon, #facc15)">Summon</span>
-            <span class="map-stats-chart-lbl" style="color:var(--line-summon, #facc15)">100%</span>
+            <span class="map-stats-chart-lbl" style="color:var(--text-dim)">N/A</span>
           </div>
         </div>
         <div class="map-stats-legend">
@@ -3287,7 +3287,10 @@ function renderDriveStats(drives, meta) {
   // SEI-only data because imported services' per-point autopilot data is
   // fuzzier than the dashcam's SEI telemetry (Teslascope's is often absent
   // entirely) — mixing them would dilute the score.
-  const seiDrives = drives.filter((d) => !isImportedSource(d.source));
+  // Summon drives are excluded from FSD analytics (mirrors the aggregate
+  // builder): driverless with autopilot_state unset, they'd otherwise dilute
+  // the score as fake "0% FSD" drives. They still count in the totals above.
+  const seiDrives = drives.filter((d) => !isImportedSource(d.source) && !d.summon);
   const aggregate = meta?.aggregates;
   const driveCount = aggregate?.totalDriveCount ?? drives.length;
   const seiDriveCount = aggregate?.seiDriveCount ?? seiDrives.length;
@@ -3405,6 +3408,10 @@ function renderDriveStats(drives, meta) {
 
   if (tessieCount > 0) {
     details += `<div class="map-stats-tessie-note">${fmt(tessieCount)} of these are imported drive${tessieCount === 1 ? '' : 's'} (counted in totals; FSD analytics are dashcam-only)</div>`;
+  }
+  const summonCount = aggregate?.summonDriveCount ?? drives.filter((d) => d.summon).length;
+  if (summonCount > 0) {
+    details += `<div class="map-stats-tessie-note">${fmt(summonCount)} Summon drive${summonCount === 1 ? '' : 's'} (counted in totals; excluded from FSD analytics)</div>`;
   }
 
   const panel = document.getElementById('map-stats');

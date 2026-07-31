@@ -624,3 +624,47 @@ test('summon: reverse summon ending seconds before the human drives off splits a
   assert.equal(drives[0].summon, true);       // clip A + clip B's pre-park segment
   assert.equal(drives[1].summon, undefined);  // the human/FSD drive after the park
 });
+
+test('summon: point-slice speed pollution does not reject a frame-slow summon', () => {
+  // Real 2026-07-27 00:34 failure shape. The park splitter slices point
+  // arrays by frame fraction; on deduped points the summon segment inherits
+  // speed samples from the fast drive after the park (stats read 9 mph for a
+  // 6 mph summon). Per-run maxMps evidence must win over the polluted stats.
+  const clipA = summonClip(
+    '2026-07-27/2026-07-27_00-34-31-front.mp4',
+    [[GEAR_PARK, 68], [2 /* R */, 538], [GEAR_DRIVE, 311]],
+    [
+      { flags: 0, frames: 7, maxMps: 0 },
+      { flags: 3, frames: 144, maxMps: 0.1 },  // hazards spanning P->R
+      { flags: 0, frames: 766, maxMps: 2.7 },
+    ],
+    { speed: 1.5 },
+  );
+  const clipB = summonClip(
+    '2026-07-27/2026-07-27_00-34-59-front.mp4',
+    [[GEAR_DRIVE, 579], [GEAR_PARK, 114], [GEAR_DRIVE, 1162]],
+    [
+      { flags: 0, frames: 143, maxMps: 2.7 },
+      { flags: 3, frames: 219, maxMps: 2.6 },  // hazard stop
+      { flags: 0, frames: 105, maxMps: 2.0 },
+      { flags: 3, frames: 191, maxMps: 1.8 },  // hazards through D->P
+      { flags: 4, frames: 50, maxMps: 0 },     // human brake (after the park)
+      { flags: 0, frames: 10, maxMps: 0 },
+      { flags: 8, frames: 521, maxMps: 4.7 },  // human accelerator
+      { flags: 0, frames: 16, maxMps: 4.0 },
+      { flags: 8, frames: 545, maxMps: 4.7 },
+      { flags: 0, frames: 55, maxMps: 1.0 },
+    ],
+    { speed: 0.4 },
+  );
+  // Simulate the dedup skew: the summon segment's fraction-based point slice
+  // ([0..31) of 100) reaches into fast post-park samples.
+  clipB.speeds = clipB.speeds.map((s, i) => (i < 25 ? 0.4 : 4.7));
+
+  const drives = drivesOf([clipA, clipB]);
+  assert.equal(drives.length, 2);
+  // Stats are polluted (over the 7.83 mph gate) yet the drive is summon.
+  assert.ok(drives[0].maxSpeedMph > 8, 'fixture must reproduce the pollution');
+  assert.equal(drives[0].summon, true);
+  assert.equal(drives[1].summon, undefined); // the human drive after the park
+});

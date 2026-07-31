@@ -1262,13 +1262,19 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
       return true;
     };
 
-    // Unique clips worth re-reading, keyed by normalized path.
+    // Unique clips worth re-reading, keyed by normalized path. Evidence is
+    // current only when every run carries per-run speed (maxMps) — earlier
+    // extractions lacked it and their drives can fail the speed gate on
+    // point-slice pollution, so they get one upgrade re-read.
+    const hasCurrentEvidence = (route) =>
+      Array.isArray(route.flagRuns) && route.flagRuns.length > 0 &&
+      route.flagRuns.every((run) => Number.isFinite(run.maxMps));
     const pending = new Map();
     const addClip = (f) => {
       const norm = String(f).replace(/\\/g, '/');
       if (norm.includes('-front-bridge.mp4')) return; // synthetic — no MP4 on disk
       const route = routeByFile.get(norm);
-      if (route && !(Array.isArray(route.flagRuns) && route.flagRuns.length > 0)) {
+      if (route && !hasCurrentEvidence(route)) {
         pending.set(norm, route);
       }
     };
@@ -1335,7 +1341,7 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
         const extracted = await extractGPSFromFile(fullPath);
         scanned++;
         if (extracted && extracted.flags && extracted.flags.length > 0) {
-          route.flagRuns = computeFlagRuns(extracted.flags);
+          route.flagRuns = computeFlagRuns(extracted.flags, extracted.speeds);
           // Authoritative gear evidence from the same frames. Rusty-written
           // routes can miss short trailing Park runs; without them the park
           // splitter can't isolate a summon from the drive that follows.

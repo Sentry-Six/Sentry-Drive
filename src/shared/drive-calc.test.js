@@ -180,7 +180,7 @@ test('summon flag constants and thresholds are locked', () => {
   assert.equal(calc.FLAG_BLINKER_RIGHT, 2);
   assert.equal(calc.FLAG_BRAKE, 4);
   assert.equal(calc.FLAG_ACCEL, 8);
-  assert.equal(calc.SUMMON_MAX_SPEED_MPS, 3.5);
+  assert.equal(calc.SUMMON_MAX_SPEED_MPS, 4.5); // 8 mph newer-car summon cap + margin
   assert.equal(calc.SUMMON_BOOKEND_SECONDS, 10);
   assert.equal(calc.SUMMON_MAX_DURATION_MS, 600000);
 });
@@ -380,4 +380,86 @@ test('computeGearRuns matches the worker RLE shape', () => {
     { gear: 1, frames: 3 },
     { gear: 0, frames: 1 },
   ]);
+});
+
+test('computeFlagRuns carries per-run max |SEI speed| when speeds are given', () => {
+  const flags  = [0, 0, 3, 3, 8, 8, 8];
+  const speeds = [0, -1.5, 0.4, 0.26, 2.0, 4.73, 3.1];
+  assert.deepEqual(calc.computeFlagRuns(flags, speeds), [
+    { flags: 0, frames: 2, maxMps: 1.5 },  // reverse counts via magnitude
+    { flags: 3, frames: 2, maxMps: 0.4 },
+    { flags: 8, frames: 3, maxMps: 4.7 },  // rounded to 0.1
+  ]);
+  // Without speeds the legacy shape is unchanged.
+  assert.deepEqual(calc.computeFlagRuns([0, 3], undefined), [
+    { flags: 0, frames: 1 },
+    { flags: 3, frames: 1 },
+  ]);
+});
+
+test('segmentMaxSpeed: frame-space max over the segment, null on legacy runs', () => {
+  const runs = [
+    { flags: 3, frames: 100, maxMps: 0.5 },
+    { flags: 0, frames: 400, maxMps: 2.7 },
+    { flags: 8, frames: 500, maxMps: 4.7 },
+  ];
+  // Segment covering only the first two runs never sees the fast run.
+  assert.equal(calc.segmentMaxSpeed({ flagRuns: runs, startFrame: 0, endFrame: 500 }), 2.7);
+  // Full clip includes it.
+  assert.equal(calc.segmentMaxSpeed({ flagRuns: runs, startFrame: 0, endFrame: 1000 }), 4.7);
+  // A run merely straddling the segment boundary still contributes.
+  assert.equal(calc.segmentMaxSpeed({ flagRuns: runs, startFrame: 450, endFrame: 550 }), 4.7);
+  // Any overlapping run without maxMps makes the answer unknowable.
+  const legacy = [{ flags: 3, frames: 100 }, { flags: 0, frames: 100, maxMps: 1 }];
+  assert.equal(calc.segmentMaxSpeed({ flagRuns: legacy, startFrame: 0, endFrame: 200 }), null);
+  // …but only if it actually overlaps.
+  assert.equal(calc.segmentMaxSpeed({ flagRuns: legacy, startFrame: 100, endFrame: 200 }), 1);
+});
+
+test('detectSummon: frame-space speed evidence overrides polluted drive stats', () => {
+  // Real 2026-07-27 00:34 failure: the park splitter's fraction->point slice
+  // overshoots on deduped points, so the summon drive's stats inherited the
+  // following drive's 4.05 m/s samples. Per-run maxMps confines the gate to
+  // the summon's own frames.
+  const clipA = {
+    flagRuns: [
+      { flags: 0, frames: 7, maxMps: 0 },
+      { flags: 3, frames: 144, maxMps: 0.1 },
+      { flags: 0, frames: 766, maxMps: 2.7 },
+    ],
+    startFrame: 0, endFrame: 917, totalFrames: 917,
+  };
+  const clipB = {
+    flagRuns: [
+      { flags: 0, frames: 143, maxMps: 2.7 },
+      { flags: 3, frames: 219, maxMps: 2.6 },
+      { flags: 0, frames: 105, maxMps: 2.0 },
+      { flags: 3, frames: 191, maxMps: 1.8 },
+      { flags: 4, frames: 50, maxMps: 0 },
+      { flags: 0, frames: 10, maxMps: 0 },
+      { flags: 8, frames: 521, maxMps: 4.7 },
+      { flags: 0, frames: 16, maxMps: 4.0 },
+      { flags: 8, frames: 545, maxMps: 4.7 },
+      { flags: 0, frames: 55, maxMps: 1.0 },
+    ],
+    startFrame: 0, endFrame: 579, totalFrames: 1855,
+  };
+  // Polluted stats say 4.05 m/s — over the cap — yet the drive is summon.
+  const polluted = { maxSpeedMps: 4.05, durationMs: 42000, hasSeiSpeeds: true };
+  assert.equal(calc.detectSummon([clipA, clipB], polluted), true);
+  // The inverse guard: fast frames INSIDE the segment still reject on speed
+  // alone (hazard bookends present, zero pedal bits), even when the sliced
+  // stats happen to look slow.
+  const fastNoPedals = {
+    flagRuns: [
+      { flags: 3, frames: 100, maxMps: 0.5 },
+      { flags: 0, frames: 700, maxMps: 4.7 },
+      { flags: 3, frames: 100, maxMps: 0.3 },
+    ],
+    startFrame: 0, endFrame: 900, totalFrames: 900,
+  };
+  assert.equal(
+    calc.detectSummon([fastNoPedals], { maxSpeedMps: 2.0, durationMs: 42000, hasSeiSpeeds: true }),
+    false,
+  );
 });
