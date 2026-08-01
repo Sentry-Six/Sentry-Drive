@@ -142,11 +142,13 @@ test('reads the stall rating from OSM socket output tags, fastest socket wins', 
   assert.equal(stationPowerKw({ 'socket:nacs:output': '1200' }), 1200); // Semi megacharger
 });
 
-test('speed tier maps ratings to bolt counts, split at 120 kW', () => {
-  assert.equal(speedTierFromPowerKw(72), 1);    // V1 / urban — slow
-  assert.equal(speedTierFromPowerKw(119), 1);   // just under the line
-  assert.equal(speedTierFromPowerKw(120), 3);   // the line itself is fast
-  assert.equal(speedTierFromPowerKw(150), 3);   // V2
+test('speed tier maps ratings to bolt counts at 150 kW and 250 kW', () => {
+  assert.equal(speedTierFromPowerKw(72), 1);    // V1 / urban
+  assert.equal(speedTierFromPowerKw(120), 1);   // below the 150 band
+  assert.equal(speedTierFromPowerKw(149), 1);
+  assert.equal(speedTierFromPowerKw(150), 2);   // 150 kW V2 posts
+  assert.equal(speedTierFromPowerKw(240), 2);
+  assert.equal(speedTierFromPowerKw(249), 2);
   assert.equal(speedTierFromPowerKw(250), 3);   // V3
   assert.equal(speedTierFromPowerKw(325), 3);   // V4
   assert.equal(speedTierFromPowerKw(500), 3);

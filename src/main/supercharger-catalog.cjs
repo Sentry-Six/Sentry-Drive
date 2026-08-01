@@ -244,17 +244,22 @@ function preferredSiteName(catalogName, reportedName) {
   return catalog || reported || 'Tesla Supercharger';
 }
 
-// Rating -> lightning bolts on the map pill. Two bands, split at 120 kW:
-// at or above it the stall is fast enough to road-trip on (V2 150 through
-// V4 325/500) and draws three bolts; below it are the slow urban and V1
-// posts (72 kW), which draw one. A site the catalog has no rating for draws
-// none rather than guessing.
-const HIGH_SPEED_MIN_KW = 120;
+// Rating -> lightning bolts on the map pill. Thresholds land on the ratings
+// OSM actually publishes rather than between them, so a site badges by the
+// speed you get rather than by cabinet generation:
+//   3 bolts  >= 250 kW  V3 and V4
+//   2 bolts  >= 150 kW  the 150 kW V2 posts
+//   1 bolt    > 0 kW    slower urban and V1 posts
+// A site the catalog has no rating for draws none rather than guessing.
+const SPEED_TIER_MIN_KW = [250, 150, 0]; // tier 3, 2, 1
 
 function speedTierFromPowerKw(powerKw) {
   const kw = Number(powerKw);
   if (!Number.isFinite(kw) || kw <= 0) return 0;
-  return kw >= HIGH_SPEED_MIN_KW ? 3 : 1;
+  for (let index = 0; index < SPEED_TIER_MIN_KW.length; index++) {
+    if (kw >= SPEED_TIER_MIN_KW[index]) return SPEED_TIER_MIN_KW.length - index;
+  }
+  return 0;
 }
 
 function matchChargingSites(sites, catalog, radiusMetres = 250) {
