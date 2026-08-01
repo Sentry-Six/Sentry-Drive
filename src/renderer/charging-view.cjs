@@ -32,6 +32,8 @@
           // Bolt count for the map pill; 0 for AC chargers and for any
           // Supercharger the catalog has no rating for.
           speedTier: Number(site.speedTier) || 0,
+          // Any visit here tagged "Home" — draws a house on the pill.
+          isHome: Boolean(site.isHome),
         },
         geometry: {
           type: 'Point',
@@ -64,16 +66,21 @@
   // clustering runs.
   const PILL_IMAGE_PREFIX = 'charging-pill-';
 
-  function chargingPillImageId({ type, count, bolts }) {
-    return `${PILL_IMAGE_PREFIX}${type}-${count}-${bolts}`;
+  function chargingPillImageId({ type, count, bolts, home }) {
+    return `${PILL_IMAGE_PREFIX}${type}-${count}-${bolts}-${home ? 1 : 0}`;
   }
 
   function chargingPillFromImageId(imageId) {
-    const match = /^charging-pill-(sc|other|mixed)-(\d+)-([0-3])$/.exec(String(imageId));
+    const match = /^charging-pill-(sc|other|mixed)-(\d+)-([0-3])-([01])$/.exec(String(imageId));
     if (!match) return null;
     const count = Number(match[2]);
     if (!Number.isSafeInteger(count)) return null;
-    return { type: match[1], count, bolts: Number(match[3]) };
+    return {
+      type: match[1],
+      count,
+      bolts: Number(match[3]),
+      home: match[4] === '1',
+    };
   }
 
   const CLUSTER_TYPE_EXPRESSION = [
@@ -97,6 +104,7 @@
           ['case', ['==', ['get', 'isSupercharger'], true], 'sc', 'other'],
           '-', ['to-string', ['get', 'visitCount']],
           '-', ['to-string', ['coalesce', ['get', 'speedTier'], 0]],
+          '-', ['case', ['==', ['get', 'isHome'], true], '1', '0'],
         ],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
@@ -112,14 +120,15 @@
       filter: ['has', 'point_count'],
       layout: {
         visibility: 'none',
-        // Clusters cover several sites, which need not share a rating, so
-        // they show the total visit count with no bolts.
+        // Clusters cover several sites, which need not share a rating or a
+        // home tag, so they show the total visit count with no bolts and no
+        // house — zoom in and the individual pills carry both.
         'icon-image': [
           'concat',
           PILL_IMAGE_PREFIX,
           CLUSTER_TYPE_EXPRESSION,
           '-', ['to-string', ['get', 'clusterVisitCount']],
-          '-0',
+          '-0-0',
         ],
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,

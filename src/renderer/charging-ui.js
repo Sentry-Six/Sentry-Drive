@@ -314,26 +314,56 @@ function traceBolt(context, x, y, w, h) {
   context.fill();
 }
 
-// Draws one map marker: a rounded pill with the visit count on the left and
-// `bolts` lightning bolts on the right. Sized to its contents, so a 3-visit
-// V4 site is wider than a 1-visit AC charger. Rendered at devicePixelRatio so
-// it stays crisp, and handed to MapLibre with a matching pixelRatio.
-function renderChargingPill({ type, count, bolts }) {
+// A house: gabled roof over a body, with a punched-out doorway. Drawn in a
+// unit box like the bolt so both sit on the same baseline.
+function traceHouse(context, x, y, w, h) {
+  const eaves = h * 0.44;   // where the roof meets the walls
+  const wallInset = w * 0.14;
+  context.beginPath();
+  context.moveTo(x + w / 2, y);                    // ridge
+  context.lineTo(x + w, y + eaves);                // right eave
+  context.lineTo(x + w - wallInset, y + eaves);
+  context.lineTo(x + w - wallInset, y + h);        // right wall
+  context.lineTo(x + wallInset, y + h);            // floor
+  context.lineTo(x + wallInset, y + eaves);        // left wall
+  context.lineTo(x, y + eaves);                    // left eave
+  context.closePath();
+  // Doorway, cut out so the pill's fill shows through.
+  const doorW = w * 0.24;
+  const doorH = h * 0.34;
+  context.moveTo(x + w / 2 - doorW / 2, y + h);
+  context.lineTo(x + w / 2 - doorW / 2, y + h - doorH);
+  context.lineTo(x + w / 2 + doorW / 2, y + h - doorH);
+  context.lineTo(x + w / 2 + doorW / 2, y + h);
+  context.closePath();
+  context.fill('evenodd');
+}
+
+// Draws one map marker: a rounded pill with the visit count on the left and,
+// on the right, `bolts` lightning bolts plus a house when the site is tagged
+// Home. Sized to its contents, so a 3-visit V4 site is wider than a 1-visit
+// AC charger. Rendered at devicePixelRatio so it stays crisp, and handed to
+// MapLibre with a matching pixelRatio.
+function renderChargingPill({ type, count, bolts, home }) {
   const dpr = Math.max(1, Math.ceil(window.devicePixelRatio || 1));
   const label = String(count);
   const H = 26;                              // pill height, CSS px
   const padX = 9;
-  const gap = bolts > 0 ? 5 : 0;
   const boltW = 8;
   const boltH = 13;
   const boltGap = 1;
+  const houseW = 12;
+  const houseH = 12;
+  const glyphGap = 5;                        // text -> first glyph
   const font = '800 14px "Noto Sans Mono", monospace';
 
   const measure = document.createElement('canvas').getContext('2d');
   measure.font = font;
   const textW = measure.measureText(label).width;
   const boltsW = bolts > 0 ? bolts * boltW + (bolts - 1) * boltGap : 0;
-  const W = Math.ceil(padX * 2 + textW + gap + boltsW);
+  const houseSpace = home ? houseW + (bolts > 0 ? glyphGap : 0) : 0;
+  const gap = (bolts > 0 || home) ? glyphGap : 0;
+  const W = Math.ceil(padX * 2 + textW + gap + boltsW + houseSpace);
 
   const canvas = document.createElement('canvas');
   canvas.width = W * dpr;
@@ -357,10 +387,14 @@ function renderChargingPill({ type, count, bolts }) {
   ctx.textBaseline = 'middle';
   ctx.fillText(label, padX, H / 2 + 0.5);
 
-  let boltX = padX + textW + gap;
+  let glyphX = padX + textW + gap;
   for (let index = 0; index < bolts; index++) {
-    traceBolt(ctx, boltX, (H - boltH) / 2, boltW, boltH);
-    boltX += boltW + boltGap;
+    traceBolt(ctx, glyphX, (H - boltH) / 2, boltW, boltH);
+    glyphX += boltW + boltGap;
+  }
+  if (home) {
+    if (bolts > 0) glyphX += glyphGap - boltGap;
+    traceHouse(ctx, glyphX, (H - houseH) / 2, houseW, houseH);
   }
 
   return { canvas, dpr };
@@ -380,6 +414,7 @@ function addChargingPillImages(sites) {
       type: site.isSupercharger ? 'sc' : 'other',
       count: Number(site.visitCount) || 0,
       bolts: Number(site.speedTier) || 0,
+      home: Boolean(site.isHome),
     }));
   }
 }

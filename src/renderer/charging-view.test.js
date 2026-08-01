@@ -80,6 +80,7 @@ test('creates mappable point features with classification and visit count', () =
           visitCount: 2,
           isSupercharger: false,
           speedTier: 0,
+          isHome: false,
         },
         geometry: { type: 'Point', coordinates: [-76, 40] },
       },
@@ -91,6 +92,7 @@ test('creates mappable point features with classification and visit count', () =
           visitCount: 3,
           isSupercharger: true,
           speedTier: 0,
+          isHome: false,
         },
         geometry: { type: 'Point', coordinates: [-77, 41] },
       },
@@ -139,26 +141,38 @@ test('draws sites and clusters as pill symbols keyed by type, count, and tier', 
     ['case', ['==', ['get', 'isSupercharger'], true], 'sc', 'other'],
     '-', ['to-string', ['get', 'visitCount']],
     '-', ['to-string', ['coalesce', ['get', 'speedTier'], 0]],
+    '-', ['case', ['==', ['get', 'isHome'], true], '1', '0'],
   ]);
   // ...while a cluster spans sites of differing ratings, so it shows none.
-  assert.ok(cluster[0].layout['icon-image'].at(-1) === '-0');
+  assert.ok(cluster[0].layout['icon-image'].at(-1) === '-0-0');
 });
 
 test('pill image ids round-trip and reject anything else', () => {
-  assert.equal(chargingPillImageId({ type: 'sc', count: 3, bolts: 2 }), 'charging-pill-sc-3-2');
-  assert.deepEqual(chargingPillFromImageId('charging-pill-sc-3-2'), { type: 'sc', count: 3, bolts: 2 });
-  assert.deepEqual(chargingPillFromImageId('charging-pill-other-38-0'), { type: 'other', count: 38, bolts: 0 });
-  assert.deepEqual(chargingPillFromImageId('charging-pill-mixed-12-0'), { type: 'mixed', count: 12, bolts: 0 });
+  assert.equal(chargingPillImageId({ type: 'sc', count: 3, bolts: 2 }), 'charging-pill-sc-3-2-0');
+  assert.equal(
+    chargingPillImageId({ type: 'other', count: 39, bolts: 0, home: true }),
+    'charging-pill-other-39-0-1',
+  );
+  assert.deepEqual(chargingPillFromImageId('charging-pill-sc-3-2-0'), {
+    type: 'sc', count: 3, bolts: 2, home: false,
+  });
+  assert.deepEqual(chargingPillFromImageId('charging-pill-other-39-0-1'), {
+    type: 'other', count: 39, bolts: 0, home: true,
+  });
   // Round-trip every id the layer expressions can produce.
   for (const type of ['sc', 'other', 'mixed']) {
     for (const bolts of [0, 1, 2, 3]) {
-      const id = chargingPillImageId({ type, count: 7, bolts });
-      assert.deepEqual(chargingPillFromImageId(id), { type, count: 7, bolts });
+      for (const home of [false, true]) {
+        const id = chargingPillImageId({ type, count: 7, bolts, home });
+        assert.deepEqual(chargingPillFromImageId(id), { type, count: 7, bolts, home });
+      }
     }
   }
-  assert.equal(chargingPillFromImageId('charging-pill-sc-3-4'), null);   // no 4-bolt tier
-  assert.equal(chargingPillFromImageId('charging-pill-bogus-3-1'), null);
-  assert.equal(chargingPillFromImageId('charging-pill-sc-3.5-1'), null);
+  assert.equal(chargingPillFromImageId('charging-pill-sc-3-4-0'), null); // no 4-bolt tier
+  assert.equal(chargingPillFromImageId('charging-pill-sc-3-2-2'), null); // home is 0 or 1
+  assert.equal(chargingPillFromImageId('charging-pill-sc-3-2'), null);   // pre-home id
+  assert.equal(chargingPillFromImageId('charging-pill-bogus-3-1-0'), null);
+  assert.equal(chargingPillFromImageId('charging-pill-sc-3.5-1-0'), null);
   assert.equal(chargingPillFromImageId('vehicle-35'), null);
 });
 

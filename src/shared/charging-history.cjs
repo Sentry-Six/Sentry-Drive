@@ -9,6 +9,10 @@ const ACTIVE_STATES = new Set(['starting', 'charging']);
 
 // Stand-ins for a site the car never named. Exported so consumers can tell
 // "no name reported" from a real one instead of string-matching these.
+// A charge tagged this (case-insensitively) marks its site as home, which
+// the map draws with a house on the pill.
+const HOME_TAG = 'home';
+
 const UNKNOWN_SITE_LABEL = 'Unknown location';
 const UNNAMED_SITE_LABEL = 'Charging location';
 const PLACEHOLDER_SITE_LABELS = new Set([UNKNOWN_SITE_LABEL, UNNAMED_SITE_LABEL]);
@@ -187,15 +191,22 @@ function createChargingSessionBuilder(options = {}) {
     lastTimestamp = timestamp;
   }
 
-  function finish(chargeCosts = {}) {
+  // chargeTags is keyed exactly like chargeCosts — the raw timestamp of the
+  // sample that opened the session — so both are looked up the same way.
+  // Values are arrays, matching driveTags.
+  function finish(chargeCosts = {}, chargeTags = {}) {
     if (active) close(active.lastTimestamp, 'end-of-file');
     return completed.map((session) => {
       const { costKey, ...output } = session;
+      const tags = Object.prototype.hasOwnProperty.call(chargeTags, costKey)
+        ? chargeTags[costKey]
+        : null;
       return {
         ...output,
         cost: Object.prototype.hasOwnProperty.call(chargeCosts, costKey)
           ? chargeCosts[costKey]
           : null,
+        tags: Array.isArray(tags) ? tags : (tags == null ? [] : [tags]),
       };
     });
   }
@@ -263,6 +274,15 @@ function groupChargingSites(inputSessions, radiusMetres = SITE_GROUPING_METRES) 
 
   const summaries = sites.map((site) => {
     site.sessions.sort((a, b) => b.startTimestamp - a.startTimestamp);
+    // Union of the tags on this site's sessions, first-seen order. A site is
+    // "home" if ANY visit was tagged so: you tag the charges, and the place
+    // you tagged them is the place that gets the house.
+    const tags = [];
+    for (const session of site.sessions) {
+      for (const tag of session.tags ?? []) {
+        if (!tags.includes(tag)) tags.push(tag);
+      }
+    }
     return {
       siteId: site.siteId,
       latitude: site.latitude,
@@ -270,6 +290,8 @@ function groupChargingSites(inputSessions, radiusMetres = SITE_GROUPING_METRES) 
       displayName: site.displayName,
       visitCount: site.sessions.length,
       latestVisit: site.sessions[0]?.startTime ?? null,
+      tags,
+      isHome: tags.some((tag) => String(tag).trim().toLowerCase() === HOME_TAG),
     };
   }).sort((a, b) => b.visitCount - a.visitCount
     || String(b.latestVisit).localeCompare(String(a.latestVisit)));
@@ -282,6 +304,7 @@ function groupChargingSites(inputSessions, radiusMetres = SITE_GROUPING_METRES) 
 
 module.exports = {
   ACTIVE_STATES,
+  HOME_TAG,
   LOCATION_FALLBACK_SECONDS,
   PLACEHOLDER_SITE_LABELS,
   SESSION_GAP_SECONDS,

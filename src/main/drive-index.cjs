@@ -412,6 +412,7 @@ function indexDriveData(index, options = {}) {
     let routeSequence = 0;
     let driveTags = {};
     let chargeCosts = {};
+    let chargeTags = {};
     const chargingBuilder = createChargingSessionBuilder();
 
     let depth = 0;
@@ -471,6 +472,8 @@ function indexDriveData(index, options = {}) {
               driveTags = assembler.current;
             } else if (currentTopKey === 'chargeCosts') {
               chargeCosts = assembler.current;
+            } else if (currentTopKey === 'chargeTags') {
+              chargeTags = assembler.current;
             }
             assembler = null;
           }
@@ -492,7 +495,8 @@ function indexDriveData(index, options = {}) {
         } else if (
           before === 1
           && name === 'startObject'
-          && (currentTopKey === 'driveTags' || currentTopKey === 'chargeCosts')
+          && (currentTopKey === 'driveTags' || currentTopKey === 'chargeCosts'
+            || currentTopKey === 'chargeTags')
         ) {
           assembler = new Assembler();
           assemblerExitDepth = before;
@@ -511,7 +515,7 @@ function indexDriveData(index, options = {}) {
     pipeline.once('end', () => {
       if (settled) return;
       try {
-        const charging = groupChargingSites(chargingBuilder.finish(chargeCosts));
+        const charging = groupChargingSites(chargingBuilder.finish(chargeCosts, chargeTags));
         index.putChargingHistory(charging.sites, charging.sessions);
         const counts = {
           processedFileCount,

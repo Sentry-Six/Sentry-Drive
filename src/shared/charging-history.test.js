@@ -57,6 +57,7 @@ test('builds a sparse charging session and matches its exact start cost', () => 
     locationName: 'Market Street',
     endReason: 'complete',
     cost: { amount: 8.75, currency: '$' },
+    tags: [],
     chargeRateSamples: [
       {
         timestamp: 1_070,
@@ -219,4 +220,62 @@ test('groups repeated visits within 150 metres and keeps unknown sessions listab
       .map((session) => session.sessionId),
     ['b', 'a'],
   );
+});
+
+test('charge tags attach by session start key and mark a site as home', () => {
+  const builder = createChargingSessionBuilder();
+  const samples = [
+    // Session one: tagged Home.
+    { ts: 1_000, lat: 40, lng: -76, locationName: 'Driveway', batteryPct: 20 },
+    { ts: 1_010, chargingState: 'charging', chargerPowerKw: 7, chargeEnergyAddedKwh: 0.5 },
+    { ts: 1_120, chargingState: 'complete', batteryPct: 40 },
+    // Session two at the same place, untagged.
+    { ts: 9_000, lat: 40, lng: -76, locationName: 'Driveway', batteryPct: 30 },
+    { ts: 9_010, chargingState: 'charging', chargerPowerKw: 7, chargeEnergyAddedKwh: 0.5 },
+    { ts: 9_120, chargingState: 'complete', batteryPct: 50 },
+    // Session three elsewhere, tagged something else.
+    { ts: 90_000, lat: 41, lng: -77, locationName: 'Supercharger', batteryPct: 20 },
+    { ts: 90_010, chargingState: 'charging', chargerPowerKw: 150, chargeEnergyAddedKwh: 5 },
+    { ts: 90_120, chargingState: 'complete', batteryPct: 60 },
+  ];
+  for (const sample of samples) builder.add(sample);
+
+  // Keyed by the raw timestamp that opened each session — same key space as
+  // chargeCosts. Case is ignored, and a bare string is accepted like an array.
+  const sessions = builder.finish({}, {
+    1_010: ['HOME'],
+    90_010: ['Road Trip'],
+  });
+  assert.deepEqual(sessions.map((s) => s.tags).sort(), [[], ['HOME'], ['Road Trip']].sort());
+
+  const { sites } = groupChargingSites(sessions);
+  const driveway = sites.find((site) => site.displayName === 'Driveway');
+  const away = sites.find((site) => site.displayName === 'Supercharger');
+
+  // One tagged visit out of two is enough to mark the site home.
+  assert.equal(driveway.visitCount, 2);
+  assert.deepEqual(driveway.tags, ['HOME']);
+  assert.equal(driveway.isHome, true);
+  // A different tag doesn't.
+  assert.deepEqual(away.tags, ['Road Trip']);
+  assert.equal(away.isHome, false);
+});
+
+test('a scalar charge tag is accepted, and no tags means no home flag', () => {
+  const build = (tagMap) => {
+    const builder = createChargingSessionBuilder();
+    for (const sample of [
+      { ts: 1_000, lat: 40, lng: -76, locationName: 'Spot', batteryPct: 20 },
+      { ts: 1_010, chargingState: 'charging', chargerPowerKw: 7, chargeEnergyAddedKwh: 0.5 },
+      { ts: 1_120, chargingState: 'complete', batteryPct: 40 },
+    ]) builder.add(sample);
+    return groupChargingSites(builder.finish({}, tagMap)).sites[0];
+  };
+
+  assert.equal(build({ 1_010: 'Home' }).isHome, true);   // scalar, not array
+  assert.equal(build({ 1_010: ['  home  '] }).isHome, true); // padded + lowercase
+  assert.equal(build({}).isHome, false);
+  assert.deepEqual(build({}).tags, []);
+  // A key that matches no session must not leak onto one.
+  assert.equal(build({ 5_555: ['Home'] }).isHome, false);
 });
