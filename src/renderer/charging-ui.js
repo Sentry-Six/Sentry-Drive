@@ -21,9 +21,10 @@ function initChargingTab() {
   // Cluster pills are only known once clustering runs, so mint whatever the
   // style asks for on demand.
   map.on('styleimagemissing', (event) => addChargingPillImage(event.id));
-  // Pull the icon font in now so the first home pill draws the real glyph
-  // instead of falling back to the traced house.
+  // Pull both icon faces in now so the first home pill draws the solid glyph
+  // rather than a fallback it would then cache for the session.
   document.fonts?.load?.(`24px ${ICON_FONT}`).catch(() => {});
+  ensureFilledIconFont();
   renderChargingSites();
 }
 
@@ -324,24 +325,74 @@ function traceBolt(context, x, y, w, h) {
 // the traced house below rather than risking that.
 const HOUSE_ICON = 'other_houses';
 const ICON_FONT = '"Material Symbols Outlined"';
+// Material Symbols is a variable font whose FILL axis switches the icons
+// between outlined and solid. Canvas has no way to set a variation axis on
+// ctx.font, so the axis is baked into a private family registered through
+// the Font Loading API — the one route that survives into canvas.
+const FILLED_ICON_FAMILY = 'Sentry Drive Icons Filled';
+const FILLED_ICON_FONT = `"${FILLED_ICON_FAMILY}"`;
 
-function iconFontReady() {
+function fontReady(font) {
   try {
-    return document.fonts.check(`24px ${ICON_FONT}`);
+    return document.fonts.check(`24px ${font}`);
   } catch {
     return false;
   }
 }
 
+// The vendored icon font has a content-hashed filename, so read its URL back
+// out of the stylesheet that declares it instead of hard-coding one that a
+// re-vendor would silently break.
+function materialSymbolsFontUrl() {
+  for (const sheet of document.styleSheets) {
+    let rules;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      continue; // cross-origin sheet, not ours
+    }
+    for (const rule of rules ?? []) {
+      if (rule.type !== CSSRule.FONT_FACE_RULE) continue;
+      const family = rule.style.getPropertyValue('font-family').replace(/['"]/g, '').trim();
+      if (family !== 'Material Symbols Outlined') continue;
+      const match = /url\(["']?([^"')]+)["']?\)/.exec(rule.style.getPropertyValue('src'));
+      if (match) return new URL(match[1], sheet.href || document.baseURI).href;
+    }
+  }
+  return null;
+}
+
+let filledIconFontPromise = null;
+function ensureFilledIconFont() {
+  if (filledIconFontPromise) return filledIconFontPromise;
+  filledIconFontPromise = (async () => {
+    const url = materialSymbolsFontUrl();
+    if (!url || typeof FontFace !== 'function') return false;
+    const face = new FontFace(FILLED_ICON_FAMILY, `url(${url})`, {
+      variationSettings: "'FILL' 1",
+    });
+    await face.load();
+    document.fonts.add(face);
+    return true;
+  })().catch(() => false); // outlined glyph still renders; see drawHouse
+  return filledIconFontPromise;
+}
+
 function drawHouse(context, x, y, w, h) {
-  if (!iconFontReady()) {
+  // Solid first, outlined if the FILL-axis family didn't register, and the
+  // traced house only if the icon font itself is missing — never the literal
+  // ligature text.
+  const family = fontReady(FILLED_ICON_FONT) ? FILLED_ICON_FONT
+    : fontReady(ICON_FONT) ? ICON_FONT
+      : null;
+  if (!family) {
     // The fallback draws a single house, so keep it square and centred in
     // the wider box the two-house icon reserves.
     traceHouse(context, x + (w - h) / 2, y, h, h);
     return;
   }
   context.save();
-  context.font = `${h * 1.3}px ${ICON_FONT}`;
+  context.font = `${h * 1.3}px ${family}`;
   context.textAlign = 'left';
   context.textBaseline = 'alphabetic';
   const m = context.measureText(HOUSE_ICON);
