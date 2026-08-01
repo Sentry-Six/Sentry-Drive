@@ -8,6 +8,8 @@ import {
   isTeslaSuperchargerTags,
   matchChargingSites,
   normalizeOverpassCatalog,
+  speedTierFromPowerKw,
+  stationPowerKw,
 } from './supercharger-catalog.cjs';
 
 test('recognizes explicit Supercharger tags and excludes Destination Charging', () => {
@@ -115,6 +117,68 @@ test('matches only charging sites within 250 metres and uses the catalog name', 
       chargerType: 'other',
     },
   ]);
+});
+
+test('reads the stall rating from OSM socket output tags, fastest socket wins', () => {
+  assert.equal(stationPowerKw({ 'socket:nacs:output': '250' }), 250);
+  assert.equal(stationPowerKw({ 'socket:nacs:output': '325' }), 325);
+  // Mixed-generation sites list several outputs on one tag.
+  assert.equal(stationPowerKw({ 'socket:nacs:output': '72;250' }), 250);
+  // Or across several socket types.
+  assert.equal(stationPowerKw({
+    'socket:nacs:output': '150',
+    'socket:type1_combo:output': '325',
+  }), 325);
+  assert.equal(stationPowerKw({ 'socket:nacs:output': '250 kW' }), 250); // unit suffix
+  assert.equal(stationPowerKw({ 'socket:nacs': '12' }), null);           // count, not output
+  assert.equal(stationPowerKw({}), null);
+  // Implausible values are OSM typos — the live catalog contains a literal
+  // 250000. Reject rather than badge a site as a megacharger.
+  assert.equal(stationPowerKw({ 'socket:nacs:output': '250000' }), null);
+  assert.equal(stationPowerKw({ 'socket:nacs:output': '0' }), null);
+  assert.equal(stationPowerKw({ 'socket:nacs:output': '-5' }), null);
+  // A typo alongside a real reading keeps the real one.
+  assert.equal(stationPowerKw({ 'socket:nacs:output': '250000;250' }), 250);
+  assert.equal(stationPowerKw({ 'socket:nacs:output': '1200' }), 1200); // Semi megacharger
+});
+
+test('speed tier maps ratings to bolt counts, split at 120 kW', () => {
+  assert.equal(speedTierFromPowerKw(72), 1);    // V1 / urban — slow
+  assert.equal(speedTierFromPowerKw(119), 1);   // just under the line
+  assert.equal(speedTierFromPowerKw(120), 3);   // the line itself is fast
+  assert.equal(speedTierFromPowerKw(150), 3);   // V2
+  assert.equal(speedTierFromPowerKw(250), 3);   // V3
+  assert.equal(speedTierFromPowerKw(325), 3);   // V4
+  assert.equal(speedTierFromPowerKw(500), 3);
+  // Unknown or nonsense ratings draw no bolts rather than guessing.
+  assert.equal(speedTierFromPowerKw(null), 0);
+  assert.equal(speedTierFromPowerKw(undefined), 0);
+  assert.equal(speedTierFromPowerKw(0), 0);
+  assert.equal(speedTierFromPowerKw(-5), 0);
+  assert.equal(speedTierFromPowerKw('nope'), 0);
+});
+
+test('matched Superchargers carry the rating and tier; unmatched sites carry neither', () => {
+  const sites = [
+    { siteId: 'fast', latitude: 40, longitude: -76, displayName: '1 Main St' },
+    { siteId: 'away', latitude: 41, longitude: -76, displayName: 'Home' },
+  ];
+  const matched = matchChargingSites(sites, {
+    stations: [{ stationId: 'node/1', name: 'Tesla Supercharger', latitude: 40, longitude: -76, powerKw: 325 }],
+  });
+  assert.equal(matched[0].powerKw, 325);
+  assert.equal(matched[0].speedTier, 3);
+  assert.equal(matched[1].powerKw, undefined);
+  assert.equal(matched[1].isSupercharger, false);
+
+  // A station the catalog has no rating for is still a Supercharger, just
+  // without bolts.
+  const unrated = matchChargingSites([sites[0]], {
+    stations: [{ stationId: 'node/2', name: 'Tesla Supercharger', latitude: 40, longitude: -76 }],
+  });
+  assert.equal(unrated[0].isSupercharger, true);
+  assert.equal(unrated[0].powerKw, null);
+  assert.equal(unrated[0].speedTier, 0);
 });
 
 test('a catalog name that only repeats the brand keeps the name the car reported', () => {

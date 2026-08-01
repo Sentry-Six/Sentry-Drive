@@ -3,8 +3,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  OVERPASS_ENDPOINT,
   OVERPASS_QUERIES,
+  fetchOverpassElements,
   normalizeOverpassCatalog,
 } = require('../src/main/supercharger-catalog.cjs');
 
@@ -15,20 +15,14 @@ async function main() {
   const elements = [];
   for (let index = 0; index < queries.length; index++) {
     console.log(`Fetching indexed OSM selector ${index + 1}/${queries.length}…`);
-    const response = await fetch(OVERPASS_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
-        'user-agent': 'Sentry Drive Supercharger Catalog Maintainer/1.0',
+    elements.push(...await fetchOverpassElements(queries[index], {
+      userAgent: 'Sentry Drive Supercharger Catalog Maintainer/1.0',
+      onRetry: ({ attempt, delayMs, status }) => {
+        console.log(
+          `  Overpass returned ${status ?? 'no response'} — retry ${attempt} in ${Math.round(delayMs / 1000)}s…`,
+        );
       },
-      body: `data=${encodeURIComponent(queries[index])}`,
-    });
-    if (!response.ok) throw new Error(`Overpass returned HTTP ${response.status}`);
-    const payload = await response.json();
-    if (!Array.isArray(payload?.elements)) {
-      throw new Error(`Overpass selector ${index + 1} returned invalid data`);
-    }
-    elements.push(...payload.elements);
+    }));
   }
   const catalog = normalizeOverpassCatalog({ elements });
   if (catalog.stations.length === 0) throw new Error('Overpass returned no Superchargers');

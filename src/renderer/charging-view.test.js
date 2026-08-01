@@ -6,7 +6,9 @@ const {
   buildChargingClusterLayers,
   buildChargingCurve,
   buildChargingSourceOptions,
-  chargingCountFromImageId,
+  buildChargingSiteLayers,
+  chargingPillFromImageId,
+  chargingPillImageId,
   filterAndSortChargingSites,
   getChargingClusterPresentation,
   toChargingGeoJSON,
@@ -77,6 +79,7 @@ test('creates mappable point features with classification and visit count', () =
           displayName: 'Other old',
           visitCount: 2,
           isSupercharger: false,
+          speedTier: 0,
         },
         geometry: { type: 'Point', coordinates: [-76, 40] },
       },
@@ -87,6 +90,7 @@ test('creates mappable point features with classification and visit count', () =
           displayName: 'Tesla North',
           visitCount: 3,
           isSupercharger: true,
+          speedTier: 0,
         },
         geometry: { type: 'Point', coordinates: [-77, 41] },
       },
@@ -111,36 +115,51 @@ test('configures charging clusters to sum visits and charger classifications', (
   });
 });
 
-test('renders charging clusters as native map circles with native count icons', () => {
-  const layers = buildChargingClusterLayers();
+test('draws sites and clusters as pill symbols keyed by type, count, and tier', () => {
+  const site = buildChargingSiteLayers();
+  const cluster = buildChargingClusterLayers();
 
-  assert.deepEqual(layers.map((layer) => layer.id), [
-    'charging-clusters-other',
-    'charging-clusters-supercharger',
-    'charging-clusters-mixed',
-    'charging-cluster-counts',
-  ]);
-  assert.deepEqual(layers.slice(0, 3).map((layer) => layer.type), ['circle', 'circle', 'circle']);
-  assert.equal(layers[3].type, 'symbol');
-  assert.ok(layers.every((layer) => layer.source === 'charging-sites'));
-  assert.ok(layers.every((layer) => layer.layout.visibility === 'none'));
-  assert.deepEqual(layers.slice(0, 3).map((layer) => layer.filter), [
-    ['all', ['has', 'point_count'], ['==', ['get', 'superchargerSiteCount'], 0], ['>', ['get', 'otherSiteCount'], 0]],
-    ['all', ['has', 'point_count'], ['>', ['get', 'superchargerSiteCount'], 0], ['==', ['get', 'otherSiteCount'], 0]],
-    ['all', ['has', 'point_count'], ['>', ['get', 'superchargerSiteCount'], 0], ['>', ['get', 'otherSiteCount'], 0]],
-  ]);
-  assert.deepEqual(layers[3].layout['icon-image'], [
+  assert.deepEqual(site.map((l) => l.id), ['charging-site-pills']);
+  assert.deepEqual(cluster.map((l) => l.id), ['charging-cluster-pills']);
+  for (const layer of [...site, ...cluster]) {
+    assert.equal(layer.type, 'symbol');
+    assert.equal(layer.source, 'charging-sites');
+    assert.equal(layer.layout.visibility, 'none');
+    // Pills must not be dropped or displaced by label collision.
+    assert.equal(layer.layout['icon-allow-overlap'], true);
+    assert.equal(layer.layout['icon-ignore-placement'], true);
+  }
+  assert.deepEqual(site[0].filter, ['!', ['has', 'point_count']]);
+  assert.deepEqual(cluster[0].filter, ['has', 'point_count']);
+
+  // A site pill carries its own bolt count...
+  assert.deepEqual(site[0].layout['icon-image'], [
     'concat',
-    'charging-count-',
-    ['to-string', ['get', 'clusterVisitCount']],
+    'charging-pill-',
+    ['case', ['==', ['get', 'isSupercharger'], true], 'sc', 'other'],
+    '-', ['to-string', ['get', 'visitCount']],
+    '-', ['to-string', ['coalesce', ['get', 'speedTier'], 0]],
   ]);
+  // ...while a cluster spans sites of differing ratings, so it shows none.
+  assert.ok(cluster[0].layout['icon-image'].at(-1) === '-0');
 });
 
-test('recognizes only dynamically generated charging-count image ids', () => {
-  assert.equal(chargingCountFromImageId('charging-count-35'), 35);
-  assert.equal(chargingCountFromImageId('charging-count-0'), 0);
-  assert.equal(chargingCountFromImageId('charging-count-3.5'), null);
-  assert.equal(chargingCountFromImageId('vehicle-35'), null);
+test('pill image ids round-trip and reject anything else', () => {
+  assert.equal(chargingPillImageId({ type: 'sc', count: 3, bolts: 2 }), 'charging-pill-sc-3-2');
+  assert.deepEqual(chargingPillFromImageId('charging-pill-sc-3-2'), { type: 'sc', count: 3, bolts: 2 });
+  assert.deepEqual(chargingPillFromImageId('charging-pill-other-38-0'), { type: 'other', count: 38, bolts: 0 });
+  assert.deepEqual(chargingPillFromImageId('charging-pill-mixed-12-0'), { type: 'mixed', count: 12, bolts: 0 });
+  // Round-trip every id the layer expressions can produce.
+  for (const type of ['sc', 'other', 'mixed']) {
+    for (const bolts of [0, 1, 2, 3]) {
+      const id = chargingPillImageId({ type, count: 7, bolts });
+      assert.deepEqual(chargingPillFromImageId(id), { type, count: 7, bolts });
+    }
+  }
+  assert.equal(chargingPillFromImageId('charging-pill-sc-3-4'), null);   // no 4-bolt tier
+  assert.equal(chargingPillFromImageId('charging-pill-bogus-3-1'), null);
+  assert.equal(chargingPillFromImageId('charging-pill-sc-3.5-1'), null);
+  assert.equal(chargingPillFromImageId('vehicle-35'), null);
 });
 
 test('presents all-Supercharger, all-other, and mixed clusters by summed visits', () => {

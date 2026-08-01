@@ -29,6 +29,9 @@
           displayName: site.displayName,
           visitCount: site.visitCount,
           isSupercharger: Boolean(site.isSupercharger),
+          // Bolt count for the map pill; 0 for AC chargers and for any
+          // Supercharger the catalog has no rating for.
+          speedTier: Number(site.speedTier) || 0,
         },
         geometry: {
           type: 'Point',
@@ -53,58 +56,75 @@
     };
   }
 
-  function buildChargingClusterLayers() {
-    const radius = ['interpolate', ['linear'], ['get', 'clusterVisitCount'], 2, 18, 10, 22, 50, 26];
-    const circleLayer = (id, color, filter) => ({
-      id,
-      type: 'circle',
-      source: 'charging-sites',
-      filter,
-      layout: { visibility: 'none' },
-      paint: {
-        'circle-color': color,
-        'circle-radius': radius,
-        'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': 2,
-        'circle-opacity': 0.94,
-      },
-    });
-    return [
-      circleLayer(
-        'charging-clusters-other',
-        '#22c55e',
-        ['all', ['has', 'point_count'], ['==', ['get', 'superchargerSiteCount'], 0], ['>', ['get', 'otherSiteCount'], 0]],
-      ),
-      circleLayer(
-        'charging-clusters-supercharger',
-        '#e82127',
-        ['all', ['has', 'point_count'], ['>', ['get', 'superchargerSiteCount'], 0], ['==', ['get', 'otherSiteCount'], 0]],
-      ),
-      circleLayer(
-        'charging-clusters-mixed',
-        '#8b5cf6',
-        ['all', ['has', 'point_count'], ['>', ['get', 'superchargerSiteCount'], 0], ['>', ['get', 'otherSiteCount'], 0]],
-      ),
-      {
-        id: 'charging-cluster-counts',
-        type: 'symbol',
-        source: 'charging-sites',
-        filter: ['has', 'point_count'],
-        layout: {
-          visibility: 'none',
-          'icon-image': ['concat', 'charging-count-', ['to-string', ['get', 'clusterVisitCount']]],
-          'icon-allow-overlap': true,
-          'icon-ignore-placement': true,
-        },
-      },
-    ];
+  // Markers are pre-rendered pill images rather than circle layers: a pill
+  // has to size itself to its contents (a visit count plus up to three
+  // bolts), which a circle layer can't express. The image id carries
+  // everything needed to draw it, so `styleimagemissing` can mint any pill
+  // the data asks for — including cluster totals, which are only known after
+  // clustering runs.
+  const PILL_IMAGE_PREFIX = 'charging-pill-';
+
+  function chargingPillImageId({ type, count, bolts }) {
+    return `${PILL_IMAGE_PREFIX}${type}-${count}-${bolts}`;
   }
 
-  function chargingCountFromImageId(imageId) {
-    const match = /^charging-count-(\d+)$/.exec(String(imageId));
+  function chargingPillFromImageId(imageId) {
+    const match = /^charging-pill-(sc|other|mixed)-(\d+)-([0-3])$/.exec(String(imageId));
     if (!match) return null;
-    const count = Number(match[1]);
-    return Number.isSafeInteger(count) ? count : null;
+    const count = Number(match[2]);
+    if (!Number.isSafeInteger(count)) return null;
+    return { type: match[1], count, bolts: Number(match[3]) };
+  }
+
+  const CLUSTER_TYPE_EXPRESSION = [
+    'case',
+    ['all', ['>', ['get', 'superchargerSiteCount'], 0], ['>', ['get', 'otherSiteCount'], 0]], 'mixed',
+    ['>', ['get', 'superchargerSiteCount'], 0], 'sc',
+    'other',
+  ];
+
+  function buildChargingSiteLayers() {
+    return [{
+      id: 'charging-site-pills',
+      type: 'symbol',
+      source: 'charging-sites',
+      filter: ['!', ['has', 'point_count']],
+      layout: {
+        visibility: 'none',
+        'icon-image': [
+          'concat',
+          PILL_IMAGE_PREFIX,
+          ['case', ['==', ['get', 'isSupercharger'], true], 'sc', 'other'],
+          '-', ['to-string', ['get', 'visitCount']],
+          '-', ['to-string', ['coalesce', ['get', 'speedTier'], 0]],
+        ],
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
+    }];
+  }
+
+  function buildChargingClusterLayers() {
+    return [{
+      id: 'charging-cluster-pills',
+      type: 'symbol',
+      source: 'charging-sites',
+      filter: ['has', 'point_count'],
+      layout: {
+        visibility: 'none',
+        // Clusters cover several sites, which need not share a rating, so
+        // they show the total visit count with no bolts.
+        'icon-image': [
+          'concat',
+          PILL_IMAGE_PREFIX,
+          CLUSTER_TYPE_EXPRESSION,
+          '-', ['to-string', ['get', 'clusterVisitCount']],
+          '-0',
+        ],
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': true,
+      },
+    }];
   }
 
   function getChargingClusterPresentation(properties = {}) {
@@ -154,8 +174,10 @@
   return {
     buildChargingClusterLayers,
     buildChargingCurve,
+    buildChargingSiteLayers,
     buildChargingSourceOptions,
-    chargingCountFromImageId,
+    chargingPillFromImageId,
+    chargingPillImageId,
     filterAndSortChargingSites,
     getChargingClusterPresentation,
     toChargingGeoJSON,

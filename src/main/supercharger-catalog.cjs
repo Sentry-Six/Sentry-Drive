@@ -59,6 +59,74 @@ function featureCoordinates(element) {
     : null;
 }
 
+// Overpass is a free, shared service, and the Supercharger selectors are
+// heavy enough that it regularly answers with 429 (rate limited) or 504
+// (timeout) partway through a refresh. One attempt per query used to sink the
+// whole run — including the selectors that had already succeeded — so back
+// off and retry the transient statuses. A bad payload is never retried: that
+// is a real failure, not congestion.
+const OVERPASS_RETRY_DELAYS_MS = [5_000, 20_000, 60_000];
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+const OVERPASS_MAX_BYTES = 25 * 1024 * 1024;
+
+async function fetchOverpassElements(query, options = {}) {
+  const {
+    fetchImpl = globalThis.fetch,
+    endpoint = OVERPASS_ENDPOINT,
+    userAgent = 'Sentry Drive Supercharger Catalog/1.0',
+    timeoutMs = 150_000,
+    retryDelaysMs = OVERPASS_RETRY_DELAYS_MS,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    onRetry = null,
+  } = options;
+  if (typeof fetchImpl !== 'function') throw new Error('Refresh is unavailable offline');
+
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let response = null;
+    let networkError = null;
+    try {
+      response = await fetchImpl(endpoint, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
+          'user-agent': userAgent,
+        },
+        body: `data=${encodeURIComponent(query)}`,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      networkError = error;
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (response?.ok) {
+      const contentLength = Number(response.headers?.get?.('content-length'));
+      if (Number.isFinite(contentLength) && contentLength > OVERPASS_MAX_BYTES) {
+        throw new Error('OpenStreetMap refresh response is too large');
+      }
+      const payload = await response.json();
+      if (!Array.isArray(payload?.elements)) {
+        throw new TypeError('Invalid Overpass response: elements must be an array');
+      }
+      return payload.elements;
+    }
+
+    const status = response?.status;
+    const retryable = networkError != null || RETRYABLE_STATUSES.has(status);
+    if (!retryable || attempt >= retryDelaysMs.length) {
+      throw new Error(
+        `OpenStreetMap refresh failed (${status ?? networkError?.message ?? 'no response'})`,
+      );
+    }
+    const delayMs = retryDelaysMs[attempt];
+    onRetry?.({ attempt: attempt + 1, delayMs, status: status ?? null, error: networkError });
+    await sleep(delayMs);
+  }
+}
+
 function validateCatalog(catalog) {
   if (!catalog || catalog.version !== 1 || !Array.isArray(catalog.stations)) {
     throw new TypeError('Invalid Supercharger catalog');
@@ -77,6 +145,32 @@ function validateCatalog(catalog) {
     }
   }
   return catalog;
+}
+
+// Per-stall power rating, in kW. OSM carries this on essentially every
+// Supercharger (socket:nacs:output, imported from supercharge.info) and it is
+// the only reliable generation signal: observed charge power is capped by the
+// car's own curve, its state of charge, and pack temperature, so a V4 stall
+// routinely reads lower than a V3 one. Values may list several sockets
+// ("72;250"); the fastest is the site's headline rating.
+// Values outside this range are OSM typos, not stalls — the live data has an
+// entry reading 250000 (watts keyed as kW). The ceiling still clears the
+// 1.2 MW Semi megachargers; a rejected value leaves the site unrated rather
+// than badging it wrongly.
+const MIN_PLAUSIBLE_KW = 1;
+const MAX_PLAUSIBLE_KW = 1500;
+
+function stationPowerKw(tags = {}) {
+  let best = null;
+  for (const [key, value] of Object.entries(tags)) {
+    if (!/^socket:.*:output$/.test(key)) continue;
+    for (const part of String(value).split(';')) {
+      const kw = Number.parseFloat(part);
+      if (!Number.isFinite(kw) || kw < MIN_PLAUSIBLE_KW || kw > MAX_PLAUSIBLE_KW) continue;
+      if (kw > (best ?? 0)) best = kw;
+    }
+  }
+  return best;
 }
 
 function normalizeOverpassCatalog(payload, generatedAt = new Date().toISOString()) {
@@ -121,6 +215,10 @@ function normalizeOverpassCatalog(payload, generatedAt = new Date().toISOString(
     if (station.name === 'Tesla Supercharger' && name !== 'Tesla Supercharger') {
       station.name = name;
     }
+    // Highest stall rating across the merged features wins: a site that has
+    // both old and new cabinets is as fast as its fastest post.
+    const powerKw = stationPowerKw(element.tags);
+    if (powerKw != null && powerKw > (station.powerKw ?? 0)) station.powerKw = powerKw;
   }
   for (const station of stations) delete station.coordinateCount;
   return validateCatalog({
@@ -144,6 +242,19 @@ function preferredSiteName(catalogName, reportedName) {
   if (catalog && !GENERIC_CATALOG_NAME.test(catalog)) return catalog;
   if (reported && !PLACEHOLDER_SITE_LABELS.has(reported)) return reported;
   return catalog || reported || 'Tesla Supercharger';
+}
+
+// Rating -> lightning bolts on the map pill. Two bands, split at 120 kW:
+// at or above it the stall is fast enough to road-trip on (V2 150 through
+// V4 325/500) and draws three bolts; below it are the slow urban and V1
+// posts (72 kW), which draw one. A site the catalog has no rating for draws
+// none rather than guessing.
+const HIGH_SPEED_MIN_KW = 120;
+
+function speedTierFromPowerKw(powerKw) {
+  const kw = Number(powerKw);
+  if (!Number.isFinite(kw) || kw <= 0) return 0;
+  return kw >= HIGH_SPEED_MIN_KW ? 3 : 1;
 }
 
 function matchChargingSites(sites, catalog, radiusMetres = 250) {
@@ -176,6 +287,8 @@ function matchChargingSites(sites, catalog, radiusMetres = 250) {
       chargerType: 'supercharger',
       catalogStationId: nearest.stationId,
       superchargerDistanceM: Math.round(nearestDistance),
+      powerKw: nearest.powerKw ?? null,
+      speedTier: speedTierFromPowerKw(nearest.powerKw),
     };
   });
 }
@@ -191,6 +304,8 @@ function createSuperchargerCatalog(options) {
     fetchImpl = globalThis.fetch,
     endpoint = OVERPASS_ENDPOINT,
     now = () => new Date(),
+    retryDelaysMs,
+    sleep,
   } = options;
   let catalog;
   let source;
@@ -217,37 +332,11 @@ function createSuperchargerCatalog(options) {
   async function refresh() {
     let tempPath = null;
     try {
-      if (typeof fetchImpl !== 'function') throw new Error('Refresh is unavailable offline');
       const elements = [];
       for (const query of OVERPASS_QUERIES) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 150_000);
-        let response;
-        try {
-          response = await fetchImpl(endpoint, {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
-              'user-agent': 'Sentry Drive Supercharger Catalog/1.0',
-            },
-            body: `data=${encodeURIComponent(query)}`,
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeout);
-        }
-        if (!response?.ok) {
-          throw new Error(`OpenStreetMap refresh failed (${response?.status ?? 'no response'})`);
-        }
-        const contentLength = Number(response.headers?.get?.('content-length'));
-        if (Number.isFinite(contentLength) && contentLength > 25 * 1024 * 1024) {
-          throw new Error('OpenStreetMap refresh response is too large');
-        }
-        const payload = await response.json();
-        if (!Array.isArray(payload?.elements)) {
-          throw new TypeError('Invalid Overpass response: elements must be an array');
-        }
-        elements.push(...payload.elements);
+        elements.push(...await fetchOverpassElements(query, {
+          fetchImpl, endpoint, retryDelaysMs, sleep,
+        }));
       }
       const refreshed = normalizeOverpassCatalog(
         { elements },
@@ -290,8 +379,11 @@ module.exports = {
   OVERPASS_QUERY,
   OVERPASS_QUERIES,
   createSuperchargerCatalog,
+  fetchOverpassElements,
   isTeslaSuperchargerTags,
   matchChargingSites,
   normalizeOverpassCatalog,
+  speedTierFromPowerKw,
+  stationPowerKw,
   validateCatalog,
 };

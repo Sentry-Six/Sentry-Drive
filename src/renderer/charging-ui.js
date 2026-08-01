@@ -10,23 +10,17 @@ var DRIVE_MAP_LAYER_IDS_FOR_CHARGING = [
   'traveled-dashed',
 ];
 var CHARGING_MAP_LAYER_IDS = [
-  'charging-sites-other',
-  'charging-sites-supercharger',
-  'charging-site-counts',
-  'charging-clusters-other',
-  'charging-clusters-supercharger',
-  'charging-clusters-mixed',
-  'charging-cluster-counts',
+  'charging-site-pills',
+  'charging-cluster-pills',
 ];
 
 function initChargingTab() {
   document.getElementById('charging-osm-attribution').addEventListener('click', () => {
     window.electronAPI.openExternal('https://www.openstreetmap.org/copyright');
   });
-  map.on('styleimagemissing', (event) => {
-    const count = window.ChargingView.chargingCountFromImageId(event.id);
-    if (count != null) addChargingCountImages([{ visitCount: count }]);
-  });
+  // Cluster pills are only known once clustering runs, so mint whatever the
+  // style asks for on demand.
+  map.on('styleimagemissing', (event) => addChargingPillImage(event.id));
   renderChargingSites();
 }
 
@@ -305,21 +299,88 @@ function renderChargingSessionDetail(summary, container) {
   container.append(svg, caption);
 }
 
-function addChargingCountImages(sites) {
-  for (const count of new Set(sites.map((site) => Number(site.visitCount)))) {
-    const imageId = `charging-count-${count}`;
-    if (map.hasImage(imageId)) continue;
-    const canvas = document.createElement('canvas');
-    canvas.width = 52;
-    canvas.height = 52;
-    const context = canvas.getContext('2d');
-    context.clearRect(0, 0, 52, 52);
-    context.fillStyle = '#ffffff';
-    context.font = '800 15px "Noto Sans Mono"';
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.fillText(String(count), 26, 26);
-    map.addImage(imageId, context.getImageData(0, 0, 52, 52), { pixelRatio: 1 });
+const CHARGING_PILL_FILL = { sc: '#e82127', other: '#22c55e', mixed: '#8b5cf6' };
+
+// One lightning bolt, drawn in a unit box so it scales with the pill.
+function traceBolt(context, x, y, w, h) {
+  context.beginPath();
+  context.moveTo(x + w * 0.62, y);
+  context.lineTo(x + w * 0.10, y + h * 0.56);
+  context.lineTo(x + w * 0.44, y + h * 0.56);
+  context.lineTo(x + w * 0.34, y + h);
+  context.lineTo(x + w * 0.90, y + h * 0.40);
+  context.lineTo(x + w * 0.54, y + h * 0.40);
+  context.closePath();
+  context.fill();
+}
+
+// Draws one map marker: a rounded pill with the visit count on the left and
+// `bolts` lightning bolts on the right. Sized to its contents, so a 3-visit
+// V4 site is wider than a 1-visit AC charger. Rendered at devicePixelRatio so
+// it stays crisp, and handed to MapLibre with a matching pixelRatio.
+function renderChargingPill({ type, count, bolts }) {
+  const dpr = Math.max(1, Math.ceil(window.devicePixelRatio || 1));
+  const label = String(count);
+  const H = 26;                              // pill height, CSS px
+  const padX = 9;
+  const gap = bolts > 0 ? 5 : 0;
+  const boltW = 8;
+  const boltH = 13;
+  const boltGap = 1;
+  const font = '800 14px "Noto Sans Mono", monospace';
+
+  const measure = document.createElement('canvas').getContext('2d');
+  measure.font = font;
+  const textW = measure.measureText(label).width;
+  const boltsW = bolts > 0 ? bolts * boltW + (bolts - 1) * boltGap : 0;
+  const W = Math.ceil(padX * 2 + textW + gap + boltsW);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const stroke = 2;
+  const r = (H - stroke) / 2;
+  ctx.beginPath();
+  ctx.roundRect(stroke / 2, stroke / 2, W - stroke, H - stroke, r);
+  ctx.fillStyle = CHARGING_PILL_FILL[type] ?? CHARGING_PILL_FILL.other;
+  ctx.fill();
+  ctx.lineWidth = stroke;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = font;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, padX, H / 2 + 0.5);
+
+  let boltX = padX + textW + gap;
+  for (let index = 0; index < bolts; index++) {
+    traceBolt(ctx, boltX, (H - boltH) / 2, boltW, boltH);
+    boltX += boltW + boltGap;
+  }
+
+  return { canvas, dpr };
+}
+
+function addChargingPillImage(imageId) {
+  const spec = window.ChargingView.chargingPillFromImageId(imageId);
+  if (!spec || map.hasImage(imageId)) return;
+  const { canvas, dpr } = renderChargingPill(spec);
+  const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+  map.addImage(imageId, data, { pixelRatio: dpr });
+}
+
+function addChargingPillImages(sites) {
+  for (const site of sites) {
+    addChargingPillImage(window.ChargingView.chargingPillImageId({
+      type: site.isSupercharger ? 'sc' : 'other',
+      count: Number(site.visitCount) || 0,
+      bolts: Number(site.speedTier) || 0,
+    }));
   }
 }
 
@@ -339,7 +400,7 @@ function updateChargingMap(sites, options = {}) {
   const fit = options.fit !== false;
   whenMapReady(() => {
     const geojson = window.ChargingView.toChargingGeoJSON(sites);
-    addChargingCountImages(sites);
+    addChargingPillImages(sites);
     map.getSource('charging-sites').setData(geojson);
     const visibility = activeMainTab === 'charging' && geojson.features.length > 0 ? 'visible' : 'none';
     for (const layerId of CHARGING_MAP_LAYER_IDS) map.setLayoutProperty(layerId, 'visibility', visibility);

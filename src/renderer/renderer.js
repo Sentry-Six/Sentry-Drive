@@ -408,7 +408,7 @@ function initMap() {
   // switch can't reshuffle that.
   const applyMapTiles = () => {
     setRasterTiles('basemap', gmapsUrls()[currentBaseLayer], 'overview-dim');
-    setRasterTiles('labels-overlay', gmapsLabelOverlayUrl(), 'charging-sites-other');
+    setRasterTiles('labels-overlay', gmapsLabelOverlayUrl(), 'charging-site-pills');
   };
 
   // Re-point both rasters when the label settings change.
@@ -519,47 +519,8 @@ function initMap() {
     // Charging bubbles go in LAST, above the label overlay: they're
     // interactive pins, not map furniture, and the Google label tiles were
     // otherwise painting street/city names straight over them.
-    map.addLayer({
-      id: 'charging-sites-other',
-      type: 'circle',
-      source: 'charging-sites',
-      filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'isSupercharger'], false]],
-      layout: { visibility: 'none' },
-      paint: {
-        'circle-color': '#22c55e',
-        'circle-radius': ['interpolate', ['linear'], ['get', 'visitCount'], 1, 17, 10, 22, 50, 26],
-        'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': 2,
-        'circle-opacity': 0.94,
-      },
-    });
-    map.addLayer({
-      id: 'charging-sites-supercharger',
-      type: 'circle',
-      source: 'charging-sites',
-      filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'isSupercharger'], true]],
-      layout: { visibility: 'none' },
-      paint: {
-        'circle-color': '#e82127',
-        'circle-radius': ['interpolate', ['linear'], ['get', 'visitCount'], 1, 17, 10, 22, 50, 26],
-        'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': 2,
-        'circle-opacity': 0.94,
-      },
-    });
+    for (const layer of window.ChargingView.buildChargingSiteLayers()) map.addLayer(layer);
     for (const layer of window.ChargingView.buildChargingClusterLayers()) map.addLayer(layer);
-    map.addLayer({
-      id: 'charging-site-counts',
-      type: 'symbol',
-      source: 'charging-sites',
-      filter: ['!', ['has', 'point_count']],
-      layout: {
-        visibility: 'none',
-        'icon-image': ['concat', 'charging-count-', ['to-string', ['get', 'visitCount']]],
-        'icon-allow-overlap': true,
-        'icon-ignore-placement': true,
-      },
-    });
     mapReady = true;
     for (const fn of pendingMapTasks.splice(0)) fn();
   });
