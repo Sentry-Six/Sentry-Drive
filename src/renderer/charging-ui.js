@@ -21,6 +21,9 @@ function initChargingTab() {
   // Cluster pills are only known once clustering runs, so mint whatever the
   // style asks for on demand.
   map.on('styleimagemissing', (event) => addChargingPillImage(event.id));
+  // Pull the icon font in now so the first home pill draws the real glyph
+  // instead of falling back to the traced house.
+  document.fonts?.load?.(`24px ${ICON_FONT}`).catch(() => {});
   renderChargingSites();
 }
 
@@ -314,8 +317,48 @@ function traceBolt(context, x, y, w, h) {
   context.fill();
 }
 
-// A house: gabled roof over a body, with a punched-out doorway. Drawn in a
-// unit box like the bolt so both sit on the same baseline.
+// The house is Material Symbols' `other_houses`, matching the icon set the
+// rest of the app draws from. Canvas resolves the ligature, but only once
+// the bundled font is in — before that the same call would paint the literal
+// string "other_houses" across the pill, so an unloaded font falls back to
+// the traced house below rather than risking that.
+const HOUSE_ICON = 'other_houses';
+const ICON_FONT = '"Material Symbols Outlined"';
+
+function iconFontReady() {
+  try {
+    return document.fonts.check(`24px ${ICON_FONT}`);
+  } catch {
+    return false;
+  }
+}
+
+function drawHouse(context, x, y, w, h) {
+  if (!iconFontReady()) {
+    // The fallback draws a single house, so keep it square and centred in
+    // the wider box the two-house icon reserves.
+    traceHouse(context, x + (w - h) / 2, y, h, h);
+    return;
+  }
+  context.save();
+  context.font = `${h * 1.3}px ${ICON_FONT}`;
+  context.textAlign = 'left';
+  context.textBaseline = 'alphabetic';
+  const m = context.measureText(HOUSE_ICON);
+  // Centre the painted ink in the box, exactly as the marker letters do:
+  // the glyph's advance is square and larger than the icon inside it.
+  const inkW = m.actualBoundingBoxLeft + m.actualBoundingBoxRight;
+  const inkH = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
+  context.fillText(
+    HOUSE_ICON,
+    x + (w - inkW) / 2 + m.actualBoundingBoxLeft,
+    y + (h - inkH) / 2 + m.actualBoundingBoxAscent,
+  );
+  context.restore();
+}
+
+// Geometric fallback: gabled roof over a body, with a punched-out doorway.
+// Drawn in a unit box like the bolt so both sit on the same baseline.
 function traceHouse(context, x, y, w, h) {
   const eaves = h * 0.44;   // where the roof meets the walls
   const wallInset = w * 0.14;
@@ -352,7 +395,9 @@ function renderChargingPill({ type, count, bolts, home }) {
   const boltW = 8;
   const boltH = 13;
   const boltGap = 1;
-  const houseW = 12;
+  // other_houses is two houses side by side — measured ink is 4:3, not
+  // square like the bolts, so the pill reserves the wider box.
+  const houseW = 16;
   const houseH = 12;
   const glyphGap = 5;                        // text -> first glyph
   const font = '800 14px "Noto Sans Mono", monospace';
@@ -394,7 +439,7 @@ function renderChargingPill({ type, count, bolts, home }) {
   }
   if (home) {
     if (bolts > 0) glyphX += glyphGap - boltGap;
-    traceHouse(ctx, glyphX, (H - houseH) / 2, houseW, houseH);
+    drawHouse(ctx, glyphX, (H - houseH) / 2, houseW, houseH);
   }
 
   return { canvas, dpr };
