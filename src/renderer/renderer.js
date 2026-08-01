@@ -3651,7 +3651,13 @@ function updatePrivacyZoneLayer() {
       type: 'FeatureCollection',
       features: privacyZonesVisible ? zones.map(zoneCircleFeature) : [],
     });
-    if (showZoneMarkers || privacyZonesVisible) {
+    // The Charging tab takes the map over — drive lines, route markers, and
+    // FSD badges are all hidden there, so the zone landmarks go with them.
+    // An open Privacy editor still wins: you can't place a zone you can't
+    // see. Suppressed here rather than by toggling display, so a zone edit
+    // that rebuilds this layer mid-charging can't put them back.
+    const chargingOwnsMap = activeMainTab === 'charging';
+    if ((showZoneMarkers && !chargingOwnsMap) || privacyZonesVisible) {
       for (const z of zones) {
         zoneMarkers.push(new maplibregl.Marker({ element: makeZoneMarkerEl(z), anchor: 'center' })
           .setLngLat([z.lng, z.lat])

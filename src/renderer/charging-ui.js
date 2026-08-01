@@ -376,6 +376,7 @@ function enterChargingMapMode() {
   stopReplay();
   setChargingMarkerGroupVisible(selectedMarkers, false);
   setChargingMarkerGroupVisible(fsdEventMarkers, false);
+  updatePrivacyZoneLayer(); // drops the zone markers for the charging map
   whenMapReady(() => {
     for (const layerId of DRIVE_MAP_LAYER_IDS_FOR_CHARGING) {
       map.setLayoutProperty(layerId, 'visibility', 'none');
@@ -396,6 +397,7 @@ function leaveChargingMapMode() {
   document.getElementById('charging-map-legend').classList.add('hidden');
   setChargingMarkerGroupVisible(selectedMarkers, true);
   setChargingMarkerGroupVisible(fsdEventMarkers, showFsdMarkers);
+  updatePrivacyZoneLayer(); // restores them for the drive map
   if (driveCameraBeforeCharging) {
     map.jumpTo(driveCameraBeforeCharging);
     driveCameraBeforeCharging = null;
