@@ -124,8 +124,21 @@ function renderChargingSites(options = {}) {
     type.className = 'charging-type';
     type.textContent = site.isSupercharger ? 'Supercharger' : 'Other charger';
     const latest = document.createElement('span');
-    latest.textContent = `Latest ${formatChargingDate(site.latestVisit, false)}`;
-    meta.append(type, ' · ', latest);
+    // The "Latest" prefix is dropped so the power fits on the same line; a
+    // bare date under a visit count already reads as the most recent one,
+    // and the tooltip spells it out.
+    latest.textContent = formatChargingDate(site.latestVisit, false);
+    latest.title = `Latest visit: ${formatChargingDate(site.latestVisit, false)}`;
+    const power = chargingPowerLabel(site);
+    if (power) {
+      const kw = document.createElement('span');
+      kw.className = 'charging-power';
+      kw.textContent = power.text;
+      kw.title = power.title;
+      meta.append(type, ' · ', kw, ' · ', latest);
+    } else {
+      meta.append(type, ' · ', latest);
+    }
     copy.append(name, meta);
     const chevron = document.createElement('span');
     chevron.className = 'material-icons charging-site-chevron';
@@ -160,6 +173,29 @@ async function selectChargingSite(siteId, options = {}) {
   if (site && Number.isFinite(site.latitude) && Number.isFinite(site.longitude) && activeMainTab === 'charging') {
     map.easeTo({ center: [site.longitude, site.latitude], zoom: Math.max(map.getZoom(), 12) });
   }
+}
+
+// The kW shown on a site row. Two different quantities can fill it, so the
+// tooltip says which: the catalog's per-stall rating when the site is a
+// known Supercharger, otherwise the fastest charge actually recorded there
+// — which is all we can know for an AC charger, and is a floor rather than
+// a rating, since the car's own curve and state of charge cap it.
+function chargingPowerLabel(site) {
+  const rated = Number(site.powerKw);
+  if (Number.isFinite(rated) && rated > 0) {
+    return {
+      text: `${Math.round(rated)} kW`,
+      title: `Rated ${Math.round(rated)} kW per stall (OpenStreetMap Supercharger catalog)`,
+    };
+  }
+  const observed = Number(site.peakPowerKw);
+  if (Number.isFinite(observed) && observed > 0) {
+    return {
+      text: `${Math.round(observed)} kW`,
+      title: `Fastest charge recorded here: ${Math.round(observed)} kW`,
+    };
+  }
+  return null;
 }
 
 function renderChargingSessions(site, container) {

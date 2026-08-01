@@ -283,6 +283,15 @@ function groupChargingSites(inputSessions, radiusMetres = SITE_GROUPING_METRES) 
         if (!tags.includes(tag)) tags.push(tag);
       }
     }
+    // Fastest charge ever taken here. Unlike the catalog's rating this is
+    // available for every site, including AC chargers the catalog can't
+    // know about — but it is bounded by the car and its state of charge,
+    // so it reads as a floor on the charger, not its rating.
+    let peakPowerKw = null;
+    for (const session of site.sessions) {
+      const peak = finiteNumber(session.peakPowerKw);
+      if (peak != null && peak > (peakPowerKw ?? -Infinity)) peakPowerKw = peak;
+    }
     return {
       siteId: site.siteId,
       latitude: site.latitude,
@@ -290,6 +299,7 @@ function groupChargingSites(inputSessions, radiusMetres = SITE_GROUPING_METRES) 
       displayName: site.displayName,
       visitCount: site.sessions.length,
       latestVisit: site.sessions[0]?.startTime ?? null,
+      peakPowerKw,
       tags,
       isHome: tags.some((tag) => String(tag).trim().toLowerCase() === HOME_TAG),
     };

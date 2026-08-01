@@ -7,51 +7,59 @@
       "changes": [
         {
           "type": "feature",
-          "description": "A permanent Charging tab turns the charging telemetry already stored in drive-data.json into a location history. Repeated visits are grouped into counted map markers, with catalog-confirmed Tesla Superchargers in red and every other charger in green."
+          "description": "A new Charging tab turns the charging data already in your drive file into a location history. Each site is a map pill showing how many times you've charged there, lightning bolts for the site's speed, and a house for home charging — red for Tesla Superchargers, green for everything else."
         },
         {
           "type": "feature",
-          "description": "Open a charging location to see every session newest-first, then expand a session for battery change, energy, peak power, duration, recorded cost, and its charging-power curve."
+          "description": "Open a charging site to see every session newest-first, then expand one for battery change, energy, peak power, duration, cost, and its power curve."
         },
         {
           "type": "improvement",
-          "description": "Supercharger classification works offline from a bundled OpenStreetMap snapshot. Settings > Map UI can filter Superchargers and other chargers independently or manually refresh the free catalog without a Tesla login or paid API."
+          "description": "Superchargers are identified offline from a bundled OpenStreetMap snapshot and named by the address your car reported — \"150 Anza Blvd\" instead of a row of identical \"Tesla Supercharger\" entries. Settings > Map UI can filter charger types or refresh the catalog."
+        },
+        {
+          "type": "feature",
+          "description": "Filter the drive list by tag, by date range, or both. Filtering searches your whole history, not just the drives currently on screen."
+        },
+        {
+          "type": "feature",
+          "description": "Summon drives are detected and marked — they get a Summon chip, their own map line color, and stay out of your FSD statistics so a driverless drive can't dilute your score. Check Drives > Check for Summon tags older drives retroactively."
+        },
+        {
+          "type": "feature",
+          "description": "Opening a drive now also shows the telemetry your car recorded for it — battery, climate, tire pressure, and odometer — whenever that data is present."
         },
         {
           "type": "improvement",
-          "description": "Supercharger visits are named by the address your car reported for the stop — \"150 Anza Blvd\" rather than a row of identical \"Tesla Supercharger\" entries. Most Superchargers carry no distinct name in the map catalog, so the car's own location wins unless the catalog knows something more specific."
-        },
-        {
-          "type": "feature",
-          "description": "The drive list can now be filtered by tag, by date range, or both — pick a tag pill and set a From/To date above the list. Filtering searches your whole history rather than just the drives currently on screen, and nothing is filtered until you ask for it."
-        },
-        {
-          "type": "feature",
-          "description": "Summon drives are detected and marked. A drive the car made on its own — hazards bookending it, no pedal input, parking-lot speed throughout — gets a Summon chip in the list and its own map line color, and is kept out of your FSD statistics so a driverless drive can't dilute your score. Check Drives > Check for Summon re-reads older parking-speed drives to tag them retroactively."
+          "description": "Large drive histories load reliably: routes are indexed on disk instead of held in memory, and the drive list is paged. Libraries that previously ran the app out of memory now open."
         },
         {
           "type": "fix",
-          "description": "Drives no longer cut off partway through when the dashcam stopped recording mid-route. Where a gap in RecentClips is covered by Saved or Sentry event clips, those clips now complete the drive, matching how Sentry USB processes the same footage — a drive that previously ended at a recording gap now shows its full route, distance, and duration."
-        },
-        {
-          "type": "improvement",
-          "description": "While drive data loads, the rest of the app no longer accepts clicks — the loading overlay covers the whole window instead of only the map, so tabs, settings, and footer buttons can't be triggered mid-load."
+          "description": "Drives no longer cut off partway through when the dashcam stopped recording mid-route. Saved and Sentry event clips now fill the gap, so the drive shows its full route, distance, and duration."
         },
         {
           "type": "fix",
-          "description": "The letters on the FSD event markers (A and D) are now genuinely centered in their circles. Each badge is drawn as a single pre-rendered image with the letter placed from its actual painted pixels — earlier attempts corrected the position in the page, where the browser rounded it straight back off-center."
+          "description": "Your drive library is better protected: processing now stops if the drive file can't be read instead of silently rebuilding it from scratch (which could drop imported drives and tags), and edits preserve charging data and charge costs rather than rewriting only routes and tags."
+        },
+        {
+          "type": "fix",
+          "description": "The Cybertruck replay marker takes your chosen paint color correctly again."
+        },
+        {
+          "type": "fix",
+          "description": "The A and D letters on the FSD event markers are now genuinely centered in their circles."
         },
         {
           "type": "improvement",
-          "description": "The Discord button in the footer now opens the Sentry Six Discord invite instead of sitting greyed out."
+          "description": "The loading overlay now covers the whole window, so tabs, settings, and footer buttons can't be clicked mid-load."
+        },
+        {
+          "type": "improvement",
+          "description": "The Discord button in the footer now opens the Sentry Six invite instead of sitting greyed out."
         },
         {
           "type": "fix",
           "description": "App log lines no longer show garbled punctuation in Windows terminals and exported log files."
-        },
-        {
-          "type": "fix",
-          "description": "Drive-data edits and processing checkpoints now preserve charging telemetry, charge costs, and future supplemental JSON sections instead of rewriting only routes and tags."
         }
       ]
     },

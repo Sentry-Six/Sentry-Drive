@@ -279,3 +279,34 @@ test('a scalar charge tag is accepted, and no tags means no home flag', () => {
   // A key that matches no session must not leak onto one.
   assert.equal(build({ 5_555: ['Home'] }).isHome, false);
 });
+
+test('site summary carries the fastest charge recorded there', () => {
+  const session = (sessionId, startTimestamp, peakPowerKw) => ({
+    sessionId,
+    startTimestamp,
+    startTime: new Date(startTimestamp * 1_000).toISOString(),
+    endTimestamp: startTimestamp + 60,
+    latitude: 40,
+    longitude: -76,
+    locationName: 'Spot',
+    peakPowerKw,
+  });
+  const { sites } = groupChargingSites([
+    session('a', 100, 7),
+    session('b', 200, 142),
+    session('c', 300, 48),
+  ]);
+  // The peak is the maximum across visits, not the latest or the mean.
+  assert.equal(sites[0].peakPowerKw, 142);
+
+  // Missing peaks are skipped rather than counted as zero...
+  const { sites: partial } = groupChargingSites([
+    session('a', 100, null),
+    session('b', 200, 11),
+  ]);
+  assert.equal(partial[0].peakPowerKw, 11);
+
+  // ...and a site with no recorded power reports none at all.
+  const { sites: none } = groupChargingSites([session('a', 100, null)]);
+  assert.equal(none[0].peakPowerKw, null);
+});

@@ -3561,12 +3561,32 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   margin-top: 3px;
   color: var(--text-muted);
   font-size: 10px;
+  /* One line, always. Type and power are short and fixed; the date is the
+     long variable part, so it is the one allowed to ellipsize when a wide
+     rating and a long month coincide. Without this the row silently grew to
+     two lines once the power was added. */
+  white-space: nowrap;
+  overflow: hidden;
 }
+.charging-site-meta > :last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.charging-type,
+.charging-power { flex: none; }
 .charging-type {
   font-weight: 700;
   color: #4ade80;
 }
 .charging-site.is-supercharger .charging-type { color: #ff5a5f; }
+/* Charger power. Mono like every other figure in the app, and a shade
+   brighter than the rest of the meta line so it stays scannable. */
+.charging-power {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  white-space: nowrap;
+}
 .charging-site-chevron {
   color: var(--text-dim);
   font-size: 18px;
