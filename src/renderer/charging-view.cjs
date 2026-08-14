@@ -29,10 +29,9 @@
           displayName: site.displayName,
           visitCount: site.visitCount,
           isSupercharger: Boolean(site.isSupercharger),
-          // Bolt count for the map pill; 0 for AC chargers and for any
-          // Supercharger the catalog has no rating for.
+          // Zero when no catalog power tier is known.
           speedTier: Number(site.speedTier) || 0,
-          // Any visit here tagged "Home" — draws a house on the pill.
+          // True when any visit is tagged Home.
           isHome: Boolean(site.isHome),
         },
         geometry: {
@@ -58,12 +57,7 @@
     };
   }
 
-  // Markers are pre-rendered pill images rather than circle layers: a pill
-  // has to size itself to its contents (a visit count plus up to three
-  // bolts), which a circle layer can't express. The image id carries
-  // everything needed to draw it, so `styleimagemissing` can mint any pill
-  // the data asks for — including cluster totals, which are only known after
-  // clustering runs.
+  // Image IDs encode variable-width pill contents for `styleimagemissing`.
   const PILL_IMAGE_PREFIX = 'charging-pill-';
 
   function chargingPillImageId({ type, count, bolts, home }) {
@@ -120,9 +114,7 @@
       filter: ['has', 'point_count'],
       layout: {
         visibility: 'none',
-        // Clusters cover several sites, which need not share a rating or a
-        // home tag, so they show the total visit count with no bolts and no
-        // house — zoom in and the individual pills carry both.
+        // Mixed-site clusters omit per-site power and Home indicators.
         'icon-image': [
           'concat',
           PILL_IMAGE_PREFIX,

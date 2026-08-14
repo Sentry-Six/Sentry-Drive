@@ -1,21 +1,9 @@
 'use strict';
-// Integrity guards for the atomic drive-data.json writers — the streaming
-// writer in src/processing/process.js and writeDriveDataJSON in
-// src/main/electron-main.cjs. Both serialize a single JSON object to a temp
-// file and then rename it over the real file. These two helpers run BETWEEN
-// the write and the rename, so a power loss or a truncated write cannot
-// replace good drive data with a corrupt file.
-//
-// CommonJS (like drive-calc.cjs) so the CJS main process can `require` it and
-// the ESM processing scripts can `import` it.
+// Integrity checks used before atomically replacing drive-data.json.
 const fs = require('fs');
 
-// Flush a file's buffered data to physical disk. Reopened with write access
-// ('r+') because Windows FlushFileBuffers needs a writable handle. Async so a
-// large flush over a network share never blocks Electron's main thread.
-//
-// Best-effort: some network filesystems reject fsync, so callers treat a
-// rejection as non-fatal — tempLooksComplete() below is the hard guard.
+// Windows FlushFileBuffers requires a writable handle. Callers tolerate fsync
+// failures on network filesystems; tempLooksComplete remains mandatory.
 async function fsyncFile(filePath) {
   const fh = await fs.promises.open(filePath, 'r+');
   try {
@@ -25,22 +13,14 @@ async function fsyncFile(filePath) {
   }
 }
 
-// Cheap structural check that a freshly written temp holds a COMPLETE JSON
-// object: non-trivial size, opens with "{", and — ignoring trailing
-// whitespace — ends with "}". The drive-data serializers always emit exactly
-// that shape, so a write truncated by a full disk or a dropped network share
-// (cut off before the closing brace) is caught here without re-parsing a file
-// that can exceed 100 MB.
-//
-// It deliberately does NOT detect mid-file corruption: an append-only stream
-// writer doesn't produce that, and a full re-parse would cost a second read
-// of the whole file on every save. Truncation is the realistic failure mode.
+// Detect truncated serializer output without reparsing a potentially huge file.
+// This intentionally does not detect mid-file corruption: append-only writers
+// do not produce it, while a complete reparse would double save-time I/O.
 function tempLooksComplete(filePath) {
   let fd;
   try {
     const { size } = fs.statSync(filePath);
-    // The smallest document the serializers emit (everything empty) is ~45
-    // bytes; anything under 20 is an empty/near-empty truncated write.
+    // The smallest valid serializer output is roughly 45 bytes.
     if (size < 20) return false;
     fd = fs.openSync(filePath, 'r');
     const first = Buffer.alloc(1);

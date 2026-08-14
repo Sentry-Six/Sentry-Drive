@@ -61,7 +61,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('processing-output', listener);
     return () => ipcRenderer.off('processing-output', listener);
   },
-  // Import drives from another drive-data.json into the loaded one.
   importDriveDataFilePreview: (args) => ipcRenderer.invoke('import-drive-data-file-preview', args),
   importDriveDataFile: (args) => ipcRenderer.invoke('import-drive-data-file', args),
   onImportJsonProgress: (cb) => {
@@ -69,8 +68,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('import-json-progress', listener);
     return () => ipcRenderer.off('import-json-progress', listener);
   },
-  // Watch the loaded drive-data.json for external changes (e.g. Sentry USB
-  // re-exporting it) and notify the renderer to auto-refresh.
   watchDriveData: (filePath) => ipcRenderer.invoke('watch-drive-data', filePath),
   onDriveDataChanged: (cb) => {
     const listener = (_ev, data) => cb(data);
@@ -109,8 +106,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 });
 
-// Drive-calc constants/helpers — the single source of truth shared with the
-// processing pipeline. Exposed read-only so the renderer's display conversions
-// use the exact same numbers as the rest of the app (src/shared/drive-calc.cjs).
+// Expose the calculation contract read-only to the sandboxed renderer.
 contextBridge.exposeInMainWorld('driveCalc', { ...driveCalc });
 contextBridge.exposeInMainWorld('driveTelemetryView', { ...driveTelemetryView });

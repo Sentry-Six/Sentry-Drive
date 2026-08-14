@@ -1,37 +1,22 @@
-// Lightweight app-wide logging.
-//
-// • Every entry is echoed to the terminal (visible when running `npm start`;
-//   packaged builds simply have no console attached).
-// • The last MAX_ENTRIES entries live in an in-memory ring buffer that
-//   Settings → Support → Logs exports as a .txt file.
-// • Nothing is written to disk during normal operation — logs only touch
-//   disk when the user explicitly downloads them.
-//
-// Sources feeding this log:
-//   - main-process uncaught exceptions / unhandled rejections
-//   - renderer errors, unhandled rejections, and console.error/warn
-//     (forwarded over the 'app-log' IPC channel)
-//   - auto-updater errors, processing-child lifecycle + stderr
-//   - anything else that calls logger.info/warn/error directly
+// App-wide terminal, memory-ring, and capped session-file logging. Exports
+// include the previous session tail and redact credentials and location data.
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 
-const MAX_ENTRIES = 5000;     // ring buffer size
-const MAX_ENTRY_LEN = 10000;  // per-entry truncation guard
-const MAX_FILE_BYTES = 20 * 1024 * 1024; // stop appending past this (runaway-error guard)
-const PREV_EXPORT_BYTES = 256 * 1024;    // how much of the previous session to include in exports
+const MAX_ENTRIES = 5000;
+const MAX_ENTRY_LEN = 10000;
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const PREV_EXPORT_BYTES = 256 * 1024;
 
 const entries = [];
 let appInfo = { version: '?' };
 
 // ── Crash-surviving file sink ────────────────────────────────────────────────
-// Lines are appended (batched ~1 s; errors flush immediately) to
-// <userData>/logs/session.log. On startup the last session's file rotates to
-// previous-session.log, so a crashed session's log is always recoverable and
-// included in the next export.
+// Batch normal entries for about one second; flush errors immediately. Rotate
+// the prior session at startup so crash logs remain exportable.
 let logFile = null;
 let prevFile = null;
 let fileBytes = 0;
@@ -79,19 +64,16 @@ function fmt(v) {
   try { return JSON.stringify(v); } catch { return String(v); }
 }
 
-// Log lines must be ASCII-safe: the console echo is decoded with the
-// terminal's legacy codepage on Windows (UTF-8 "—" renders as "ΓÇö" under
-// CP437/850), and exported .txt files land in arbitrary editors. Typographic
-// punctuation is decoration, so transliterate it; everything else (paths,
-// names, real data) passes through untouched.
+// Transliterating decorative punctuation keeps logs readable in legacy
+// Windows console code pages and arbitrary text editors.
 const ASCII_PUNCT = [
-  [/[‒-―─━]/g, '-'], // figure/en/em/bar dashes, box-drawing lines
-  [/[‘’]/g, "'"],             // curly single quotes
-  [/[“”]/g, '"'],             // curly double quotes
-  [/…/g, '...'],                   // ellipsis
-  [/[→➡]/g, '->'],           // rightwards arrows
-  [/[•·]/g, '*'],            // bullets
-  [/ /g, ' '],                     // no-break space
+  [/[‒-―─━]/g, '-'],
+  [/[‘’]/g, "'"],
+  [/[“”]/g, '"'],
+  [/…/g, '...'],
+  [/[→➡]/g, '->'],
+  [/[•·]/g, '*'],
+  [/ /g, ' '],
 ];
 function asciiPunct(text) {
   let out = text;
@@ -99,10 +81,7 @@ function asciiPunct(text) {
   return out;
 }
 
-// Scrub anything privacy-sensitive from EXPORTED logs (the .txt users paste for
-// support): API tokens/keys, GPS coordinates, and reverse-geocoded addresses.
-// Applied only in getLogText — the live terminal + on-disk session log keep
-// full detail for local debugging.
+// Scrub exports only; local terminal and session logs retain debugging detail.
 function redact(text) {
   return String(text)
     // tokens / keys / bearer credentials in key:value or key=value form

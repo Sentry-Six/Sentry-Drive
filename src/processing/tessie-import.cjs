@@ -1,23 +1,11 @@
-// tessie-import.js - Import Tessie CSV exports as synthetic SEI-compatible routes
-//
-// Input: two CSV files exported from Tessie.com:
-//   - drives CSV: one row per drive with start/end time, odometer, autopilot total
-//   - driving_states CSV: ~60s-cadence GPS breadcrumbs (lat, lng, shift, speed)
-//
-// Output: an array of route objects matching Sentry-USB's wire format, so the
-// grouper pipeline can ingest them alongside native SEI clips. Each Tessie
-// drive becomes multiple 60-second synthetic "clips" so the existing
-// per-clip timestamp interpolation in buildDriveStats stays correct.
+// Converts Tessie drive and driving-state CSV exports into 60-second synthetic
+// clips compatible with the shared Sentry USB route format.
 
 'use strict';
 
-// Raw Tessie GPS is kept as-is — no OSRM densification. Road-matching was
-// introducing large distance errors (e.g. ~16 mi trips becoming 22 mi when
-// OSRM chose a highway route the driver didn't actually take). Straight
-// lines between the breadcrumbs Tessie gives us look less pretty but match
-// reality much more closely.
+// Preserve raw Tessie GPS. Road matching can choose a plausible but incorrect
+// route and materially inflate distance.
 
-// Drive-math constants come from the shared single-source module.
 const {
   MPH_TO_MPS,
   GEAR_PARK,
@@ -81,7 +69,7 @@ function rowsToObjects(rows) {
   const headers = rows[0];
   const records = [];
   for (let r = 1; r < rows.length; r++) {
-    if (rows[r].length === 1 && rows[r][0] === '') continue; // blank trailing line
+    if (rows[r].length === 1 && rows[r][0] === '') continue;
     const obj = {};
     for (let c = 0; c < headers.length; c++) {
       obj[headers[c]] = rows[r][c] ?? '';
@@ -92,10 +80,8 @@ function rowsToObjects(rows) {
 }
 
 // ─── Timezone handling ───────────────────────────────────────────────────────
-// Tessie's drives CSV header includes the export-time TZ abbreviation, e.g.
-// "Started At (EDT)". We treat that as a fixed offset for every row in the
-// file — Tessie displays all timestamps in the user's current zone regardless
-// of when the drive actually happened, so a single offset is the correct read.
+// Tessie labels every drive with the export-time timezone; parse that fixed
+// offset first, then correct individual DST mismatches against state samples.
 
 const TZ_OFFSET_HOURS = {
   UTC: 0, GMT: 0,
@@ -124,7 +110,7 @@ function parseLocalTimestamp(str, offsetMs) {
   if (!m) return NaN;
   const [, Y, Mo, D, H, Mi, S] = m;
   const asUtc = Date.UTC(+Y, +Mo - 1, +D, +H, +Mi, +(S || 0));
-  return asUtc - offsetMs; // local → true UTC
+  return asUtc - offsetMs;
 }
 
 function parseUtcTimestamp(str) {
@@ -209,18 +195,13 @@ function parseDrivingStatesCSV(text) {
 const GEAR_MAP = { P: GEAR_PARK, D: GEAR_DRIVE, R: GEAR_REVERSE, N: GEAR_NEUTRAL };
 
 /**
- * Tessie's drives CSV header names a timezone (e.g. "EDT") that reflects the
- * user's TZ at EXPORT time, not the drive's actual TZ. Winter drives in an
- * export taken during summer get labeled with the wrong offset, so EDT→UTC
- * conversion lands the drive ±1h from reality. We correct this per-drive by
- * finding the driving_states sample near the drive's start coordinates and
- * using its real UTC timestamp as the anchor.
+ * Correct an export-time timezone mismatch by anchoring the drive to a nearby
+ * driving-state sample with an authoritative UTC timestamp.
  */
 function calibrateDriveTime(drive, statesIndex) {
   if (drive.startLat == null || drive.startLng == null) return drive;
 
-  // Search a wide enough window to cover DST flips and any TZ labeling error,
-  // but not so wide we match an unrelated visit to the same location.
+  // Cover timezone errors without matching an unrelated visit.
   const searchWindow = 6 * 3600 * 1000;
   const lo = drive.startedAt - searchWindow;
   const hi = drive.startedAt + searchWindow;
@@ -231,7 +212,7 @@ function calibrateDriveTime(drive, statesIndex) {
     if (s.timeMs < lo) continue;
     if (s.timeMs > hi) break;
     if (s.shift !== 'D') continue;
-    // Location filter — within ~300m of the declared start.
+    // Match the declared start within roughly 300 m.
     const dLat = (s.lat - drive.startLat);
     const dLng = (s.lng - drive.startLng);
     if (dLat * dLat + dLng * dLng > 0.003 * 0.003) continue;
@@ -241,7 +222,7 @@ function calibrateDriveTime(drive, statesIndex) {
 
   if (!best) return drive;
   const shift = best.timeMs - drive.startedAt;
-  if (Math.abs(shift) < 60 * 1000) return drive; // already well-aligned
+  if (Math.abs(shift) < 60 * 1000) return drive;
 
   return {
     ...drive,
@@ -252,10 +233,8 @@ function calibrateDriveTime(drive, statesIndex) {
 }
 
 function joinDriveWithPoints(drive, statesIndex) {
-  // Grab every state sample inside the drive's [start, end] window that
-  // is a moving gear (D or R). Include a small padding so a point exactly
-  // on the boundary still counts.
-  const tolerance = 90 * 1000; // 90s
+  // Include moving-gear samples near the drive boundaries.
+  const tolerance = 90 * 1000;
   const lo = drive.startedAt - tolerance;
   const hi = drive.endedAt + tolerance;
 
@@ -271,9 +250,7 @@ function joinDriveWithPoints(drive, statesIndex) {
 
 // ─── Route builder ───────────────────────────────────────────────────────────
 
-// Stable signature for idempotent re-imports. Combines rounded-to-minute
-// start time and starting odometer — both are stable even if Tessie slightly
-// adjusts drive boundaries between exports.
+// Stable import identity despite small boundary adjustments between exports.
 function buildExternalSignature(drive, source = 'tessie') {
   const minuteBucket = Math.floor(drive.startedAt / 60000);
   const od = drive.startingOdometer != null ? drive.startingOdometer.toFixed(2) : 'x';
@@ -282,14 +259,8 @@ function buildExternalSignature(drive, source = 'tessie') {
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 
-// Filenames use LOCAL wall-clock time to match the SEI convention: Tesla
-// dashcam files are named with the vehicle's local time, and grouper.js
-// parses them with `new Date(iso)` which JS treats as local. Emitting UTC
-// here would shift Tessie drives by the TZ offset relative to neighbors.
-//
-// sigSuffix embeds the drive's external signature so that adjacent Tessie
-// drives (e.g. a re-park right at the end of a real drive) don't collide
-// on the shared minute boundary — grouper dedupes by file path.
+// Use local wall-clock filenames to match SEI parsing. Include the external
+// signature so adjacent imports sharing a minute do not deduplicate by path.
 function formatClipFilename(windowStartMs, sigSuffix, source = 'tessie') {
   const d = new Date(windowStartMs);
   const Y = d.getFullYear();
@@ -302,7 +273,6 @@ function formatClipFilename(windowStartMs, sigSuffix, source = 'tessie') {
 }
 
 function signatureToFilenameSuffix(signature) {
-  // "tessie:28763976:446.49" / "teslascope:…" → "28763976-44649"
   return signature.replace(/^[a-z]+:/, '').replace(/[^\w]/g, '');
 }
 
@@ -312,15 +282,13 @@ function formatClipDate(windowStartMs) {
 }
 
 /**
- * Split a densified drive into 60-second clips that match the SEI per-clip
- * cadence. Each clip must have ≥1 point; empty windows are skipped.
+ * Split a drive into nonempty, 60-second SEI-compatible clips.
  */
 function splitIntoSyntheticClips(drive, densePoints, source = 'tessie') {
   if (densePoints.length === 0) return [];
 
   const firstMs = densePoints[0].timeMs;
-  // Anchor the clip grid to the minute containing the first point so filenames
-  // align to minute boundaries like Tesla dashcam clips do.
+  // Align synthetic filenames to Tesla's minute grid.
   const anchor = Math.floor(firstMs / 60000) * 60000;
   const lastMs = densePoints[densePoints.length - 1].timeMs;
   const signature = buildExternalSignature(drive, source);
@@ -341,7 +309,7 @@ function splitIntoSyntheticClips(drive, densePoints, source = 'tessie') {
       Math.round(p.lng * 1e6) / 1e6,
     ]);
     const gearStates = new Uint8Array(n);
-    const autopilotStates = new Uint8Array(n); // all 0 — Tessie CSV has no per-point AP
+    const autopilotStates = new Uint8Array(n); // CSV has no per-point autopilot state.
     const speeds = new Array(n);
     const accelPositions = new Array(n);
 
@@ -361,7 +329,7 @@ function splitIntoSyntheticClips(drive, densePoints, source = 'tessie') {
       accelPositions,
       rawParkCount: 0,
       rawFrameCount: n,
-      // Single run of drive gear — prevents splitClipAtParkGaps from firing
+      // Avoid synthetic park splits within one imported drive.
       gearRuns: [{ gear: 1, frames: n }],
       source,
       externalSignature: signature,
@@ -369,28 +337,19 @@ function splitIntoSyntheticClips(drive, densePoints, source = 'tessie') {
     });
   }
 
-  // Park-gap injection is not reliable for back-to-back Tessie drives that
-  // share a minute boundary — grouper deduplicates clips by file path and
-  // sorts by timestamp, so tied timestamps between two Tessie drives can
-  // swallow the park clip. Instead, grouper.js::groupIntoDrives now splits
-  // time groups by externalSignature, guaranteeing each Tessie drive stays
-  // its own drive regardless of spacing.
+  // externalSignature, rather than an injected park clip, separates adjacent
+  // imports that share a minute and deduplicate by file path.
 
   return clips;
 }
 
 /**
- * Fill in minute-gaps between anchors with a single linearly-interpolated
- * point each. Raw Tessie samples are preserved bit-for-bit; interp only
- * runs for minutes with no real sample. This keeps the route visually
- * honest (straight lines between the points Tessie actually collected)
- * while giving grouper a gapless clip sequence — without this, any Tessie
- * drive with > 5 min of polling gaps would fragment into separate drives.
+ * Fill empty minute windows with one linearly interpolated point. Preserve raw
+ * samples while preventing polling gaps from fragmenting one drive.
  */
 function fillMinuteGaps(rawPts, drive) {
   const anchors = [...rawPts];
-  // Bookend with drive start/end so we cover the full drive span even if
-  // Tessie polling only caught a portion of it.
+  // Cover the full drive even when polling missed either endpoint.
   if (drive.startLat != null && drive.startLng != null && Number.isFinite(drive.startedAt)) {
     anchors.push({ lat: drive.startLat, lng: drive.startLng, timeMs: drive.startedAt, speedMps: 0, gear: 1, synthetic: true });
   }
@@ -411,7 +370,6 @@ function fillMinuteGaps(rawPts, drive) {
   for (let m = firstMin; m <= lastMin; m++) {
     if (occupied.has(m)) continue;
     const tMid = m * 60000 + 30000;
-    // Find the anchor pair bracketing tMid.
     while (bracketIdx < anchors.length - 2 && anchors[bracketIdx + 1].timeMs < tMid) bracketIdx++;
     const a = anchors[bracketIdx];
     const b = anchors[bracketIdx + 1];
@@ -431,16 +389,11 @@ function fillMinuteGaps(rawPts, drive) {
 }
 
 /**
- * Build synthetic SEI-compatible clips for a single Tessie drive from its
- * raw ~60s GPS breadcrumbs. No OSRM routing — the polyline just connects
- * the points Tessie actually sampled plus linear-interp minute-fillers so
- * grouper doesn't fragment the drive on > 5min polling gaps. Always
- * produces at least a 2-point straight line (start → end from drives.csv)
- * when Tessie polling missed the drive entirely.
+ * Build SEI-compatible clips from raw Tessie breadcrumbs plus minute-gap
+ * fillers. Fall back to the drive-summary endpoints if polling returned none.
  */
 function buildClipsForDrive(originalDrive, statesIndex, source = 'tessie') {
-  // Per-drive TZ correction — Tessie's header-declared offset can be wrong
-  // for drives that happened outside the export's DST period.
+  // Correct DST mismatch against authoritative state timestamps.
   const drive = calibrateDriveTime(originalDrive, statesIndex);
   const raw = joinDriveWithPoints(drive, statesIndex);
 
@@ -467,11 +420,7 @@ function buildExistingDriveRanges(existingDrives) {
   const ranges = [];
   for (const d of existingDrives) {
     if (!d.startTime || !d.endTime) continue;
-    // grouper.js::formatISO emits naive local ISO strings (no TZ suffix).
-    // Date.parse() on a naive string interprets it as LOCAL time, which is
-    // exactly what we want: both the SEI-drive timestamps and the Tessie
-    // drive.startedAt values (converted from Tessie's EDT/EST header) land
-    // as true UTC epoch ms, so overlap math is apples-to-apples.
+    // Naive SEI timestamps parse in local time, matching converted Tessie epochs.
     const start = Date.parse(d.startTime);
     const end = Date.parse(d.endTime);
     if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
@@ -482,25 +431,19 @@ function buildExistingDriveRanges(existingDrives) {
 }
 
 function hasOverlap(drive, ranges) {
-  // Gap-only policy: any temporal overlap with an existing drive (any source)
-  // causes this Tessie drive to be skipped. Round to minute boundaries to
-  // match the load-time hide filter — Tessie's API gives second-precision
-  // timestamps, but synthetic clip filenames are minute-aligned, so the
-  // effective drive range after grouping is wider than the raw start/end.
+  // Skip any overlap after widening to synthetic clips' minute boundaries.
   const start = Math.floor(drive.startedAt / 60000) * 60000;
   const end = Math.ceil(drive.endedAt / 60000) * 60000;
   for (const r of ranges) {
-    if (r.end <= start) continue; // r ends at or before drive starts → no overlap
-    if (r.start >= end) break;     // r starts at or after drive ends → no overlap
+    if (r.end <= start) continue;
+    if (r.start >= end) break;
     return true;
   }
   return false;
 }
 
 // ─── API path-based clip builder ─────────────────────────────────────────────
-// For drives fetched via the Tessie API, we already have dense GPS points
-// plus per-point autopilot/speed. Skip the CSV-polling join and just emit
-// 60-second synthetic clips from the supplied points array.
+// API imports already contain dense, per-point telemetry.
 
 const { mapAutopilotString } = require('./tessie-api.cjs');
 
@@ -517,17 +460,16 @@ function buildClipsForApiDrive(apiDrive, source = 'tessie') {
     .map((p) => ({
       lat: p.latitude,
       lng: p.longitude,
-      // Tessie's /path gives Unix seconds. Normalize to ms.
+      // Tessie path timestamps are Unix seconds.
       timeMs: p.timestamp > 1e12 ? p.timestamp : p.timestamp * 1000,
-      // speed is mph; convert to m/s for downstream code.
+      // Tessie speed is mph; the route contract uses m/s.
       speedMps: Number.isFinite(p.speed) ? p.speed * MPH_TO_MPS : 0,
       gear: 1,
       apState: mapAutopilotString(p.autopilot),
     }))
     .sort((a, b) => a.timeMs - b.timeMs);
 
-  // If the API returned no points for some reason, fall back to start/end
-  // bookends from the drive summary so we still get something on the map.
+  // Fall back to summary endpoints when the API omits path points.
   if (pts.length < 2) {
     const fallback = [];
     if (apiDrive.startLat != null && apiDrive.startLng != null && Number.isFinite(apiDrive.startedAt)) {

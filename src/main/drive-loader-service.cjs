@@ -105,8 +105,7 @@ class LoaderService {
         if (!this.index) throw Object.assign(new Error('No drive data is loaded'), { code: 'NO_DRIVE_DATA' });
         return this.index.getChargingSession(payload.sessionId);
       case 'setTags':
-        // No index loaded is not an error here — the tags are already
-        // persisted to the file; there's simply nothing to keep in sync.
+        // Tags are already persisted when no index is loaded.
         if (!this.index) return { updated: false };
         this.index.setDriveTags(payload.startTime, payload.tags);
         return { updated: true };

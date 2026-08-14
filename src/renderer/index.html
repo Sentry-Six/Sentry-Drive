@@ -3,10 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- MapLibre + all fonts are bundled (assets/vendor/) — the app works fully
-       offline and makes no third-party requests at launch. The only remote
-       host left is Google's tile server: MapLibre fetches raster tiles with
-       fetch() (connect-src) and runs its layout worker from a blob: URL. -->
+  <!-- CSP permits Google's raster tiles and MapLibre's blob worker; other
+       scripts, styles, and fonts are bundled locally. -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     script-src 'self';
@@ -127,7 +125,7 @@
           <button id="drive-page-next" type="button" title="Next drives"><span class="material-icons">chevron_right</span></button>
         </div>
 
-        <!-- Floating action bar for multi-selected drives (Ctrl/Shift+click) -->
+        <!-- Multi-selection actions -->
         <div id="multi-select-bar" class="hidden">
           <span id="multi-select-count">0 drives selected</span>
           <button id="btn-multi-remove" class="btn-danger" type="button"><span class="material-icons">delete_sweep</span>Remove</button>
@@ -526,7 +524,7 @@
       </div>
     </div>
 
-    <!-- ── Tessie Import Modal ─────────────────────────────────────── -->
+    <!-- Drive Import Modal -->
     <div id="tessie-overlay" class="hidden">
       <div id="tessie-modal">
         <div class="settings-header">
@@ -544,8 +542,7 @@
           <div class="reprocess-modal-msg">
             Importing from the connected account. Manage tokens in <strong>Settings → Integrations</strong>.
           </div>
-          <!-- Token comes from Integrations; these are kept (hidden) so the
-               import wiring can reuse them without a visible token field. -->
+          <!-- Hidden compatibility controls reuse the Integrations token. -->
           <div class="tessie-file-row hidden">
             <a href="#" id="tessie-token-link" class="hidden"></a>
             <input id="tessie-api-token" type="password" class="text-input" />
@@ -772,9 +769,7 @@
     </div>
   </div>
 
-  <!-- Full-window modal barrier: while drive data loads, nothing in the app
-       (panel tabs, footer, settings, map) accepts input. Lives at body level
-       so no panel/stacking context can leak out from under it. -->
+  <!-- Body-level barrier blocks all input across stacking contexts while loading. -->
   <div id="loading-overlay" class="hidden">
     <div class="loading-content">
       <div class="loading-spinner"></div>

@@ -122,37 +122,32 @@ test('matches only charging sites within 250 metres and uses the catalog name', 
 test('reads the stall rating from OSM socket output tags, fastest socket wins', () => {
   assert.equal(stationPowerKw({ 'socket:nacs:output': '250' }), 250);
   assert.equal(stationPowerKw({ 'socket:nacs:output': '325' }), 325);
-  // Mixed-generation sites list several outputs on one tag.
   assert.equal(stationPowerKw({ 'socket:nacs:output': '72;250' }), 250);
-  // Or across several socket types.
   assert.equal(stationPowerKw({
     'socket:nacs:output': '150',
     'socket:type1_combo:output': '325',
   }), 325);
-  assert.equal(stationPowerKw({ 'socket:nacs:output': '250 kW' }), 250); // unit suffix
-  assert.equal(stationPowerKw({ 'socket:nacs': '12' }), null);           // count, not output
+  assert.equal(stationPowerKw({ 'socket:nacs:output': '250 kW' }), 250);
+  assert.equal(stationPowerKw({ 'socket:nacs': '12' }), null);
   assert.equal(stationPowerKw({}), null);
-  // Implausible values are OSM typos — the live catalog contains a literal
-  // 250000. Reject rather than badge a site as a megacharger.
+  // Reject likely unit/value errors without discarding a valid sibling rating.
   assert.equal(stationPowerKw({ 'socket:nacs:output': '250000' }), null);
   assert.equal(stationPowerKw({ 'socket:nacs:output': '0' }), null);
   assert.equal(stationPowerKw({ 'socket:nacs:output': '-5' }), null);
-  // A typo alongside a real reading keeps the real one.
   assert.equal(stationPowerKw({ 'socket:nacs:output': '250000;250' }), 250);
-  assert.equal(stationPowerKw({ 'socket:nacs:output': '1200' }), 1200); // Semi megacharger
+  assert.equal(stationPowerKw({ 'socket:nacs:output': '1200' }), 1200);
 });
 
 test('speed tier maps ratings to bolt counts at 150 kW and 250 kW', () => {
-  assert.equal(speedTierFromPowerKw(72), 1);    // V1 / urban
-  assert.equal(speedTierFromPowerKw(120), 1);   // below the 150 band
+  assert.equal(speedTierFromPowerKw(72), 1);
+  assert.equal(speedTierFromPowerKw(120), 1);
   assert.equal(speedTierFromPowerKw(149), 1);
-  assert.equal(speedTierFromPowerKw(150), 2);   // 150 kW V2 posts
+  assert.equal(speedTierFromPowerKw(150), 2);
   assert.equal(speedTierFromPowerKw(240), 2);
   assert.equal(speedTierFromPowerKw(249), 2);
-  assert.equal(speedTierFromPowerKw(250), 3);   // V3
-  assert.equal(speedTierFromPowerKw(325), 3);   // V4
+  assert.equal(speedTierFromPowerKw(250), 3);
+  assert.equal(speedTierFromPowerKw(325), 3);
   assert.equal(speedTierFromPowerKw(500), 3);
-  // Unknown or nonsense ratings draw no bolts rather than guessing.
   assert.equal(speedTierFromPowerKw(null), 0);
   assert.equal(speedTierFromPowerKw(undefined), 0);
   assert.equal(speedTierFromPowerKw(0), 0);
@@ -173,8 +168,7 @@ test('matched Superchargers carry the rating and tier; unmatched sites carry nei
   assert.equal(matched[1].powerKw, undefined);
   assert.equal(matched[1].isSupercharger, false);
 
-  // A station the catalog has no rating for is still a Supercharger, just
-  // without bolts.
+  // An unrated station remains a Supercharger but displays no bolts.
   const unrated = matchChargingSites([sites[0]], {
     stations: [{ stationId: 'node/2', name: 'Tesla Supercharger', latitude: 40, longitude: -76 }],
   });
@@ -184,8 +178,6 @@ test('matched Superchargers carry the rating and tier; unmatched sites carry nei
 });
 
 test('a catalog name that only repeats the brand keeps the name the car reported', () => {
-  // Most OSM Supercharger nodes are literally named "Tesla Supercharger",
-  // which is less useful than the street the car reported charging at.
   const station = (name) => ({
     stationId: 'node/1', name, latitude: 40, longitude: -76,
   });
@@ -194,20 +186,15 @@ test('a catalog name that only repeats the brand keeps the name the car reported
     { stations: [station(catalogName)] },
   )[0];
 
-  // Generic catalog name loses to the car's street address...
   assert.equal(matchOne('150 Anza Blvd', 'Tesla Supercharger').displayName, '150 Anza Blvd');
   assert.equal(matchOne('150 Anza Blvd', 'tesla  supercharger').displayName, '150 Anza Blvd');
-  // ...but a catalog name that identifies the site still wins.
   assert.equal(
     matchOne('150 Anza Blvd', 'Mountain View Supercharger').displayName,
     'Mountain View Supercharger',
   );
-  // With nothing but placeholders on the site, the brand is the best we have.
   assert.equal(matchOne('Charging location', 'Tesla Supercharger').displayName, 'Tesla Supercharger');
   assert.equal(matchOne('Unknown location', 'Tesla Supercharger').displayName, 'Tesla Supercharger');
-  // A nameless catalog entry never erases a real reported name.
   assert.equal(matchOne('150 Anza Blvd', '').displayName, '150 Anza Blvd');
-  // Matching still flags the site regardless of which name won.
   assert.equal(matchOne('150 Anza Blvd', 'Tesla Supercharger').isSupercharger, true);
 });
 

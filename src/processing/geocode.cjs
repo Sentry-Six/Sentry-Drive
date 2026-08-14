@@ -1,24 +1,8 @@
-// Reverse geocoding for drive-list location pins.
-//
-// Runs in the MAIN process (Node https), which lets us:
-//   • set a proper User-Agent (Nominatim's usage policy requires one),
-//   • throttle to ≤1 request/second (the policy's hard limit),
-//   • persist a disk cache so we geocode each unique spot only once, and
-//   • sidestep the renderer CSP entirely.
-//
-// Coordinates are rounded to ~1 m for the cache key: drives that end at the
-// same spot still collapse to one lookup, but two genuinely different
-// doorsteps a few metres apart no longer share a cached (wrong) address —
-// the old 4-decimal key (~11 m) was wide enough to merge adjacent houses.
-// Bumping the precision orphans old 4-decimal cache entries (harmless; they
-// just re-resolve once at the new precision).
-//
-// Accuracy: a reverse lookup snaps to the NEAREST mapped feature, not to
-// "the address here". Lookups are therefore restricted to real addresses and
-// POIs (layer=address,poi), and the snapped feature's name/house number is
-// only used when the feature verifiably contains or nearly touches the
-// queried point (SNAP_TRUST_M); otherwise the label degrades gracefully to
-// the street / neighbourhood instead of naming the wrong building.
+// Main-process Nominatim client with policy-compliant identification,
+// one-request-per-second throttling, request coalescing, and a disk cache.
+// Five-decimal cache keys distinguish adjacent addresses while grouping GPS
+// jitter. Trust snapped names only when the feature contains or nearly touches
+// the query point; otherwise fall back to street or locality.
 
 const https = require('https');
 const fs = require('fs');
@@ -28,20 +12,16 @@ const HOST = 'nominatim.openstreetmap.org';
 const RATE_MS = 1100;          // ≤ 1 req/s per Nominatim policy (+ margin)
 const KEY_DECIMALS = 5;        // ~1.1 m grouping — house-level distinct
 const UA = 'Sentry-Drive/1.0 (https://github.com/Sentry-Six/Sentry-Drive)';
-// Reverse geocoding snaps to the NEAREST mapped feature, which is not always
-// where the car is — only trust a feature's name/house number when it's
-// within this distance of the queried coordinates.
+// Maximum distance for trusting a snapped name or house number.
 const SNAP_TRUST_M = 75;
-// v2: snap-verified labels via layer=address,poi (v1 cached whatever object
-// Nominatim happened to snap to). Old entries are dropped on load and
-// re-resolve lazily through the throttle as cards render.
+// Version changes invalidate labels created before snap verification.
 const CACHE_VERSION = 2;
 
-let cache = null;              // { "lat,lng": label|null }
+let cache = null;
 let cacheFile = null;
 let lastFetchMs = 0;
 let saveTimer = null;
-const inflight = new Map();    // key -> Promise<label|null>
+const inflight = new Map();
 
 function init(filePath) {
   cacheFile = filePath;
@@ -63,7 +43,6 @@ function scheduleSave() {
   }, 2000);
 }
 
-// Distance from the queried coordinates to the matched feature's centroid.
 function resultDistanceM(j, lat, lng) {
   const rlat = parseFloat(j.lat);
   const rlng = parseFloat(j.lon);
@@ -71,9 +50,7 @@ function resultDistanceM(j, lat, lng) {
   return geodesicM(lat, lng, rlat, rlng);
 }
 
-// Is the queried point inside the feature's bounding box, padded by padM?
-// Big features (a store + its lot) legitimately have a far-away centroid, so
-// name acceptance tests the box, not the centroid.
+// A large feature may contain the query despite a distant centroid.
 function withinPaddedBBox(j, lat, lng, padM) {
   const bb = j.boundingbox;
   if (!Array.isArray(bb) || bb.length !== 4) return false;
@@ -85,21 +62,16 @@ function withinPaddedBBox(j, lat, lng, padM) {
       && lng >= minLng - lngPad && lng <= maxLng + lngPad;
 }
 
-// Pick the most "pin-like" short label from a Nominatim reverse result:
-// POI/business name → "1234 Street" → street → neighbourhood/city.
-// The name and house number are only trusted when the matched feature is
-// verifiably AT the queried point — reverse geocoding snaps to the nearest
-// object, which can be the business across the street or a neighbour's
-// address point; in that case fall through to the street instead.
+// Prefer POI, verified address, street, then locality.
 function shortLabel(j, lat, lng) {
   if (!j) return null;
   const a = j.address || {};
   if (j.name && j.name.trim() && withinPaddedBBox(j, lat, lng, SNAP_TRUST_M)) {
-    return j.name.trim();                                         // POI/business name
+    return j.name.trim();
   }
   const road = a.road || a.pedestrian || a.footway || a.path || a.cycleway;
   if (road && a.house_number && resultDistanceM(j, lat, lng) <= SNAP_TRUST_M) {
-    return `${a.house_number} ${road}`;                           // "6730 Aviation Dr"
+    return `${a.house_number} ${road}`;
   }
   if (road) return road;
   const place = a.neighbourhood || a.suburb || a.hamlet || a.village
@@ -109,7 +81,6 @@ function shortLabel(j, lat, lng) {
   return null;
 }
 
-// City-granularity label for the zoom-10 fallback lookup.
 function cityLabel(j) {
   if (!j) return null;
   const a = j.address || {};
@@ -146,10 +117,7 @@ function requestNominatim(lat, lng, zoom, layer) {
   });
 }
 
-// Serial queue. The drive list bursts all its lookups at once when it
-// renders, so each fetch chains on the previous one with RATE_MS spacing —
-// per-call delays computed against a shared timestamp would let the whole
-// burst fire simultaneously and trip Nominatim's rate ban.
+// A promise chain serializes render-time lookup bursts at RATE_MS spacing.
 let queueTail = Promise.resolve();
 function fetchNominatim(lat, lng, zoom, layer) {
   const run = queueTail.then(async () => {
@@ -162,12 +130,8 @@ function fetchNominatim(lat, lng, zoom, layer) {
   return run;
 }
 
-// Returns a place label (string) or null. Looks up at street zoom first
-// (address → street → city, see shortLabel); when that finds nothing at all
-// (unmapped spot, "Unable to geocode"), retries at city zoom so the card
-// shows the city rather than raw coordinates. Answered lookups are cached
-// (including "nothing anywhere" nulls) and concurrent lookups for the same
-// spot are coalesced; network failures are not cached so they retry later.
+// Try street-level detail, then locality. Cache answered misses, coalesce
+// concurrent requests, and leave transport failures retryable.
 async function reverseGeocode(lat, lng) {
   if (!cache) cache = {};
   if (typeof lat !== 'number' || typeof lng !== 'number' || !isFinite(lat) || !isFinite(lng)) return null;
@@ -176,8 +140,7 @@ async function reverseGeocode(lat, lng) {
   if (inflight.has(key)) return inflight.get(key);
 
   const p = (async () => {
-    // layer=address,poi keeps the snap on real addresses and businesses —
-    // without it Nominatim happily matches railways, streams, power poles…
+    // Restrict snapping to address-like features.
     const street = await fetchNominatim(lat, lng, 18, 'address,poi');
     if (!street.ok) { inflight.delete(key); return null; }
     let label = shortLabel(street.json, lat, lng);

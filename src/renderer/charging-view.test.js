@@ -127,14 +127,13 @@ test('draws sites and clusters as pill symbols keyed by type, count, and tier', 
     assert.equal(layer.type, 'symbol');
     assert.equal(layer.source, 'charging-sites');
     assert.equal(layer.layout.visibility, 'none');
-    // Pills must not be dropped or displaced by label collision.
+    // Pills must ignore label collisions.
     assert.equal(layer.layout['icon-allow-overlap'], true);
     assert.equal(layer.layout['icon-ignore-placement'], true);
   }
   assert.deepEqual(site[0].filter, ['!', ['has', 'point_count']]);
   assert.deepEqual(cluster[0].filter, ['has', 'point_count']);
 
-  // A site pill carries its own bolt count...
   assert.deepEqual(site[0].layout['icon-image'], [
     'concat',
     'charging-pill-',
@@ -143,7 +142,7 @@ test('draws sites and clusters as pill symbols keyed by type, count, and tier', 
     '-', ['to-string', ['coalesce', ['get', 'speedTier'], 0]],
     '-', ['case', ['==', ['get', 'isHome'], true], '1', '0'],
   ]);
-  // ...while a cluster spans sites of differing ratings, so it shows none.
+  // Clusters omit site-specific power and Home data.
   assert.ok(cluster[0].layout['icon-image'].at(-1) === '-0-0');
 });
 
@@ -159,7 +158,6 @@ test('pill image ids round-trip and reject anything else', () => {
   assert.deepEqual(chargingPillFromImageId('charging-pill-other-39-0-1'), {
     type: 'other', count: 39, bolts: 0, home: true,
   });
-  // Round-trip every id the layer expressions can produce.
   for (const type of ['sc', 'other', 'mixed']) {
     for (const bolts of [0, 1, 2, 3]) {
       for (const home of [false, true]) {
@@ -168,9 +166,9 @@ test('pill image ids round-trip and reject anything else', () => {
       }
     }
   }
-  assert.equal(chargingPillFromImageId('charging-pill-sc-3-4-0'), null); // no 4-bolt tier
-  assert.equal(chargingPillFromImageId('charging-pill-sc-3-2-2'), null); // home is 0 or 1
-  assert.equal(chargingPillFromImageId('charging-pill-sc-3-2'), null);   // pre-home id
+  assert.equal(chargingPillFromImageId('charging-pill-sc-3-4-0'), null);
+  assert.equal(chargingPillFromImageId('charging-pill-sc-3-2-2'), null);
+  assert.equal(chargingPillFromImageId('charging-pill-sc-3-2'), null);
   assert.equal(chargingPillFromImageId('charging-pill-bogus-3-1-0'), null);
   assert.equal(chargingPillFromImageId('charging-pill-sc-3.5-1-0'), null);
   assert.equal(chargingPillFromImageId('vehicle-35'), null);

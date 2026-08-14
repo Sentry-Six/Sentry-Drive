@@ -1,7 +1,4 @@
-// Tests for the drive-data write integrity guards. The whole point of
-// tempLooksComplete is to refuse to overwrite good data with a truncated
-// file, so these exercise complete, truncated, empty, tiny, and missing
-// inputs against real files on disk.
+// Exercises integrity checks against real temporary files.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -43,7 +40,7 @@ test('tempLooksComplete: rejects an empty file', () => {
 });
 
 test('tempLooksComplete: rejects a tiny file under the size floor', () => {
-  const p = tmpFile('{}'); // 2 bytes — a real drive-data is never this small
+  const p = tmpFile('{}');
   try { assert.equal(tempLooksComplete(p), false); } finally { fs.unlinkSync(p); }
 });
 

@@ -1,9 +1,4 @@
-// osrm-densify.js - Shared OSRM routing and polyline densification
-// Converts a sparse GPS polyline (e.g. Tessie's ~60s cadence) into a dense
-// ~1 Hz route by map-matching segments to real roads via OSRM, falling back
-// to linear interpolation when OSRM is unavailable.
-//
-// CommonJS to match electron-main.cjs; loaded from main process only.
+// Densifies sparse GPS through OSRM, with linear interpolation as fallback.
 
 'use strict';
 
@@ -14,7 +9,6 @@ const MIN_GAP_M = 100;        // below this, linear interpolation is fine
 const TARGET_HZ = 1;           // output cadence target
 const DEFAULT_RATE_MS = 1000;  // be polite to the public demo server
 
-// Distance comes from the shared single-source calc module (WGS-84 geodesic).
 const { geodesicM } = require('../shared/drive-calc.cjs');
 
 /**
@@ -96,7 +90,6 @@ async function densifyPolyline(sparse, opts = {}) {
     let latLngs = null;
 
     if (useRouting && distM > MIN_GAP_M) {
-      // Space out requests to avoid rate-limiting the public OSRM demo.
       const sinceLast = Date.now() - lastRequestMs;
       if (sinceLast < rateMs) await new Promise((r) => setTimeout(r, rateMs - sinceLast));
       lastRequestMs = Date.now();
@@ -104,8 +97,7 @@ async function densifyPolyline(sparse, opts = {}) {
       try {
         const routed = await fetchOSRMRoute(a.lat, a.lng, b.lat, b.lng);
         if (routed && routed.length >= 2) {
-          // OSRM returns [start, ..., end]; we already pushed `a`, so skip
-          // the first routed point and trust the rest up through the end.
+          // `a` is already present; retain routed points after it.
           latLngs = routed.slice(1);
           routedSegments++;
         }
@@ -113,14 +105,12 @@ async function densifyPolyline(sparse, opts = {}) {
     }
 
     if (!latLngs) {
-      // Linear interpolation at ~1 Hz (or fewer steps for short segments).
       const nSteps = Math.max(2, Math.round(dtSec * TARGET_HZ));
       const interior = linearInterp(a.lat, a.lng, b.lat, b.lng, nSteps);
       latLngs = [...interior, [b.lat, b.lng]];
     }
 
-    // Distribute timeMs evenly across the inserted points so downstream
-    // interpolation/stats have a monotonic timeline.
+    // Preserve a monotonic timeline across inserted points.
     const startMs = a.timeMs;
     const n = latLngs.length;
     for (let k = 0; k < n; k++) {

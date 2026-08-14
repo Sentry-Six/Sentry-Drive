@@ -24,11 +24,8 @@ function abortError() {
   return err;
 }
 
-// Tags are stored as a delimited, case-folded string ("|home|work|") so a
-// single LIKE '%|tag|%' matches whole tags only — "work" must not match
-// "homework". Filtering has to happen in SQL: the renderer only ever holds
-// one page, so filtering there would silently search 250 drives out of
-// thousands.
+// Delimited, case-folded storage enables indexed-page SQL filtering without
+// substring matches such as "work" matching "homework".
 function encodeTagSet(tags) {
   if (!Array.isArray(tags) || tags.length === 0) return '';
   const clean = tags
@@ -132,11 +129,8 @@ class DriveIndex {
 
   insertRoute(route, sequence) {
     const normalizedFile = normalizeClipPath(route?.file);
-    // Event-folder routes are STORED, not dropped: Rusty's gap-fill writes
-    // admitted SavedClips/SentryClips clips into drive-data.json, and the
-    // grouper decides per-window which ones fill real RecentClips gaps
-    // (groupIntoDrives' admission). Their timestamps come from the clip
-    // basename via parseFileTimestampMs, so windowing places them correctly.
+    // Store event-folder routes; the grouper decides which pre-rolls fill a
+    // RecentClips gap. Basename timestamps place them in the correct window.
     if (!normalizedFile) return 'dropped';
     const timestampMs = parseFileTimestampMs(normalizedFile);
     if (timestampMs == null) return 'dropped';
@@ -194,10 +188,8 @@ class DriveIndex {
   }
 
   putDrive(summary, detail) {
-    // Summon-detected drives get a synthetic "summon" entry in the FILTER
-    // column only — summary.tags stays user-authored, so the tag editor
-    // never shows (or persists) a pill the user didn't add. A duplicate from
-    // a user's own "summon" tag is harmless: the LIKE match is identical.
+    // Keep the synthetic Summon tag in the filter column only; displayed and
+    // persisted summary tags remain user-authored.
     const filterTags = summary.summon
       ? [...(summary.tags ?? []), 'summon']
       : summary.tags;
@@ -216,15 +208,11 @@ class DriveIndex {
   }
 
   /**
-   * Keep a drive's filterable tags current after an in-session tag edit.
-   * The summary blob still carries the tags baked in at index time, but the
-   * renderer holds its own updated copy for display — this only has to keep
-   * tag FILTERING truthful until the next load rebuilds the index.
+   * Keep filter tags current after an in-session edit. The renderer owns the
+   * updated display copy until the next index rebuild.
    */
   setDriveTags(startTime, tags) {
-    // Keep the synthetic summon filter entry (see putDrive) across in-session
-    // tag edits — rewriting the column from user tags alone would silently
-    // drop a summon drive out of the Summon filter until the next regroup.
+    // Preserve the synthetic Summon filter entry across user tag edits.
     const row = this.db.prepare('SELECT summary FROM drives WHERE start_time = ?')
       .get(String(startTime));
     const isSummon = row ? Boolean(v8.deserialize(row.summary)?.summon) : false;
@@ -243,7 +231,7 @@ class DriveIndex {
    *   tag       — only drives carrying this tag (whole-tag match)
    *   startDate — YYYY-MM-DD, inclusive
    *   endDate   — YYYY-MM-DD, inclusive
-   * `total` reflects the filtered set, so the pager stays honest.
+   * `total` is the filtered row count.
    */
   listDriveSummaries({ offset = 0, limit = 250, tag = '', startDate = '', endDate = '' } = {}) {
     const boundedLimit = Math.max(1, Math.min(Number(limit) || 250, 1000));
@@ -359,11 +347,8 @@ class DriveIndex {
       FROM routes
       ORDER BY timestamp_ms, sequence
     `).iterate();
-    // Windows split on gaps wider than the GAP-FILL cap, not DRIVE_GAP_MS:
-    // a 9-19 min recording dropout that event pre-rolls can fill must stay
-    // inside ONE window or the grouper can never bridge it. groupIntoDrives
-    // re-splits at DRIVE_GAP_MS within each window, so files without event
-    // routes group exactly as before — the wider window only batches more.
+    // Keep fillable recording gaps in one window. groupIntoDrives later splits
+    // genuine drive gaps at DRIVE_GAP_MS.
     let window = [];
     let previousMs = null;
     for (const row of rows) {

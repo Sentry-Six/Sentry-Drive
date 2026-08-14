@@ -7,12 +7,10 @@ const SITE_GROUPING_METRES = 150;
 const TERMINAL_STATES = new Set(['complete', 'stopped', 'disconnected', 'nopower']);
 const ACTIVE_STATES = new Set(['starting', 'charging']);
 
-// Stand-ins for a site the car never named. Exported so consumers can tell
-// "no name reported" from a real one instead of string-matching these.
-// A charge tagged this (case-insensitively) marks its site as home, which
-// the map draws with a house on the pill.
+// A case-insensitive Home tag marks the site's map pill with a house.
 const HOME_TAG = 'home';
 
+// Exported placeholders let consumers distinguish absent and reported names.
 const UNKNOWN_SITE_LABEL = 'Unknown location';
 const UNNAMED_SITE_LABEL = 'Charging location';
 const PLACEHOLDER_SITE_LABELS = new Set([UNKNOWN_SITE_LABEL, UNNAMED_SITE_LABEL]);
@@ -191,9 +189,7 @@ function createChargingSessionBuilder(options = {}) {
     lastTimestamp = timestamp;
   }
 
-  // chargeTags is keyed exactly like chargeCosts — the raw timestamp of the
-  // sample that opened the session — so both are looked up the same way.
-  // Values are arrays, matching driveTags.
+  // chargeTags and chargeCosts share the opening sample's raw timestamp key.
   function finish(chargeCosts = {}, chargeTags = {}) {
     if (active) close(active.lastTimestamp, 'end-of-file');
     return completed.map((session) => {
@@ -274,19 +270,14 @@ function groupChargingSites(inputSessions, radiusMetres = SITE_GROUPING_METRES) 
 
   const summaries = sites.map((site) => {
     site.sessions.sort((a, b) => b.startTimestamp - a.startTimestamp);
-    // Union of the tags on this site's sessions, first-seen order. A site is
-    // "home" if ANY visit was tagged so: you tag the charges, and the place
-    // you tagged them is the place that gets the house.
+    // Union session tags in first-seen order; any Home visit marks the site.
     const tags = [];
     for (const session of site.sessions) {
       for (const tag of session.tags ?? []) {
         if (!tags.includes(tag)) tags.push(tag);
       }
     }
-    // Fastest charge ever taken here. Unlike the catalog's rating this is
-    // available for every site, including AC chargers the catalog can't
-    // know about — but it is bounded by the car and its state of charge,
-    // so it reads as a floor on the charger, not its rating.
+    // Observed peak is a lower bound on charger capacity, not its rating.
     let peakPowerKw = null;
     for (const session of site.sessions) {
       const peak = finiteNumber(session.peakPowerKw);

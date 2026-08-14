@@ -3,36 +3,33 @@
 const fmt = (n) => Number(n).toLocaleString('en-US');
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let map = null;                // maplibregl.Map
-let mapReady = false;          // style 'load' fired — sources/layers exist
-let pendingMapTasks = [];      // deferred until style load (source data, filters)
-let selectedMarkers = [];      // DOM markers for the selected drive (start/end/replay)
+let map = null;
+let mapReady = false;
+let pendingMapTasks = [];      // Deferred until sources and layers exist.
+let selectedMarkers = [];
 let drives = [];
-let driveCacheGen = null;  // main-process detail-cache generation for `drives`
+let driveCacheGen = null;
 let drivePageModel = null;
 let drivePageState = { offset: 0, limit: 250, total: 0, drives: [] };
-let overviewRoutes = [];   // raw route points for overview map (one per clip)
+let overviewRoutes = [];
 let loadedFilePath = null;
-let pendingExternalReload = false; // drive-data.json changed on disk while busy
+let pendingExternalReload = false;
 let selectedDriveId = null;
 let removeOutputListener = null;
 let processingStartTime = null;
 let cpuCount = 1;
-let allTags = [];          // deduplicated, sorted list of all tag names
-let hasSummonDrives = false; // any summon-detected drive in the loaded data (pins the Summon filter)
-// Drive list filters. Defaults are all-off — the app does no filtering until
-// the user asks. Applied SERVER-side (in the loader's SQL): the renderer only
-// ever holds one page, so filtering here would silently search 250 drives
-// out of thousands.
+let allTags = [];
+let hasSummonDrives = false;
+// Filters must run in the loader because the renderer holds only one page.
 let driveFilters = { tag: '', startDate: '', endDate: '' };
 const driveFiltersActive = () =>
   Boolean(driveFilters.tag || driveFilters.startDate || driveFilters.endDate);
 let hideOtherDrives = false;
 let showFsdMarkers = true;
-let fsdEventMarkers = [];  // DOM markers for FSD events (toggleable in Settings)
-let showMapLabels = true;               // city/neighborhood labels on base maps
-let showRoadLabels = true;              // street/highway names on base maps
-let applyMapLabelsSetting = () => {};   // bound to the real basemap at map init
+let fsdEventMarkers = [];
+let showMapLabels = true;
+let showRoadLabels = true;
+let applyMapLabelsSetting = () => {};
 let activeMainTab = 'drives';
 let chargingSites = [];
 let chargingCatalogStatus = null;
@@ -44,28 +41,23 @@ let driveCameraBeforeCharging = null;
 
 // Replay state
 let replayMarker = null;
-let mapInteracting = false; // pan/zoom in progress — suspend marker easing
-let replayTrailCtx = null;  // {runs, latLngs, smooth} — traveled-route overlay data
+let mapInteracting = false; // Suspend marker easing during pan and zoom.
+let replayTrailCtx = null;
 let replayInterval = null;
 let replayPlaying = false;
 let replayIdx = 0;
 let replayDrive = null;
-let replaySpeed = 1;        // 1x, 2x, 5x, 10x
-const REPLAY_BASE_MS = 100; // base interval per point at 1x
+let replaySpeed = 1;
+const REPLAY_BASE_MS = 100;
 
-// Drive-calc constants come from the shared single-source module, exposed by
-// the preload bridge (see src/shared/drive-calc.cjs). Using them here keeps the
-// renderer's display conversions identical to the processing pipeline.
+// Shared calculation constants keep display and processing conversions aligned.
 const { MI_TO_KM, M_PER_MILE, MPS_TO_MPH, geodesicM } = window.driveCalc;
 
 // ─── Error forwarding ────────────────────────────────────────────────────────
-// Renderer errors, unhandled rejections, and console.error/warn all flow to
-// the main-process log (terminal under `npm start`; exportable from
-// Settings → Support → Logs). Defensive throughout — logging must never break
-// the app it's logging.
+// Forward renderer failures to the main-process log without propagating errors.
 (() => {
   const send = (level, scope, text) => {
-    try { window.electronAPI?.appLog({ level, scope, text }); } catch { /* never throw from logging */ }
+    try { window.electronAPI?.appLog({ level, scope, text }); } catch { /* Logging is best-effort. */ }
   };
   const fmt = (v) => {
     if (typeof v === 'string') return v;
@@ -87,15 +79,12 @@ const { MI_TO_KM, M_PER_MILE, MPS_TO_MPH, geodesicM } = window.driveCalc;
   }
 })();
 
-// User-action breadcrumbs → the app log, so a crash report shows what the user
-// was doing (drive opened, tag added, import started). Never throws.
+// Add user-action context to crash logs.
 function logAction(text) {
-  try { window.electronAPI?.appLog({ level: 'info', scope: 'ui', text }); } catch { /* logging must never break the app */ }
+  try { window.electronAPI?.appLog({ level: 'info', scope: 'ui', text }); } catch { /* Logging is best-effort. */ }
 }
 
-// Confirmation before merging another drive-data.json — its drives (and their
-// FSD/Autopilot data) fold into the user's stats, which can shift the FSD
-// score. Resolves true to proceed, false to cancel.
+// Imported FSD data changes aggregate scores, so merging requires confirmation.
 function confirmMergeDriveData() {
   return new Promise((resolve) => {
     const overlay = document.getElementById('import-json-confirm-overlay');
@@ -118,7 +107,6 @@ function confirmMergeDriveData() {
   });
 }
 
-// Units
 const UNIT_SYSTEM = {
   imperial: {
     dist:  { mult: 1,       short: 'mi',   long: 'Miles' },
@@ -133,21 +121,10 @@ let unitSystem = localStorage.getItem('unitSystem') === 'metric' ? 'metric' : 'i
 let lastDrivesMeta = null;
 let markerType  = localStorage.getItem('markerType')  || 'arrow';
 let markerColor = localStorage.getItem('markerColor') || '#ffffff';
-// Paintable replay-marker vehicles. Each pairs a base texture (_t: the car
-// render) with a paint mask (_c: WHITE = paintable bodywork, BLACK = masked
-// off — glass, tyres, trim). Bodies are white on every render except the
-// Cybertruck's steel; renderVehicleColor detects that per texture, so the
-// paint reads true either way.
-// Adding a model = drop the two PNGs in assets/map-ui (lowercase names, both
-// files the same pixel size), add an entry here and an <option> in
-// index.html — options whose artwork is missing self-remove at startup (see
-// the probe in initFooter).
-// `lengthM` is the real bumper-to-bumper length; the marker is drawn at that
-// size in MAP metres (see vehicleMarkerSize), so a car sits on the road like
-// the buildings do rather than staying a fixed blob. w/h are the aspect
-// source — only their ratio matters now, not their absolute values.
+// Each vehicle pairs a texture with a white-body paint mask. `lengthM` controls
+// map scale; only the w/h ratio controls aspect. Missing artwork prunes options.
 const VEHICLE_MODELS = {
-  // Keys are stable: renaming one would orphan a saved markerType setting.
+  // Keys are persisted as markerType values.
   model3:      { texture: '../../assets/map-ui/model3_t.png',        mask: '../../assets/map-ui/model3_c.png',        w: 47, h: 90,  lengthM: 4.72 },
   highland:    { texture: '../../assets/map-ui/highland_t.png',      mask: '../../assets/map-ui/highland_c.png',      w: 46, h: 90,  lengthM: 4.72 },
   highlandPerf:{ texture: '../../assets/map-ui/highland-perf_t.png', mask: '../../assets/map-ui/highland-perf_c.png', w: 46, h: 90,  lengthM: 4.72 },
@@ -160,11 +137,9 @@ const VEHICLE_MODELS = {
   modelX:      { texture: '../../assets/map-ui/modelx_t.png',        mask: '../../assets/map-ui/modelx_c.png',        w: 50, h: 98,  lengthM: 5.06 },
   cybertruck:  { texture: '../../assets/map-ui/cybertruck_t.png',    mask: '../../assets/map-ui/cybertruck_c.png',    w: 54, h: 111, lengthM: 5.68 },
 };
-// Below this on-screen height the car is unreadable, so it stops shrinking and
-// behaves like a cursor — the only departure from true scale, and only when
-// zoomed far enough out that ground truth stopped being meaningful anyway.
+// Clamp physical-scale vehicles before they become unreadable.
 const VEHICLE_MIN_PX = 38;
-let vehicleColoredUrl = null; // tinted texture for the CURRENT vehicle model
+let vehicleColoredUrl = null;
 let carColorPicker   = null;
 let markerColorDebounceTimer = null;
 
@@ -173,9 +148,7 @@ function scheduleMarkerColorUpdate(color) {
   markerColorDebounceTimer = setTimeout(() => applyMarkerColor(color), 250);
 }
 
-// Drive line colors — customizable in Settings → Map UI → Customization.
-// The map layers read these values directly; CSS vars (--line-*) keep the
-// legend and FSD share bars in step. Invalid saved values fall back silently.
+// CSS variables keep map lines, legends, and share bars on the same palette.
 const DRIVE_LINE_COLOR_DEFAULTS = {
   manual:   '#2266cc',
   fsd:      '#22cc55',
@@ -190,30 +163,28 @@ let driveLineColors = (() => {
     for (const k of Object.keys(colors)) {
       if (/^#[0-9a-fA-F]{6}$/.test(saved[k] || '')) colors[k] = saved[k];
     }
-  } catch { /* corrupted setting — defaults win */ }
+  } catch { /* Invalid settings fall back to defaults. */ }
   return colors;
 })();
 let driveLineColorsDebounceTimer = null;
 
-// Debounced like the marker color: the iro wheel fires per drag frame, and a
-// long selected route re-bakes its GeoJSON on every apply.
+// Debounce per-frame color-wheel events that re-bake route GeoJSON.
 function scheduleDriveLineColorsApply() {
   clearTimeout(driveLineColorsDebounceTimer);
   driveLineColorsDebounceTimer = setTimeout(applyDriveLineColors, 250);
 }
 
-// The iro color popup is shared between the car color and the drive line
-// swatches — openColorPopup re-targets which value the wheel edits.
-let colorPopupApply = null;   // active target's onChange(hex)
-let colorPopupAnchor = null;  // swatch the popup is anchored to (for toggling)
+// The shared color popup retargets its change callback and anchor.
+let colorPopupApply = null;
+let colorPopupAnchor = null;
 
 function openColorPopup(anchor, title, color, onChange) {
   const popup = document.getElementById('car-color-popup');
   if (!popup.classList.contains('hidden') && colorPopupAnchor === anchor) {
-    closeColorPopup(); // clicking the same swatch again toggles it closed
+    closeColorPopup();
     return;
   }
-  colorPopupApply = null; // silence color:change while the wheel syncs
+  colorPopupApply = null; // Suppress color:change while synchronizing.
   carColorPicker.color.hexString = color;
   document.getElementById('inp-car-hex').value = color;
   document.querySelector('.car-color-popup-title').textContent = title;
@@ -252,84 +223,50 @@ document.addEventListener('DOMContentLoaded', () => {
   initChangelogModal();
   loadDefaultPaths();
   applyDriveLineColors();
-  updatePrivacyZoneLayer(); // zone markers are permanent map landmarks
+  updatePrivacyZoneLayer();
   logAction(`ui ready — units=${unitSystem}, marker=${markerType}, mapLayer=${localStorage.getItem('mapLayer') || 'Light'}`);
 });
 
 // ─── Map ──────────────────────────────────────────────────────────────────────
-// MapLibre GL JS (vendored under assets/vendor/maplibre). The basemap is a
-// raster source fed by Google's tile endpoint restyled via the legacy
-// apistyle parameter — the exact same tile URLs the old Leaflet stack used.
-// All drive routes render as GeoJSON line layers on the GPU: the per-layer
-// CPU overhead that made thousands of overview lines lag under Leaflet
-// (and then under a hand-rolled canvas overlay) is gone entirely.
+// MapLibre renders Google raster tiles and GPU-backed GeoJSON routes.
 const EMPTY_FC = { type: 'FeatureCollection', features: [] };
 
-// Zoom-scaled line widths, replicating the old Leaflet behavior of
-// max(2, base * zoom / 10) as piecewise-linear interpolation stops.
+// Piecewise stops implement max(2, base * zoom / 10).
 const OVERVIEW_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 0, 3, 8, 3, 10, 3.5, 20, 6];
-// Imported overview lines run ~1px thinner. The difference is baked into
-// the stops because zoom expressions are only legal as the TOP-LEVEL
-// interpolate — wrapping OVERVIEW_LINE_WIDTH in ['*', factor, …] is
-// rejected by the style spec and would abort layer setup.
+// MapLibre requires zoom interpolation at the expression's top level.
 const OVERVIEW_IMPORTED_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 0, 2.5, 8, 2.5, 10, 2.9, 20, 4.75];
 const SELECTED_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'],
   0, 2, 4, 2, 10, ['max', 2, ['get', 'w']], 20, ['max', 2, ['*', ['get', 'w'], 2]]];
 
-// Sources/layers only exist after the style's 'load' event; anything that
-// touches them (route data, filters, tile swaps) queues until then.
+// Queue source and layer work until the style loads.
 function whenMapReady(fn) {
   if (mapReady) fn();
   else pendingMapTasks.push(fn);
 }
 
 function initMap() {
-  // All base maps come from Google's tile endpoint, restyled via the legacy
-  // apistyle parameter. Both Light and Dark strip every label except the
-  // administrative ones (cities, neighborhoods) and road labels (street
-  // names): all labels off, then s.t:1 + s.t:3/49 labels back on — or every
-  // label off when the labels setting is off. Dark additionally
-  // applies Google's own night-mode palette (#242f3e base / #17263c water /
-  // #38414e roads / muted tan labels) — verified live at ~49 avg tile
-  // brightness vs ~214 for the standard roadmap.
+  // Base tiles omit labels; an overlay restores selected label classes.
   showMapLabels = localStorage.getItem('showMapLabels') !== 'false';
-  // Road labels follow the city-labels setting until the user chooses
-  // explicitly — anyone who hid all labels before this toggle existed
-  // keeps a fully clean map.
+  // Unset road-label preferences inherit the city-label preference.
   const savedRoadLabels = localStorage.getItem('showRoadLabels');
   showRoadLabels = savedRoadLabels != null ? savedRoadLabels !== 'false' : showMapLabels;
-  // Google night-mode palette (every color verified pixel-by-pixel on live
-  // tiles): base #242f3e, parks #263c3f (s.t:37), built-up/building lots
-  // #2b3645 (81), water #17263c (6), roads #38414e + stroke #212a37 (3),
-  // transit #2f3948 (4), all labels white with the dark base as halo (the
-  // muted-tan and warm-accent label colors were both tried and reverted).
-  // Highways (49) diverge from Google's tan on purpose: light grey #5f6b7c,
-  // clearly lighter than local roads — and the fill (g.f) is set explicitly
-  // because the high-zoom highway rendering ignores the generic g rule
-  // (verified at z15: without g.f the color vanished when zoomed in).
+  // Night rules explicitly set highway fill because high zoom ignores generic geometry.
   const GMAPS_NIGHT_RULES = 's.e%3Ag%7Cp.c%3A%23242f3e,s.e%3Al.t.f%7Cp.c%3A%23ffffff,s.e%3Al.t.s%7Cp.c%3A%23242f3e,s.t%3A37%7Cs.e%3Ag%7Cp.c%3A%23263c3f,s.t%3A81%7Cs.e%3Ag%7Cp.c%3A%232b3645,s.t%3A6%7Cs.e%3Ag%7Cp.c%3A%2317263c,s.t%3A3%7Cs.e%3Ag%7Cp.c%3A%2338414e,s.t%3A3%7Cs.e%3Ag.s%7Cp.c%3A%23212a37,s.t%3A49%7Cs.e%3Ag%7Cp.c%3A%235f6b7c,s.t%3A49%7Cs.e%3Ag.f%7Cp.c%3A%235f6b7c,s.t%3A49%7Cs.e%3Ag.s%7Cp.c%3A%232a3340,s.t%3A4%7Cs.e%3Ag%7Cp.c%3A%232f3948';
-  // Everything off, then each label class the user wants back on:
-  // administrative (s.t:1, cities/neighborhoods) and roads (s.t:3, plus
-  // highways s.t:49 for names/shields at high zoom) — independently
-  // toggled in Settings → Map UI, applied to every base layer.
+  // Restore administrative and road labels independently.
   const gmapsLabelRules = () => {
     const rules = ['s.e%3Al%7Cp.v%3Aoff'];
     if (showMapLabels) rules.push('s.t%3A1%7Cs.e%3Al%7Cp.v%3Aon');
     if (showRoadLabels) rules.push('s.t%3A3%7Cs.e%3Al%7Cp.v%3Aon', 's.t%3A49%7Cs.e%3Al%7Cp.v%3Aon');
     return rules.join(',');
   };
-  // Labels are NOT baked into the basemap tiles: they render on a separate
-  // transparent overlay (lyrs=h with all geometry hidden) layered ABOVE the
-  // drive lines, so city and street names stay readable over dense route
-  // areas. The base tiles get every label stripped instead.
+  // The transparent label overlay stays above dense route lines.
   const ALL_LABELS_OFF = 's.e%3Al%7Cp.v%3Aoff';
   const gmapsUrls = () => ({
     'Dark': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${GMAPS_NIGHT_RULES},${ALL_LABELS_OFF}`,
     'Light': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${ALL_LABELS_OFF}`,
     'Satellite': `https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}`,
   });
-  // Dark re-applies the night label colors on the overlay (white text with
-  // a dark halo); Light/Satellite keep lyrs=h's default label styling.
+  // Dark mode uses white overlay labels with a dark halo.
   const NIGHT_LABEL_TEXT = 's.e%3Al.t.f%7Cp.c%3A%23ffffff,s.e%3Al.t.s%7Cp.c%3A%23242f3e';
   const gmapsLabelOverlayUrl = () => {
     const rules = [];
@@ -337,24 +274,23 @@ function initMap() {
     rules.push('s.e%3Ag%7Cp.v%3Aoff', gmapsLabelRules());
     return `https://mt1.google.com/vt/lyrs=h&x={x}&y={y}&z={z}&apistyle=${rules.join(',')}`;
   };
-  // Migrate layer choices saved under the old names.
+  // Preserve layer choices saved under legacy names.
   const LAYER_RENAMES = { 'Google Maps': 'Light', 'Google Dark': 'Dark' };
   let savedLayer = localStorage.getItem('mapLayer');
   if (LAYER_RENAMES[savedLayer]) {
     savedLayer = LAYER_RENAMES[savedLayer];
     localStorage.setItem('mapLayer', savedLayer);
   }
-  // Display order in the layer control: Light, Dark, Satellite.
   const LAYER_NAMES = ['Light', 'Dark', 'Satellite'];
   let currentBaseLayer = LAYER_NAMES.includes(savedLayer) ? savedLayer : 'Light';
 
   map = new maplibregl.Map({
     container: 'map',
-    center: [10.0, 50.0], // central Europe until drive data loads ([lng, lat])
+    center: [10.0, 50.0], // [longitude, latitude]
     zoom: 4,
     maxZoom: 20,
     attributionControl: { compact: false },
-    // The old map was flat — keep it that way (no right-drag rotate/pitch).
+    // Keep the route view flat.
     dragRotate: false,
     pitchWithRotate: false,
     touchPitch: false,
@@ -375,48 +311,40 @@ function initMap() {
           maxzoom: 20,
         },
       },
-      // The labels-overlay LAYER is added in the 'load' handler, after the
-      // route layers, so labels draw above the drive lines.
+      // The label layer is inserted after route layers load.
       layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
     },
   });
   map.touchZoomRotate.disableRotation();
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
 
-  // Swap raster tiles in place (layer switch / labels toggle).
+  // Swap tiles in place when supported.
   const setRasterTiles = (sourceId, url, beforeLayerId) => whenMapReady(() => {
     const src = map.getSource(sourceId);
     if (src && typeof src.setTiles === 'function') {
       src.setTiles([url]);
       return;
     }
-    // Fallback for older MapLibre builds: rebuild the raster source at its
-    // place in the layer order.
+    // Older MapLibre builds require rebuilding the raster source.
     if (map.getLayer(sourceId)) map.removeLayer(sourceId);
     if (src) map.removeSource(sourceId);
     map.addSource(sourceId, {
       type: 'raster', tiles: [url], tileSize: 256, maxzoom: 20,
       ...(sourceId === 'basemap' ? { attribution: '&copy; Google' } : {}),
     });
-    // A missing anchor would throw; without one the layer lands on top,
-    // which is right for neither raster.
+    // Use the anchor only when it exists.
     const before = beforeLayerId && map.getLayer(beforeLayerId) ? beforeLayerId : undefined;
     map.addLayer({ id: sourceId, type: 'raster', source: sourceId }, before);
   });
-  // Paint order: basemap → route lines → privacy zones → label overlay →
-  // charging bubbles. Both rasters are re-anchored on rebuild so a layer
-  // switch can't reshuffle that.
+  // Preserve basemap → routes → zones → labels → charging paint order.
   const applyMapTiles = () => {
     setRasterTiles('basemap', gmapsUrls()[currentBaseLayer], 'overview-dim');
     setRasterTiles('labels-overlay', gmapsLabelOverlayUrl(), 'charging-site-pills');
   };
 
-  // Re-point both rasters when the label settings change.
   applyMapLabelsSetting = applyMapTiles;
 
-  // Base-layer switcher: custom control replacing L.control.layers with the
-  // same behavior (top right, collapsed to a layers icon, expands to the
-  // radio list on hover — CSS-driven). Styled in styles.css.
+  // CSS-driven base-layer switcher.
   const layersCtrl = document.createElement('div');
   layersCtrl.id = 'map-layers-control';
   const layersToggle = document.createElement('span');
@@ -443,24 +371,18 @@ function initMap() {
   }
   document.getElementById('map').appendChild(layersCtrl);
 
-  // Route sources/layers go in once the style is ready; route data flows
-  // through whenMapReady so a drive file that loads faster than the style
-  // isn't lost.
+  // Install route sources after style load; queued data then flows through.
   map.on('load', () => {
     map.addSource('overview', { type: 'geojson', data: EMPTY_FC });
     map.addSource('selected-route', { type: 'geojson', data: EMPTY_FC });
     map.addSource('selected-traveled', { type: 'geojson', data: EMPTY_FC });
     map.addSource('charging-sites', window.ChargingView.buildChargingSourceOptions(EMPTY_FC));
-    // Dim-grey context lines under a selected drive (hidden in overview mode).
     map.addLayer({
       id: 'overview-dim', type: 'line', source: 'overview',
       layout: { 'line-join': 'round', 'line-cap': 'round', visibility: 'none' },
       paint: { 'line-color': '#555566', 'line-opacity': 1, 'line-width': OVERVIEW_LINE_WIDTH },
     });
-    // Imported drives: purple dashed (dasharray is in line-width units).
-    // Added BEFORE the native layer so dashcam lines paint on top, and kept
-    // faint/thin — a dense imported history was drowning out the real
-    // drive-data lines.
+    // Paint faint imported routes below native dashcam routes.
     map.addLayer({
       id: 'overview-imported', type: 'line', source: 'overview',
       filter: ['==', ['get', 'imported'], true],
@@ -473,11 +395,8 @@ function initMap() {
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': driveLineColors.overview, 'line-opacity': 0.5, 'line-width': OVERVIEW_LINE_WIDTH },
     });
-    // Selected drive on top: per-segment colors via feature properties;
-    // dashes can't be data-driven, hence the solid/dashed layer pair.
-    // The base route renders DIMMED (colorDim) — the not-yet-traveled state.
-    // The 'selected-traveled' overlay above it grows behind the replay marker
-    // in the normal colors, revealing the route as it's driven (or scrubbed).
+    // Separate solid/dashed layers because dash patterns are not data-driven.
+    // The traveled overlay reveals normal color above the dim base route.
     map.addLayer({
       id: 'selected-solid', type: 'line', source: 'selected-route',
       filter: ['!=', ['get', 'dashed'], true],
@@ -502,9 +421,7 @@ function initMap() {
       layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: { 'line-color': ['get', 'color'], 'line-opacity': 0.95, 'line-width': SELECTED_LINE_WIDTH, 'line-dasharray': [1.6, 1] },
     });
-    // Privacy zone circles (Settings → Privacy) — visible only while that
-    // tab is open or a zone is being placed. Amber, distinct from the route
-    // palette.
+    // Privacy zones use a route-distinct amber style.
     map.addSource('privacy-zones', { type: 'geojson', data: EMPTY_FC });
     map.addLayer({
       id: 'privacy-zones-fill', type: 'fill', source: 'privacy-zones',
@@ -514,11 +431,9 @@ function initMap() {
       id: 'privacy-zones-line', type: 'line', source: 'privacy-zones',
       paint: { 'line-color': '#f59e0b', 'line-width': 2, 'line-dasharray': [2, 1.5], 'line-opacity': 0.8 },
     });
-    // City/street labels above every drive line (transparent overlay tiles).
+    // Transparent city/street labels above route lines.
     map.addLayer({ id: 'labels-overlay', type: 'raster', source: 'labels-overlay' });
-    // Charging bubbles go in LAST, above the label overlay: they're
-    // interactive pins, not map furniture, and the Google label tiles were
-    // otherwise painting street/city names straight over them.
+    // Interactive charging pills must paint above label tiles.
     for (const layer of window.ChargingView.buildChargingSiteLayers()) map.addLayer(layer);
     for (const layer of window.ChargingView.buildChargingClusterLayers()) map.addLayer(layer);
     mapReady = true;
@@ -528,7 +443,7 @@ function initMap() {
   const mapStatsEl = document.getElementById('map-stats');
   if (mapStatsEl) {
     mapStatsEl.addEventListener('click', (e) => {
-      // Don't toggle when interacting with the tag editor inside the panel.
+      // Tag-editor clicks must not collapse the panel.
       if (e.target.closest('.map-stats-tags')) return;
       mapStatsEl.classList.toggle('expanded');
     });
@@ -536,12 +451,7 @@ function initMap() {
 
   window.addEventListener('resize', () => map.resize());
 
-  // The replay marker's CSS transition smooths its point-to-point steps,
-  // but MapLibre repositions markers through the same transform on every
-  // map frame — while the user pans/zooms, the eased marker visibly slides
-  // off the route and catches up afterwards. Suspend the easing for the
-  // whole gesture (movestart→moveend covers drags incl. inertia, zooms,
-  // and programmatic fitBounds animations alike).
+  // MapLibre owns marker transforms during map motion, so suspend CSS easing.
   map.on('movestart', () => {
     mapInteracting = true;
     const el = replayMarker?.getElement();
@@ -549,16 +459,7 @@ function initMap() {
   });
   map.on('moveend', () => { mapInteracting = false; });
 
-  // Drive selection: GPU hit-test the route layers within a 10px box around
-  // the click (replaces the old delegated nearest-segment search). Hidden
-  // layers return no features, so "Hide other drives" needs no special case;
-  // features come back topmost-first, so the selected drive's own line wins
-  // over dimmed context lines (clicking it toggles the selection off, same
-  // as clicking the drive in the list).
-  // Privacy-zone placement. Aim: the preview follows the cursor and dragging
-  // pans the map as normal. Confirm: grabbing the circle's edge (anywhere on
-  // the ring) resizes the zone — preventDefault on that mousedown keeps the
-  // map still for the gesture, everywhere else still pans.
+  // Zone ring drags resize; other drags keep normal map panning.
   map.on('mousemove', (e) => {
     const p = zonePlacement;
     if (!p || !mapReady) return;
@@ -583,7 +484,7 @@ function initMap() {
     if (!p || p.stage !== 'confirm' || !p.center) return;
     if (zoneNearRing(e)) {
       p.ringDrag = true;
-      e.preventDefault(); // hold the map still while resizing
+      e.preventDefault(); // Keep the map still while resizing.
     }
   });
   map.on('mouseup', () => {
@@ -594,9 +495,7 @@ function initMap() {
 
   map.on('click', (e) => {
     if (!mapReady) return;
-    // Aim stage: a plain click (never a pan — MapLibre suppresses click after
-    // dragging) drops the pin and opens the editor. Any other placement stage
-    // swallows clicks so they can't select drives underneath the preview.
+    // Placement clicks must not select routes underneath the preview.
     if (zonePlacement) {
       if (zonePlacement.stage === 'aim') {
         zonePlacement.center = { lat: e.lngLat.lat, lng: e.lngLat.lng };
@@ -639,9 +538,7 @@ function initMap() {
     }
   });
 
-  // Vehicle markers are sized in map metres, so they have to be re-measured
-  // whenever the scale changes. Resizing the existing <img> is cheap — no
-  // re-tint, no marker rebuild — so running it per zoom frame is fine.
+  // Physical-scale vehicle markers must resize on zoom.
   map.on('zoom', resizeVehicleMarkerToZoom);
 
   document.getElementById('btn-back-overview').addEventListener('click', (e) => {
@@ -650,13 +547,12 @@ function initMap() {
   });
 }
 
-// Rescale the live replay marker for the current zoom, preserving its bearing
-// (the rotation lives on the inner <img>'s transform, which we don't touch).
+// Resize without replacing the inner image transform that holds bearing.
 function resizeVehicleMarkerToZoom() {
   if (!replayMarker || !(markerType in VEHICLE_MODELS)) return;
   const { w, h } = getMarkerSize();
   const el = replayMarker.getElement();
-  if (el.style.width === `${w}px`) return; // no visible change — skip the write
+  if (el.style.width === `${w}px`) return;
   el.style.width = `${w}px`;
   el.style.height = `${h}px`;
   const img = el.querySelector('#replay-arrow');
@@ -688,22 +584,19 @@ function switchMainTab(tab) {
 }
 
 // ─── Footer & Settings ───────────────────────────────────────────────────────
-let updateState = 'idle'; // idle | checking | available | downloading | ready | error
-let updateSkipped = false; // true after user dismisses the update modal this session
+let updateState = 'idle';
+let updateSkipped = false;
 let pendingRemoveDrive = null;
 
 function initFooter() {
-  // GitHub / Discord links open in the external browser
   document.getElementById('link-github').addEventListener('click', (e) => {
     e.preventDefault();
     window.electronAPI.openExternal('https://github.com/Sentry-Six/Sentry-Drive');
   });
   document.getElementById('link-discord').addEventListener('click', () => {
-    // Same invite as the README badge
     window.electronAPI.openExternal('https://discord.gg/9QZEzVwdnt');
   });
 
-  // Settings modal
   document.getElementById('btn-settings').addEventListener('click', () => {
     document.getElementById('settings-overlay').classList.remove('hidden');
     refreshTessieStatus();
@@ -721,8 +614,7 @@ function initFooter() {
     }
   });
 
-  // Settings tabs (scoped classes so they don't collide with the main tab bar).
-  // The last-active tab persists across opens (no reset on open).
+  // Scoped tab classes avoid colliding with the main tab bar.
   document.querySelectorAll('.settings-tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const stab = btn.dataset.stab;
@@ -730,11 +622,10 @@ function initFooter() {
       document.querySelectorAll('.settings-pane').forEach((p) => p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById(`stab-${stab}`).classList.add('active');
-      setPrivacyZonesVisible(stab === 'privacy'); // zone circles preview on the map
+      setPrivacyZonesVisible(stab === 'privacy');
     });
   });
 
-  // Privacy zones: add-custom-location + initial rows
   document.getElementById('btn-add-zone').addEventListener('click', () => {
     privacyZones.push({ id: `zone-${Date.now()}`, kind: 'custom', name: 'Custom location', lat: null, lng: null, radiusM: 150 });
     savePrivacyZones();
@@ -742,8 +633,7 @@ function initFooter() {
   });
   renderPrivacyZones();
 
-  // Zone icon picker: build the Material Symbols grid once; clicks route to
-  // whichever zone opened the popover.
+  // Build one shared zone-icon picker.
   const zoneIconGrid = document.querySelector('#zone-icon-popup .zone-icon-grid');
   zoneIconGrid.innerHTML = ZONE_ICON_CHOICES.map((n) =>
     `<button class="zone-icon-choice" data-icon="${n}" type="button" title="${n.replace(/_/g, ' ')}"><span class="material-icons">${n}</span></button>`
@@ -766,7 +656,7 @@ function initFooter() {
     if (e.key === 'Escape' && zoneIconPickerTarget) closeZoneIconPicker();
   });
 
-  // ── Integrations tab: Tessie (inline connect/auth) ─────────────────────
+  // Tessie integration
   const tessieConnectForm = document.getElementById('tessie-connect-form');
   const tessieConnectedView = document.getElementById('tessie-connected');
   const tessieTokenInput = document.getElementById('tessie-token-input');
@@ -783,8 +673,7 @@ function initFooter() {
     tessieConnectErr.classList.remove('hidden');
   }
 
-  // Paint the card for the current connection state (connected → token + import,
-  // disconnected → connect form). Drives the header status pill too.
+  // Synchronize the connection card and status pill.
   function renderTessieState(token) {
     const connected = !!token;
     if (tessieStatusPill) {
@@ -846,12 +735,11 @@ function initFooter() {
     });
   }
 
-  // Import is launched from the View Drives tab → "Import Drives" (which opens
-  // the service-aware import modal). Integrations is token management only.
+  // Imports launch from the service-aware View Drives modal.
 
   refreshTessieStatus();
 
-  // ── Integrations tab: Teslascope (connect-only for now) ────────────────
+  // Teslascope integration
   const teslascopeConnectForm = document.getElementById('teslascope-connect-form');
   const teslascopeConnectedView = document.getElementById('teslascope-connected');
   const teslascopeTokenInput = document.getElementById('teslascope-token-input');
@@ -923,14 +811,12 @@ function initFooter() {
   if (teslascopeGetTokenLink) {
     teslascopeGetTokenLink.addEventListener('click', (e) => {
       e.preventDefault();
-      // API keys live under Account → Security.
       if (window.electronAPI) window.electronAPI.openExternal('https://teslascope.com/account/security');
     });
   }
 
   refreshTeslascopeStatus();
 
-  // Version display
   window.electronAPI.getAppVersion().then(async (v) => {
     document.getElementById('settings-version-number').textContent = `v${v}`;
     document.querySelector('.footer-version').textContent = `v${v}`;
@@ -955,24 +841,20 @@ function initFooter() {
     window.electronAPI.revertToStable();
   });
 
-  // Listen for update events from main process
   window.electronAPI.onUpdateStatus(onUpdateStatus);
 
-  // Settings "Check for Update" button
   document.getElementById('btn-check-update').addEventListener('click', () => {
     if (updateState === 'available') {
       window.electronAPI.downloadUpdate();
     } else if (updateState === 'ready') {
       window.electronAPI.installUpdate();
     } else if (updateState === 'idle' || updateState === 'error') {
-      // Show "Checking…" immediately (not when main answers) so the click
-      // always visibly does something, and arm the no-answer watchdog.
+      // Show immediate feedback while the main process checks.
       beginUpdateCheckUI();
       window.electronAPI.checkForUpdate();
     }
   });
 
-  // Update modal buttons
   document.getElementById('btn-update-now').addEventListener('click', () => {
     document.getElementById('update-overlay').classList.add('hidden');
     window.electronAPI.downloadUpdate();
@@ -982,7 +864,6 @@ function initFooter() {
     document.getElementById('update-overlay').classList.add('hidden');
   });
 
-  // Footer download button
   document.getElementById('btn-footer-update').addEventListener('click', () => {
     if (updateState === 'available') {
       window.electronAPI.downloadUpdate();
@@ -991,7 +872,6 @@ function initFooter() {
     }
   });
 
-  // Beta checkbox
   const betaCheckbox = document.getElementById('chk-beta');
   const betaWarning = document.getElementById('beta-warning');
   const savedBeta = localStorage.getItem('enrollBeta') === 'true';
@@ -1010,11 +890,9 @@ function initFooter() {
       betaWarning.classList.add('hidden');
     }
 
-    // Re-check for updates with new prerelease setting
     window.electronAPI.checkForUpdate();
   });
 
-  // Vehicle marker type + color
   const selMarkerType   = document.getElementById('sel-marker-type');
   const vehicleColorRow = document.getElementById('vehicle-color-row');
   const vehiclePreview  = document.getElementById('vehicle-preview-wrap');
@@ -1025,9 +903,7 @@ function initFooter() {
     vehiclePreview.classList.toggle('hidden', !isVehicle);
   };
 
-  // Self-pruning options: a vehicle whose artwork isn't fully shipped (both
-  // the _t texture and the _c paint mask are required) drops out of the
-  // dropdown instead of rendering nothing.
+  // Remove vehicle options whose texture or mask is unavailable.
   for (const [key, model] of Object.entries(VEHICLE_MODELS)) {
     const prune = (missing) => () => {
       selMarkerType.querySelector(`option[value="${key}"]`)?.remove();
@@ -1049,9 +925,7 @@ function initFooter() {
   selMarkerType.value = markerType;
   syncVehicleUI();
 
-  // Lazy-init iro color wheel — only once. The popup is shared: each swatch
-  // re-targets it through openColorPopup, and color:change routes to whichever
-  // onChange is active.
+  // Initialize the shared color wheel once.
   if (!carColorPicker) {
     carColorPicker = new iro.ColorPicker('#car-color-picker', {
       width: 160,
@@ -1073,7 +947,7 @@ function initFooter() {
     hexInput.addEventListener('input', () => {
       const val = hexInput.value;
       if (/^#[0-9a-fA-F]{6}$/.test(val)) {
-        carColorPicker.color.hexString = val; // fires color:change → active target
+        carColorPicker.color.hexString = val;
       }
     });
 
@@ -1086,7 +960,6 @@ function initFooter() {
     openColorPopup(swatch, 'Car Color', markerColor, scheduleMarkerColorUpdate);
   });
 
-  // Drive line colors — one swatch per palette role, sharing the same popup.
   const LINE_COLOR_TITLES = { manual: 'Manual', fsd: 'Full Self-Driving', summon: 'Summon', imported: 'Imported', overview: 'All Drives' };
   const lineSwatches = document.querySelectorAll('.line-color-swatch');
   const syncLineSwatches = () => {
@@ -1118,14 +991,12 @@ function initFooter() {
     markerType = selMarkerType.value;
     localStorage.setItem('markerType', markerType);
     syncVehicleUI();
-    // Ensure the vehicle texture is ready before rebuilding the icon — otherwise
-    // buildMarkerHtml falls back to the arrow.
+    // Wait for tinting before rebuilding to avoid an arrow fallback.
     if (markerType in VEHICLE_MODELS) await applyMarkerColor(markerColor);
     refreshReplayMarkerIcon();
   });
 
-  // "Show other drives when viewing a drive" — inverted presentation of the
-  // stored hideOtherDrives flag, so existing preferences carry over as-is.
+  // The UI presents the inverse of the persisted hideOtherDrives flag.
   const showOthersChk = document.getElementById('chk-show-other-drives');
   hideOtherDrives = localStorage.getItem('hideOtherDrives') === 'true';
   showOthersChk.checked = !hideOtherDrives;
@@ -1135,7 +1006,6 @@ function initFooter() {
     applyOtherDrivesVisibility();
   });
 
-  // FSD markers setting (default: on)
   const fsdMarkersChk = document.getElementById('chk-show-fsd-markers');
   showFsdMarkers = localStorage.getItem('showFsdMarkers') !== 'false';
   fsdMarkersChk.checked = showFsdMarkers;
@@ -1145,7 +1015,7 @@ function initFooter() {
     applyFsdMarkerVisibility();
   });
 
-  // Zone markers setting (default: on; editing sessions always show them)
+  // Editing sessions override the zone-marker preference.
   const zoneMarkersChk = document.getElementById('chk-show-zone-markers');
   zoneMarkersChk.checked = showZoneMarkers;
   zoneMarkersChk.addEventListener('change', () => {
@@ -1154,7 +1024,6 @@ function initFooter() {
     updatePrivacyZoneLayer();
   });
 
-  // Support → Logs: save the main-process log buffer as a .txt via save dialog.
   const logsBtn = document.getElementById('btn-download-logs');
   if (logsBtn) {
     logsBtn.addEventListener('click', async () => {
@@ -1171,7 +1040,7 @@ function initFooter() {
           alert(`Couldn't save logs: ${r.error ?? 'unknown error'}`);
         }
       } catch (err) {
-        // e.g. the main process predates the download-logs handler
+        // A renderer-only reload may not have the matching main-process handler.
         alert(`Couldn't save logs: ${err.message}`);
       }
     });
@@ -1186,8 +1055,7 @@ function initFooter() {
     applyMapLabelsSetting();
   });
 
-  // Same default-follow logic as initMap: unset road labels mirror the
-  // city-labels choice so pre-toggle opt-outs keep a label-free map.
+  // Unset road-label preferences inherit the city-label choice.
   const roadLabelsChk = document.getElementById('chk-show-road-labels');
   const savedRoadLabelsChoice = localStorage.getItem('showRoadLabels');
   showRoadLabels = savedRoadLabelsChoice != null ? savedRoadLabelsChoice !== 'false' : showMapLabels;
@@ -1215,14 +1083,12 @@ function initFooter() {
   document.getElementById('btn-refresh-superchargers').addEventListener('click', refreshSuperchargerCatalog);
   updateSuperchargerCatalogStatus();
 
-  // Auto-load drive data setting (default: true, preserve existing behavior for existing users)
   const autoLoadChk = document.getElementById('chk-autoload-drive-data');
   autoLoadChk.checked = localStorage.getItem('autoLoadDriveData') !== 'false';
   autoLoadChk.addEventListener('change', () => {
     localStorage.setItem('autoLoadDriveData', String(autoLoadChk.checked));
   });
 
-  // Unit system toggle
   const unitToggle = document.getElementById('unit-toggle');
   const syncUnitToggleActive = () => {
     unitToggle.querySelectorAll('.settings-segment-btn').forEach((b) => {
@@ -1239,10 +1105,9 @@ function initFooter() {
     localStorage.setItem('unitSystem', unitSystem);
     syncUnitToggleActive();
     refreshUnitDisplay();
-    renderPrivacyZones(); // radius inputs re-label ft/m
+    renderPrivacyZones();
   });
 
-  // Auto-check on launch
   window.electronAPI.checkForUpdate();
 }
 
@@ -1365,10 +1230,7 @@ function renderChangelogEntry(entry) {
   `;
 }
 
-// User-initiated checks: remember when the check started so the result can be
-// held back until "Checking…" was visible long enough to register (a fast
-// server answers in ~200 ms — an imperceptible flicker), and arm a watchdog so
-// a hung network can't leave the button stuck on "Checking…" forever.
+// Enforce perceptible feedback and a timeout for user-initiated update checks.
 let checkStartedMs = 0;
 let checkWatchdog = null;
 
@@ -1388,7 +1250,7 @@ function onUpdateStatus(payload) {
     clearTimeout(checkWatchdog);
     checkWatchdog = null;
   }
-  // Hold a too-fast answer so the Checking… state is perceptible.
+  // Keep the checking state visible briefly.
   const elapsed = Date.now() - checkStartedMs;
   const MIN_CHECKING_MS = 600;
   if (terminal && checkStartedMs && elapsed < MIN_CHECKING_MS) {
@@ -1417,14 +1279,12 @@ function applyUpdateStatus({ status, version, percent, message }) {
       break;
 
     case 'available':
-      // Settings panel
       btn.textContent = 'Update';
       btn.disabled = false;
       btn.className = 'btn-primary btn-update-full';
       msg.textContent = `New update available (v${version})`;
       msg.className = 'settings-update-msg update-available';
 
-      // Show update modal if user hasn't skipped this session
       if (!updateSkipped) {
         document.getElementById('update-modal-msg').textContent =
           `Version ${version} is ready to install.`;
@@ -1432,7 +1292,6 @@ function applyUpdateStatus({ status, version, percent, message }) {
         populateUpdateModalChanges(version);
       }
 
-      // Show footer download button, flashing yellow until acted on
       footerBtn.classList.remove('hidden', 'update-downloading', 'update-ready');
       footerBtn.classList.add('update-attention');
       footerBtn.disabled = false;
@@ -1459,8 +1318,7 @@ function applyUpdateStatus({ status, version, percent, message }) {
       msg.textContent = `Downloading update…`;
       msg.className = 'settings-update-msg update-available';
 
-      // Animated download icon while the bytes come in (the % is in the
-      // tooltip — the 26px button has no room for text).
+      // Put download percentage in the tooltip due to the compact button.
       footerBtn.classList.remove('hidden', 'update-attention', 'update-ready');
       footerBtn.classList.add('update-downloading');
       footerBtn.disabled = true;
@@ -1475,7 +1333,6 @@ function applyUpdateStatus({ status, version, percent, message }) {
       msg.textContent = 'Update downloaded. Restart to apply.';
       msg.className = 'settings-update-msg update-available';
 
-      // Orange + flashing until the user restarts.
       footerBtn.classList.remove('hidden', 'update-attention', 'update-downloading');
       footerBtn.classList.add('update-ready');
       footerBtn.disabled = false;
@@ -1509,9 +1366,7 @@ function showLoading(msg = 'Loading drive data...') {
   overlay.querySelector('.loading-text').textContent = msg;
   overlay.classList.remove('hidden');
 
-  // Reset and arm the progress bar. It stays hidden until the first
-  // load-progress event arrives (avoids flashing an empty bar for actions
-  // that don't emit progress, like tag edits that re-render but don't load).
+  // Keep progress hidden until an action emits its first event.
   const progressEl = document.getElementById('load-progress');
   const barEl = document.getElementById('load-bar');
   const detailEl = document.getElementById('load-detail');
@@ -1521,13 +1376,11 @@ function showLoading(msg = 'Loading drive data...') {
     if (detailEl) detailEl.textContent = '';
   }
 
-  // Subscribe to load progress; auto-unsubscribed in hideLoading.
   if (loadProgressUnsubscribe) { loadProgressUnsubscribe(); loadProgressUnsubscribe = null; }
   loadProgressUnsubscribe = window.electronAPI.onLoadProgress?.(({ phase, current, total }) => {
     if (progressEl?.classList.contains('hidden')) progressEl.classList.remove('hidden');
     if (phase === 'reading') {
-      // Map bytes 0..total to bar width 0..90% so grouping/preparing have
-      // visible headroom for the final push.
+      // Reserve the final 10% for grouping and display preparation.
       const frac = total > 0 ? current / total : 0;
       if (barEl) barEl.style.width = (frac * 90).toFixed(1) + '%';
       overlay.querySelector('.loading-text').textContent = 'Reading drive data…';
@@ -1550,19 +1403,16 @@ function hideLoading() {
 }
 
 // ─── Processing Tab ───────────────────────────────────────────────────────────
-// True for any path inside an Electron app.asar — a read-only virtual FS where
-// nothing can be written. Older builds defaulted the output dir to one.
+// Electron app.asar paths are read-only.
 const isAsarPath = (p) => /\.asar([\\/]|$)/i.test(p || '');
 
 function initProcessingTab() {
   const clipsDirInput = document.getElementById('clips-dir');
 
-  // Restore last used folders
   const savedClipsDir = localStorage.getItem('lastClipsDir');
   if (savedClipsDir) clipsDirInput.value = savedClipsDir;
 
-  // Drop a saved output dir left behind by older builds' bad app.asar default
-  // so loadDefaultPaths() refills the field with the corrected default.
+  // Discard persisted paths that point into app.asar.
   const savedOutputDir = localStorage.getItem('lastOutputDir');
   if (isAsarPath(savedOutputDir)) {
     localStorage.removeItem('lastOutputDir');
@@ -1609,7 +1459,6 @@ function initProcessingTab() {
   document.getElementById('btn-process-new').addEventListener('click', () => startProcessing({ reprocessAll: false }));
   document.getElementById('btn-stop').addEventListener('click', stopProcessing);
 
-  // Worker slider
   const slider = document.getElementById('worker-count');
   const display = document.getElementById('worker-count-display');
   slider.addEventListener('input', () => { display.textContent = slider.value; });
@@ -1619,7 +1468,6 @@ function initProcessingTab() {
     display.textContent = optimal;
   });
 
-  // Load CPU count and set slider defaults
   window.electronAPI.getCpuCount().then((n) => {
     cpuCount = n;
     const optimal = Math.max(1, n - 1);
@@ -1636,7 +1484,7 @@ async function loadDefaultPaths() {
     outputInput.value = defaultDir;
   }
 
-  // Auto-load drive-data if enabled (default: true) and we have a saved path or can find one in the output dir
+  // Auto-load a saved or discoverable drive-data file.
   if (localStorage.getItem('autoLoadDriveData') !== 'false') {
     const savedDriveData = localStorage.getItem('lastDriveDataPath');
     if (savedDriveData) {
@@ -1697,9 +1545,7 @@ async function changeDrivePage(direction) {
   }
 }
 
-// Re-query the loader with the current filters (from page 1) and re-render.
-// The page model folds the filters into next/previous too, so paging stays
-// inside the filtered set.
+// Re-query from page one; subsequent paging retains these filters.
 async function applyDriveFilters() {
   if (!drivePageModel || !loadedFilePath) return;
   const pager = document.getElementById('drive-pager');
@@ -1721,9 +1567,7 @@ async function applyLoadedDriveData(result, filePath) {
   pendingExternalReload = false;
   window.electronAPI.watchDriveData(filePath);
   driveCacheGen = result.cacheGen;
-  // Carry the active filters across reloads (auto-refresh re-runs this path;
-  // clearing the user's filter mid-session would be surprising). A fresh
-  // session still starts unfiltered — the defaults are all-off.
+  // Preserve active filters across automatic reloads.
   const state = await drivePageModel.load({ ...driveFilters });
   drivePageState = state;
   drives = state.drives;
@@ -1752,7 +1596,7 @@ async function autoLoadDriveData(filePath) {
 
     switchMainTab('drives');
   } catch {
-    // File may no longer exist — clear saved path
+    // Clear a path that no longer loads.
     localStorage.removeItem('lastDriveDataPath');
   }
   hideLoading();
@@ -1765,8 +1609,7 @@ async function startProcessing({ reprocessAll = false } = {}) {
   if (!clipsDir)  { alert('Please select a clips directory.'); return; }
   if (!outputDir) { alert('Please select an output directory.'); return; }
 
-  // A dir inside the read-only app.asar would only fail at the end of the run,
-  // at the final save — explain and prompt for a real folder instead.
+  // Reject app.asar paths before the final save can fail.
   if (isAsarPath(outputDir)) {
     alert('The output folder points inside the app installation (app.asar), which is read-only.\nPlease choose a different output folder.');
     outputDir = await window.electronAPI.selectDirectory({});
@@ -1777,7 +1620,6 @@ async function startProcessing({ reprocessAll = false } = {}) {
   localStorage.setItem('lastClipsDir', clipsDir);
   localStorage.setItem('lastOutputDir', outputDir);
 
-  // Check whether drive-data.json already exists in the output directory
   const exists = await window.electronAPI.checkDriveData(outputDir);
   if (reprocessAll) {
     appendLogLine(
@@ -1794,7 +1636,6 @@ async function startProcessing({ reprocessAll = false } = {}) {
 
   const workerCount = parseInt(document.getElementById('worker-count').value, 10);
 
-  // Reset UI
   document.getElementById('log-output').innerHTML = '';
   document.getElementById('progress-section').classList.remove('hidden');
   document.getElementById('eta-label').textContent = '';
@@ -1832,9 +1673,7 @@ function onProcessingDone(code) {
   processingStartTime = null;
   document.getElementById('eta-label').textContent = '';
 
-  // Processing rewrote drive-data.json — show the new data now (the watcher
-  // deferred the refresh while the run was active). If the poll hasn't seen the
-  // final write yet, it will within a few seconds and refresh then anyway.
+  // Apply a file change deferred while processing was active.
   if (pendingExternalReload && selectedDriveId === null) {
     pendingExternalReload = false;
     reloadDrivesAfterWrite();
@@ -1862,7 +1701,7 @@ function setProcessingButtons(running) {
 function appendOutput({ type, text }) {
   if (!text) return;
 
-  // Simulate terminal \r: take last segment after each \r per line
+  // Interpret carriage returns like an updating terminal line.
   const lines = text
     .split('\n')
     .map((seg) => seg.split('\r').pop())
@@ -1873,7 +1712,7 @@ function appendOutput({ type, text }) {
     appendLogLine(line, type === 'stderr' ? 'error' : 'normal');
   }
 
-  // Phase 1 — directory scan: "SCAN N/M" → 0–100%
+  // Output protocol: `SCAN N/M` reports directory-scan progress.
   const scanMatch = text.match(/SCAN (\d+)\/(\d+)/);
   if (scanMatch) {
     const pct = Math.round((parseInt(scanMatch[1], 10) / parseInt(scanMatch[2], 10)) * 100);
@@ -1881,7 +1720,7 @@ function appendOutput({ type, text }) {
     updateProgressBar(pct);
   }
 
-  // Phase 2 — GPS extraction: "(N%)" → 0–100% (resets bar)
+  // `(N%)` reports extraction progress and starts a fresh bar.
   const extractMatch = text.match(/\((\d+)%\)/);
   if (extractMatch) {
     document.getElementById('progress-phase').textContent = 'Processing…';
@@ -1930,7 +1769,7 @@ function initViewDrivesTab() {
   document.getElementById('drive-page-prev').addEventListener('click', () => changeDrivePage('previous'));
   document.getElementById('drive-page-next').addEventListener('click', () => changeDrivePage('next'));
 
-  // Date-range filter (inclusive both ends; either side may be open)
+  // Date bounds are inclusive and independently optional.
   const dateStart = document.getElementById('filter-date-start');
   const dateEnd = document.getElementById('filter-date-end');
   const dateClear = document.getElementById('btn-clear-dates');
@@ -1950,12 +1789,7 @@ function initViewDrivesTab() {
 
   initTessieImport();
 
-  // Auto-refresh when drive-data.json changes on disk (e.g. Sentry USB
-  // re-exports it, or our own processing finishes). The main process suppresses
-  // the app's own writes, so this only fires for external changes. Defer the
-  // refresh while the user is viewing a specific drive or a processing run is
-  // active — applied when they return to the overview / processing finishes —
-  // so an external update never yanks them out of a replay.
+  // Defer external file refreshes during replay or processing.
   window.electronAPI.onDriveDataChanged(() => {
     if (!loadedFilePath) return;
     if (selectedDriveId !== null || processingStartTime !== null) {
@@ -2025,9 +1859,7 @@ function initViewDrivesTab() {
     removeDriveOverlay.classList.add('hidden');
     const drive = pendingRemoveDrive;
     pendingRemoveDrive = null;
-    // Removing rewrites the whole drive-data.json — seconds on a large
-    // library — and the re-render afterwards blocks the renderer too. Keep
-    // the spinner overlay up for the whole stretch or the app looks frozen.
+    // Cover the full-file rewrite and synchronous re-render with the overlay.
     showLoading('Removing drive…');
     try {
       const result = await window.electronAPI.removeDrive({ filePath: loadedFilePath, driveStartTime: drive.startTime });
@@ -2035,17 +1867,12 @@ function initViewDrivesTab() {
       const wasSelected = selectedDriveId === drive.id;
       drives = drives.filter((d) => d.startTime !== drive.startTime);
       if (wasSelected) deselectDrive();
-      // Let the overlay paint one frame before the synchronous re-render
-      // briefly blocks the renderer (mirrors reloadDrivesAfterWrite).
+      // Paint the overlay before the synchronous re-render.
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       renderDriveList(drives);
-      // Redraw the map so the deleted drive's polyline is removed immediately —
-      // renderOverviewOnMap() clears all layers and rebuilds from `drives`.
-      // Without this the line lingered until the next map render (e.g. selecting
-      // another drive).
+      // Rebuild map layers to remove the deleted route.
       renderOverviewOnMap();
-      // Keep the existing meta (hiddenTessieDrives etc.) — passing zeros here
-      // used to clobber lastDrivesMeta after a removal.
+      // Retain aggregate metadata across the local removal.
       renderDriveStats(drives, lastDrivesMeta ?? { totalRoutes: 0, processedFileCount: 0 });
       updateTessieButtonStates();
     } finally {
@@ -2053,9 +1880,7 @@ function initViewDrivesTab() {
     }
   });
 
-  // ── Multi-select action bar + shared bulk-removal confirm ──
-  // The confirm modal is shared with privacy-zone culls: callers queue
-  // targets + message via openBulkRemoveModal, the confirm here executes.
+  // Shared confirmation for multi-select and privacy-zone removals.
   const removeDrivesOverlay = document.getElementById('remove-drives-overlay');
   document.getElementById('btn-multi-clear').addEventListener('click', clearMultiSelect);
   document.addEventListener('keydown', (e) => {
@@ -2084,8 +1909,7 @@ function initViewDrivesTab() {
     const targets = pendingBulkRemove ?? [];
     pendingBulkRemove = null;
     if (!targets.length || !loadedFilePath) return;
-    // One IPC round-trip removes the whole batch in a single file rewrite;
-    // the overlay covers the rewrite AND the list/map re-render after.
+    // One IPC round-trip performs the batch rewrite.
     showLoading(`Removing ${targets.length} drive${targets.length === 1 ? '' : 's'}…`);
     try {
       const result = await window.electronAPI.removeDrives({
@@ -2098,10 +1922,9 @@ function initViewDrivesTab() {
       drives = drives.filter((d) => !removed.has(d.startTime));
       logAction(`removed ${targets.length} drive(s) via bulk remove`);
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      renderDriveList(drives); // also clears any multi-selection
+      renderDriveList(drives);
       renderOverviewOnMap();
-      // Keep the existing meta (hiddenTessieDrives etc.) — passing zeros here
-      // used to clobber lastDrivesMeta after a removal.
+      // Retain aggregate metadata across the local removal.
       renderDriveStats(drives, lastDrivesMeta ?? { totalRoutes: 0, processedFileCount: 0 });
       updateTessieButtonStates();
     } finally {
@@ -2110,11 +1933,11 @@ function initViewDrivesTab() {
   });
 }
 
-// ─── Tessie Import ───────────────────────────────────────────────────────────
+// ─── Drive Imports ───────────────────────────────────────────────────────────
 let tessieProgressListener = null;
 let tessieDrivesPath = '';
 let tessieStatesPath = '';
-let importJsonPath = '';       // source path for "Drive Data File" import mode
+let importJsonPath = '';
 let tessieImportMode = 'api';
 
 function initTessieImport() {
@@ -2132,8 +1955,7 @@ function initTessieImport() {
   const toInput = document.getElementById('tessie-api-to');
   const serviceSelect = document.getElementById('import-service');
 
-  // Connected-service registry. The modal routes every call through the
-  // selected service; tokens live in Settings → Integrations (not entered here).
+  // Route modal actions through connected services; tokens remain in Settings.
   const SERVICES = {
     tessie: {
       label: 'Tessie', idField: 'vin',
@@ -2164,7 +1986,7 @@ function initTessieImport() {
   let selectedService = 'tessie';
   const svc = () => SERVICES[selectedService] || SERVICES.tessie;
 
-  // Populate the dropdown with CONNECTED services (token saved in Integrations).
+  // List only connected services.
   async function populateServices() {
     const entries = Object.entries(SERVICES);
     const tokens = await Promise.all(entries.map(([, s]) => s.getToken().catch(() => null)));
@@ -2183,7 +2005,7 @@ function initTessieImport() {
     return true;
   }
 
-  // CSV tab only shows for services that support it (Tessie today).
+  // Show CSV mode only for supporting services.
   function applyServiceUI() {
     const csvBtn = document.querySelector('.tessie-mode-btn[data-mode="csv"]');
     if (csvBtn) csvBtn.classList.toggle('hidden', !svc().csv);
@@ -2201,9 +2023,9 @@ function initTessieImport() {
       applyServiceUI();
       refreshConfirmReady();
       try {
-        const r = await svc().getToken(); // local IPC — fast
+        const r = await svc().getToken();
         tokenInput.value = (r && r.token) || '';
-        // Not awaited: cached vehicles render instantly; fresh ones stream in.
+        // Refresh vehicles without delaying cached content.
         if (tokenInput.value) validateApiToken(true);
       } catch {}
     });
@@ -2226,11 +2048,9 @@ function initTessieImport() {
     closeBtn.title = 'Close';
   };
 
-  // Mode toggle
   document.querySelectorAll('.tessie-mode-btn').forEach((b) => {
     b.addEventListener('click', () => {
-      // Re-clicking the active tab is a no-op (CSS also disables pointer
-      // events on the active tab).
+      // Ignore re-selection of the active mode.
       if (b.dataset.mode === tessieImportMode) return;
       tessieImportMode = b.dataset.mode;
       document.querySelectorAll('.tessie-mode-btn').forEach((x) => x.classList.toggle('active', x === b));
@@ -2253,14 +2073,12 @@ function initTessieImport() {
     refreshConfirmReady();
   });
 
-  // Default date range: last 90 days
   const today = new Date();
   const ninetyAgo = new Date(today.getTime() - 90 * 24 * 3600 * 1000);
   const fmtDate = (d) => d.toISOString().slice(0, 10);
   fromInput.value = fmtDate(ninetyAgo);
   toInput.value = fmtDate(today);
 
-  // Open link in external browser
   document.getElementById('tessie-token-link').addEventListener('click', (e) => {
     e.preventDefault();
     window.electronAPI.openExternal('https://dash.tessie.com/settings/api');
@@ -2315,28 +2133,21 @@ function initTessieImport() {
     refreshConfirmReady();
   });
 
-  // Validate API token (load vehicles + save token)
   document.getElementById('tessie-api-validate').addEventListener('click', () => validateApiToken(false));
   tokenInput.addEventListener('change', () => validateApiToken(false));
-  // No background querying: changing dates or the vehicle only re-evaluates
-  // whether Import can be clicked — the service API is contacted when the
-  // user clicks Import, not before.
+  // Date and vehicle changes validate inputs without querying the service.
   [fromInput, toInput, vinSelect].forEach((el) => el.addEventListener('change', refreshConfirmReady));
 
-  // Clicking a date field opens the native calendar picker (typing still
-  // works — keyboard edits update the segments as before).
+  // Prefer the native calendar while retaining typed input.
   [fromInput, toInput].forEach((el) => {
     el.addEventListener('click', () => {
       if (typeof el.showPicker === 'function') {
-        try { el.showPicker(); } catch { /* non-gesture or unsupported — typing still works */ }
+        try { el.showPicker(); } catch { /* Typed input remains available. */ }
       }
     });
   });
 
-  // Vehicles per service, cached for the session: switching services renders
-  // the dropdown instantly from cache while a background refresh runs. The
-  // sequence counter discards stale responses when the user switches faster
-  // than the network answers.
+  // Render cached vehicles immediately; sequence numbers discard stale refreshes.
   const vehicleCache = {};
   let validateSeq = 0;
 
@@ -2361,14 +2172,13 @@ function initTessieImport() {
 
     const cached = vehicleCache[service];
     if (cached && cached.length) {
-      // Instant path — then quietly refresh the cache.
+      // Refresh after rendering cached values.
       fill(cached);
       refreshConfirmReady();
       svc().validate(token).then((result) => {
         if (seq !== validateSeq || selectedService !== service) return;
         if (result.success && result.vehicles && result.vehicles.length) {
-          // Refill only when the list actually changed — rebuilding the
-          // options closes the dropdown if the user has it open right then.
+          // Avoid closing an open dropdown when values are unchanged.
           const changed = JSON.stringify(result.vehicles) !== JSON.stringify(vehicleCache[service]);
           vehicleCache[service] = result.vehicles;
           if (changed) {
@@ -2384,7 +2194,7 @@ function initTessieImport() {
     vinSelect.innerHTML = '<option>Loading vehicles…</option>';
     refreshConfirmReady();
     const result = await svc().validate(token);
-    if (seq !== validateSeq || selectedService !== service) return; // superseded
+    if (seq !== validateSeq || selectedService !== service) return;
     if (!result.success) {
       vinSelect.innerHTML = '<option>Validation failed</option>';
       if (!silent) alert(`Token validation failed:\n${result.error}`);
@@ -2399,9 +2209,7 @@ function initTessieImport() {
     refreshConfirmReady();
   }
 
-  // Import enables as soon as the inputs are valid. The query that used to
-  // gate it runs on the Import click itself — a "nothing to import" result
-  // aborts the import with the explanation on screen.
+  // Query only after Import is clicked; valid inputs enable the button.
   function refreshConfirmReady() {
     if (tessieImportMode === 'api') {
       confirmBtn.disabled = !(tokenInput.value.trim() && vinSelect.value && !vinSelect.disabled);
@@ -2412,13 +2220,10 @@ function initTessieImport() {
     }
   }
 
-  // Stale-response guard: each query claims a sequence number; a newer click
-  // supersedes any still-in-flight result.
+  // Sequence numbers invalidate superseded queries.
   let previewSeq = 0;
 
-  // Runs the drives query and renders the result lines. Called ONLY from the
-  // Import click — the modal never contacts the service API in the background
-  // (vehicles load once on open; everything else waits for the user).
+  // Run and render a drive query only after explicit import action.
   async function runImportQuery(args) {
     const seq = ++previewSeq;
     previewEl.classList.remove('hidden');
@@ -2433,7 +2238,7 @@ function initTessieImport() {
       previewEl.innerHTML = '<em>Scanning CSVs…</em>';
       result = await svc().csvPreview(args);
     }
-    if (seq !== previewSeq) return null; // superseded by a newer click
+    if (seq !== previewSeq) return null;
     if (!result.success) {
       previewEl.innerHTML = `<span style="color:#f87171">Query failed: ${escapeHtml(result.error)}</span>`;
       return null;
@@ -2467,8 +2272,7 @@ function initTessieImport() {
   confirmBtn.addEventListener('click', async () => {
     if (!loadedFilePath) return;
 
-    // Snapshot the inputs once so the query and the import describe the same
-    // request even if fields change while the query runs.
+    // Snapshot inputs so query and import use the same request.
     const modeAtClick = tessieImportMode;
     const serviceAtClick = selectedService;
     let args;
@@ -2494,9 +2298,7 @@ function initTessieImport() {
       };
     }
 
-    // The drives query runs now — on the click, never in the background.
-    // A failed query or "nothing to import" stops here with the explanation
-    // on screen; so does closing the modal or switching service/mode mid-check.
+    // Abort on query failure, no results, or superseding modal changes.
     confirmBtn.disabled = true;
     confirmBtn.textContent = 'Checking…';
     const preview = await runImportQuery(args);
@@ -2508,8 +2310,7 @@ function initTessieImport() {
       return;
     }
 
-    // Merging another drive-data.json folds its FSD/Autopilot data into the
-    // user's stats — confirm before touching their scores.
+    // Confirm before imported FSD data changes aggregate scores.
     if (modeAtClick === 'json') {
       const proceed = await confirmMergeDriveData();
       if (proceed !== true || overlay.classList.contains('hidden')) {
@@ -2556,9 +2357,7 @@ function initTessieImport() {
       }
     });
 
-    // The handlers normally resolve {success:false} on failure, but a rejected
-    // invoke (unexpected main-process throw) must not strand the modal on
-    // "Importing…" with the progress listener attached.
+    // Rejected IPC must still restore the modal and remove listeners.
     let result;
     try {
       if (modeAtClick === 'api') {
@@ -2635,7 +2434,7 @@ function initTessieImport() {
       lines.push('Click OK to delete these hidden drives from the file (recoverable from .bak).');
       lines.push('Click Cancel to keep them stored (they will stay hidden as long as SEI covers the same time).');
       if (confirm(lines.join('\n'))) {
-        // Same full-file rewrite as Remove Imported Drives — show the spinner.
+        // Cover the full-file rewrite with the spinner.
         showLoading('Removing hidden imported drives…');
         const cleanupResult = await svc().removeHidden();
         if (cleanupResult.success) {
@@ -2651,7 +2450,6 @@ function initTessieImport() {
     }
   });
 
-  // Remove imported drives handlers
   const removeOverlay = document.getElementById('remove-tessie-overlay');
   const srcTessie = document.getElementById('remove-src-tessie');
   const srcTeslascope = document.getElementById('remove-src-teslascope');
@@ -2663,7 +2461,7 @@ function initTessieImport() {
   srcTeslascope.addEventListener('change', syncRemoveConfirm);
   document.getElementById('btn-remove-tessie').addEventListener('click', () => {
     if (!loadedFilePath) return;
-    // Destructive modal always opens in a predictable state: both selected.
+    // Reset the destructive modal to both sources selected.
     srcTessie.checked = true;
     srcTeslascope.checked = true;
     syncRemoveConfirm();
@@ -2682,9 +2480,7 @@ function initTessieImport() {
     if (!loadedFilePath || (!wantTessie && !wantTeslascope)) return;
     const beforeCount = drives.length;
 
-    // Each removal rewrites the whole drive-data.json — seconds on a large
-    // library, and there can be two in a row. Keep the spinner overlay up so
-    // the app doesn't look frozen; reloadDrivesAfterWrite reuses it after.
+    // Keep the overlay through consecutive full-file rewrites and reload.
     showLoading('Removing imported drives…');
     let removed = 0;
     const failures = [];
@@ -2712,8 +2508,7 @@ function initTessieImport() {
       '',
       `Drive count: ${fmt(beforeCount)} → ${fmt(afterCount)} (${fmt(afterCount - beforeCount)})`,
     ];
-    // The visible delta is smaller when some removed drives were already
-    // hidden behind overlapping dashcam (SEI) drives.
+    // Overlapping native drives may make the visible delta smaller.
     if (removed > beforeCount - afterCount) {
       lines.push('', `${fmt(removed - (beforeCount - afterCount))} of them were hidden behind dashcam drives and not shown in the list.`);
     }
@@ -2722,12 +2517,7 @@ function initTessieImport() {
   });
 }
 
-// Single-flight: overlapping reloads (e.g. the file watcher firing while an
-// import's own reload runs) would double peak memory in the main process and
-// can interleave two full parses. Coalesce into ONE shared promise: a request
-// during a reload queues exactly one follow-up pass, and every caller awaits
-// through it — so an awaited reload always resolves with current data, never
-// an early "someone else is on it" return.
+// Coalesce overlapping full parses into one shared promise plus one queued pass.
 let _reloadPromise = null;
 let _reloadQueued = false;
 
@@ -2742,16 +2532,14 @@ function reloadDrivesAfterWrite() {
         try {
           const reloaded = await window.electronAPI.loadAndGroupDrives(loadedFilePath);
           if (reloaded.success) {
-            // Let the loading overlay paint one frame before the synchronous
-            // re-render (building the card list + map layers) briefly blocks the
-            // renderer — otherwise the overlay appears frozen during the rebuild.
+            // Paint the overlay before the synchronous list and map rebuild.
             await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
             await applyLoadedDriveData(reloaded, loadedFilePath);
           }
         } finally {
           hideLoading();
         }
-      } while (_reloadQueued); // pick up a change that arrived mid-reload
+      } while (_reloadQueued);
     } finally {
       _reloadPromise = null;
     }
@@ -2759,7 +2547,7 @@ function reloadDrivesAfterWrite() {
   return _reloadPromise;
 }
 
-// Imported (non-dashcam) drives — Tessie, Teslascope, and future services.
+// Imported (non-dashcam) drives from Tessie, Teslascope, and other services.
 const isImportedSource = (s) => !!s && s !== 'sei';
 const SOURCE_LABELS = { tessie: 'Tessie', teslascope: 'Teslascope' };
 
@@ -2789,8 +2577,7 @@ async function updateRevertButton() {
 async function revertGPS() {
   if (!loadedFilePath) return;
 
-  // Restoring the .bak rewrites the whole drive-data.json — keep the spinner
-  // up from the first moment or the app looks frozen while it copies.
+  // Cover backup restoration and reload with the spinner.
   showLoading('Reverting to backup…');
   const result = await window.electronAPI.revertGPS(loadedFilePath);
   if (!result.success) {
@@ -2799,7 +2586,6 @@ async function revertGPS() {
     return;
   }
 
-  // Reload (updates the overlay text; hideLoading runs after the re-render)
   showLoading();
   const reloaded = await window.electronAPI.loadAndGroupDrives(loadedFilePath);
   if (reloaded.success) {
@@ -2809,8 +2595,7 @@ async function revertGPS() {
   alert('Reverted to backup successfully.');
 }
 
-// In-app result dialog for the Check Drives flows — replaces the native
-// alert() popups so completion reports render inside the application.
+// Display Check Drives completion reports in-app.
 function showCheckResult(title, message) {
   document.getElementById('check-result-title').textContent = title;
   document.getElementById('check-result-msg').textContent = message;
@@ -2831,7 +2616,7 @@ async function repairGPS() {
 
   let removeProgressListener = null;
   try {
-    // Check connectivity for road-snapped bridging
+    // Road-snapped bridging depends on connectivity.
     const isOnline = await window.electronAPI.checkOnline();
     let useRouting = isOnline;
 
@@ -2844,7 +2629,6 @@ async function repairGPS() {
       if (!proceed) return;
     }
 
-    // Show progress bar
     progressEl.classList.remove('hidden');
     phaseEl.textContent = 'Starting…';
     pctEl.textContent = '';
@@ -2884,8 +2668,7 @@ async function repairGPS() {
     const straightGaps = result.bridgedGaps - (result.routedGaps ?? 0);
     if (straightGaps > 0) msgs.push(`Bridged ${straightGaps} gap(s) with straight lines`);
 
-    // Reload the repaired file first so the summary can say WHICH drives
-    // carry bridges (they also get a "Bridged" chip in the list).
+    // Reload before deriving the bridged-drive summary.
     showLoading();
     const reloaded = await window.electronAPI.loadAndGroupDrives(loadedFilePath);
     if (reloaded.success) {
@@ -2915,18 +2698,13 @@ async function repairGPS() {
   }
 }
 
-// Check for Summon — backfill blinker/brake evidence for parking-speed
-// drives whose routes predate the flags extraction, then reload so the
-// grouper's summon detection can tag them. Reads only the candidate drives'
-// clips, so it's fast next to a reprocess-all.
+// Backfill missing blinker/brake evidence on candidate parking-speed drives.
 async function checkSummon() {
   if (!loadedFilePath) {
     showCheckResult('Check for Summon', 'Load a drive-data.json first — Check for Summon works on the loaded drive data.');
     return;
   }
-  // The IPC half of this feature lives in the main process, which only loads
-  // at app launch — a window reload (Ctrl+R) picks up this UI but not the
-  // bridge. Without this guard the call rejects silently.
+  // A renderer-only reload may not have the matching main-process handler.
   if (typeof window.electronAPI.checkSummon !== 'function') {
     showCheckResult('Check for Summon', 'Check for Summon needs a full app restart to finish installing.\n\nQuit Sentry Drive completely and relaunch it, then run the check again.');
     return;
@@ -3015,8 +2793,7 @@ async function checkSummon() {
     }
     showCheckResult('Check for Summon complete', msgs.join('\n'));
   } catch (err) {
-    // Surface everything — a silent failure here looks like the feature
-    // simply didn't run (the exact bug this catch was added for).
+    // Surface failures that would otherwise appear as a no-op.
     showCheckResult('Check for Summon failed', String(err?.message ?? err));
   } finally {
     if (removeProgressListener) removeProgressListener();
@@ -3062,8 +2839,7 @@ function refreshUnitDisplay() {
   if (selectedDriveId !== null) {
     const d = drives.find((x) => x.id === selectedDriveId);
     if (d) {
-      // Re-render the selected drive directly — skip the aggregate render
-      // so the panel doesn't flash overview stats on the way through.
+      // Avoid flashing aggregate stats while refreshing a selected drive.
       renderSelectedDriveStats(d);
     }
   } else if (lastDrivesMeta) {
@@ -3101,7 +2877,7 @@ function wireDriveTagInteractions(root, drive) {
       const opened = !row.classList.toggle('hidden');
       if (opened) {
         root.querySelector('#tag-input').focus();
-        showTagSuggestions(drive, '');   // show all available tags as bubbles
+        showTagSuggestions(drive, '');
       } else {
         const sug = root.querySelector('#tag-suggestions');
         if (sug) { sug.classList.add('hidden'); sug.innerHTML = ''; }
@@ -3123,10 +2899,7 @@ function wireDriveTagInteractions(root, drive) {
   }
 }
 
-// Re-render just the tag editor inside the open drive-stats panel after a tag
-// change, so adding/removing a tag FROM that panel updates it in place. The
-// drive-list cards refresh separately via renderDriveList — without this the
-// panel you're looking at wouldn't show the new pill.
+// Refresh the open panel's tag editor independently from list cards.
 function refreshSelectedDriveTags(drive) {
   const panel = document.getElementById('map-stats');
   const tagsEl = panel && panel.querySelector('.map-stats-tags');
@@ -3136,7 +2909,7 @@ function refreshSelectedDriveTags(drive) {
 }
 
 function renderSelectedDriveStats(drive) {
-  const isTessie = isImportedSource(drive.source); // any imported service
+  const isTessie = isImportedSource(drive.source);
   const totalMi = drive.distanceMi ?? 0;
   const totalMs = drive.durationMs ?? 0;
   const totalHrs = Math.floor(totalMs / 3_600_000);
@@ -3181,9 +2954,7 @@ function renderSelectedDriveStats(drive) {
     </div>
   `;
 
-  // Summon drives are one driverless mode end to end — one yellow slice and
-  // a "Summon" row instead of the misleading "Manual 100%" the raw apStates
-  // would produce.
+  // Summon has no AP state, so present it as one driverless mode.
   const isSummon = !!drive.summon;
   const slices = [];
   if (isSummon) {
@@ -3320,13 +3091,10 @@ function renderSelectedDriveStats(drive) {
   wireDriveTagInteractions(panel, drive);
 }
 
-// FSD score/usage is shown floored to one decimal (99.896% → 99.8%, never
-// rounded up to a flattering 100%). Kept separate from the integer fsdPct used
-// for the donut breakdown math so AP/TACC/Manual still sum to 100.
+// Floor display scores to one decimal; keep integer shares for donut totals.
 const floorPct1 = (p) => Math.floor((Number(p) || 0) * 10) / 10;
 
 function fsdScoreColor(pct) {
-  // Smooth red → amber → green gradient in HSL (0°=red, 120°=green).
   const hue = Math.max(0, Math.min(120, (pct / 100) * 120));
   return `hsl(${hue}, 70%, 55%)`;
 }
@@ -3350,21 +3118,13 @@ async function populateUpdateModalChanges(version) {
     box.innerHTML = renderChangelogEntry(entry);
     box.classList.remove('hidden');
   } catch {
-    /* silent — modal just shows without the changelog section */
+    /* Changelog details are optional. */
   }
 }
 
 function renderDriveStats(drives, meta) {
   lastDrivesMeta = meta;
-  // Top-line counters (drives / miles / duration) include imported drives —
-  // those are ground truth from the service regardless of dashcam coverage.
-  // FSD analytics (FSD%, AP%, TACC%, disengagements, accel overrides) use
-  // SEI-only data because imported services' per-point autopilot data is
-  // fuzzier than the dashcam's SEI telemetry (Teslascope's is often absent
-  // entirely) — mixing them would dilute the score.
-  // Summon drives are excluded from FSD analytics (mirrors the aggregate
-  // builder): driverless with autopilot_state unset, they'd otherwise dilute
-  // the score as fake "0% FSD" drives. They still count in the totals above.
+  // Totals include imports; FSD analytics use SEI-only data and exclude Summon.
   const seiDrives = drives.filter((d) => !isImportedSource(d.source) && !d.summon);
   const aggregate = meta?.aggregates;
   const driveCount = aggregate?.totalDriveCount ?? drives.length;
@@ -3373,7 +3133,6 @@ function renderDriveStats(drives, meta) {
 
   const totalMi = aggregate?.totalDistanceMi ?? drives.reduce((s, d) => s + d.distanceMi, 0);
   const totalMs = aggregate?.totalDurationMs ?? drives.reduce((s, d) => s + d.durationMs, 0);
-  // D H M — lifetime totals routinely exceed 24h, so days carry the size.
   const totalDays = Math.floor(totalMs / 86_400_000);
   const totalHrs = Math.floor((totalMs % 86_400_000) / 3_600_000);
   const totalMin = Math.floor((totalMs % 3_600_000) / 60_000);
@@ -3381,7 +3140,7 @@ function renderDriveStats(drives, meta) {
     ? `${totalDays}D ${totalHrs}H ${totalMin}M`
     : (totalHrs > 0 ? `${totalHrs}H ${totalMin}M` : `${totalMin}M`);
 
-  // FSD analytics denominator: SEI-only distance.
+  // FSD analytics use SEI-only distance.
   const seiDistM = aggregate?.seiDistanceM ?? seiDrives.reduce((s, d) => s + (d.distanceKm ?? d.distanceMi * MI_TO_KM) * 1000, 0);
   const fsdDistM = aggregate?.fsdDistanceM ?? seiDrives.reduce((s, d) => s + (d.fsdDistanceKm ?? d.fsdDistanceMi * MI_TO_KM) * 1000, 0);
   const apDistM = aggregate?.autosteerDistanceM ?? seiDrives.reduce((s, d) => s + (d.autosteerDistanceKm ?? (d.autosteerDistanceMi ?? 0) * MI_TO_KM) * 1000, 0);
@@ -3393,7 +3152,6 @@ function renderDriveStats(drives, meta) {
   const manualDistM = Math.max(0, seiDistM - fsdDistM - apDistM - taccDistM);
   const manualPct = Math.max(0, 100 - fsdPct - apPct - taccPct);
 
-  // For the donut chart denominator (locally rebound for clarity below).
   const totalDistM = seiDistM;
 
   const disengagements = aggregate?.fsdDisengagements ?? seiDrives.reduce((s, d) => s + (d.fsdDisengagements ?? 0), 0);
@@ -3420,7 +3178,7 @@ function renderDriveStats(drives, meta) {
     </div>
   `;
 
-  // Build the donut chart: cumulative conic-gradient stops using exact percentages.
+  // Build cumulative conic-gradient stops from exact shares.
   const slices = [];
   if (fsdDistM > 0)    slices.push({ color: 'var(--line-fsd, #22cc55)',   pct: (fsdDistM / totalDistM) * 100 });
   if (apDistM > 0)     slices.push({ color: 'var(--ap-blue, #3e6ae1)', pct: (apDistM / totalDistM) * 100 });
@@ -3497,25 +3255,14 @@ function renderDriveStats(drives, meta) {
   panel.classList.remove('hidden');
 }
 
-// Bumped on every call so a chunked render in progress aborts the moment a
-// newer render starts (load, filter, removal) — same stale-guard pattern as
-// previewSeq/validateSeq. Without it two overlapping chunked renders could
-// interleave cards.
+// A sequence number prevents overlapping chunked renders from interleaving.
 let _driveListRenderSeq = 0;
 
-// Building thousands of drive cards at once blocked the renderer for a second
-// or more (the freeze after a large import/reload). Build in batches, yielding
-// a frame between them so the UI stays responsive and the list fills in
-// progressively. Small lists (< one batch) still render in a single synchronous
-// pass — no behavior change for the common case.
+// Yield between large card batches; small lists remain synchronous.
 // ─── Privacy zones ───────────────────────────────────────────────────────────
-// Circles around Home / Work / custom spots (Settings → Privacy) used to cull
-// drives that start or end inside them. Zones live ONLY in localStorage —
-// drive-data.json is shared/exported between installs and must never carry
-// home coordinates.
+// Keep zone coordinates in localStorage, never exported drive-data.json.
 const ZONE_ICONS = { home: 'home', work: 'work', custom: 'place' };
-// Curated Material Symbols a zone can use (the vendored font is the full
-// ligature set, so any of these render). Kept to names that read at 15px.
+// Curated Material Symbols that remain legible at 15px.
 const ZONE_ICON_CHOICES = [
   'home', 'work', 'place', 'school', 'fitness_center', 'restaurant',
   'local_cafe', 'shopping_cart', 'storefront', 'local_hospital', 'church',
@@ -3528,17 +3275,13 @@ function zoneIcon(zone) {
   return zone.icon ?? ZONE_ICONS[zone.kind] ?? 'place';
 }
 let privacyZones = loadPrivacyZones();
-let privacyZonesVisible = false;   // circles show while the Privacy tab is open
-// Map UI setting: zone markers as permanent landmarks (they always show while
-// the Privacy tab is open or a zone is being placed, regardless).
+let privacyZonesVisible = false;
+// Editing overrides the permanent-landmark preference.
 let showZoneMarkers = localStorage.getItem('showZoneMarkers') !== 'false';
-const zoneMarkers = [];            // DOM icon markers at zone centers
-// Placement session ("Set on map"): aim → the preview circle follows the
-// cursor; mousedown locks the center and dragging sizes the radius; mouseup
-// enters confirm, where Save/Cancel in the hint bar completes the edit.
-let zonePlacement = null;          // { zone, stage:'aim'|'drag'|'confirm', center, radiusM, marker }
-// Shared bulk-removal confirm (multi-select bar + zone culls): callers queue
-// targets here, the modal's confirm handler executes them.
+const zoneMarkers = [];
+// Placement stages: aim, drag radius, then confirm.
+let zonePlacement = null;
+// Shared queue for multi-select and privacy-zone removals.
 let pendingBulkRemove = null;
 
 function loadPrivacyZones() {
@@ -3548,12 +3291,11 @@ function loadPrivacyZones() {
     if (Array.isArray(saved)) {
       zones = saved.filter((z) => z && z.id && z.kind && typeof z.radiusM === 'number');
     }
-  } catch { /* corrupted setting — start clean */ }
-  // Icon names go into innerHTML as ligature text — only accept safe names.
+  } catch { /* Invalid settings start clean. */ }
+  // Ligature names enter innerHTML and must pass the allowlist.
   for (const z of zones) {
     if (typeof z.icon !== 'string' || !/^[a-z0-9_]{1,40}$/.test(z.icon)) delete z.icon;
   }
-  // Home and Work rows always exist, even before a location is set.
   for (const kind of ['home', 'work']) {
     if (!zones.some((z) => z.kind === kind)) {
       zones.push({ id: kind, kind, name: kind === 'home' ? 'Home' : 'Work', lat: null, lng: null, radiusM: 150 });
@@ -3575,7 +3317,7 @@ function openBulkRemoveModal(targets, msg) {
   document.getElementById('remove-drives-overlay').classList.remove('hidden');
 }
 
-// Approximate the zone as a 64-gon — plenty round at map scale.
+// Approximate the circle as a 64-gon.
 function zoneCircleFeature(z) {
   const latR = z.radiusM / 111320;
   const lngR = z.radiusM / (111320 * Math.max(0.2, Math.cos((z.lat * Math.PI) / 180)));
@@ -3603,20 +3345,13 @@ function updatePrivacyZoneLayer() {
   whenMapReady(() => {
     for (const m of zoneMarkers) m.remove();
     zoneMarkers.length = 0;
-    // The zone being placed is drawn by the placement preview instead.
     const zones = privacyZones.filter((z) => z.lat != null && z !== zonePlacement?.zone);
-    // Markers are permanent landmarks on the map (unless hidden in Map UI
-    // settings — editing sessions always show them); the dashed circles only
-    // show while the Privacy tab is open or a zone is being placed.
+    // Dashed circles appear only during privacy editing.
     map.getSource('privacy-zones').setData({
       type: 'FeatureCollection',
       features: privacyZonesVisible ? zones.map(zoneCircleFeature) : [],
     });
-    // The Charging tab takes the map over — drive lines, route markers, and
-    // FSD badges are all hidden there, so the zone landmarks go with them.
-    // An open Privacy editor still wins: you can't place a zone you can't
-    // see. Suppressed here rather than by toggling display, so a zone edit
-    // that rebuilds this layer mid-charging can't put them back.
+    // Charging mode hides landmarks unless an active privacy editor needs them.
     const chargingOwnsMap = activeMainTab === 'charging';
     if ((showZoneMarkers && !chargingOwnsMap) || privacyZonesVisible) {
       for (const z of zones) {
@@ -3685,8 +3420,7 @@ function zoneRadiusLabel(radiusM) {
   return unitSystem === 'imperial' ? `${Math.round(radiusM / M_PER_FT)} ft` : `${Math.round(radiusM)} m`;
 }
 
-// Small popover with the curated Material Symbols grid; picking one changes
-// the zone's icon in the settings row and on its map marker.
+// Shared Material Symbols picker for settings rows and map markers.
 let zoneIconPickerTarget = null;
 
 function openZoneIconPicker(anchor, zone) {
@@ -3718,12 +3452,7 @@ function setPickHint(text, confirm) {
   hint.classList.remove('hidden');
 }
 
-// "Set on map" / "Edit on map": hide the settings modal and start a placement
-// session. In 'aim', the preview follows the cursor, dragging PANS the map
-// (MapLibre suppresses the click after a pan, so panning never places), and a
-// plain click drops the pin. That enters the editable confirm stage: drag the
-// pin to move the zone, drag anywhere on the circle's edge to resize it.
-// Save/Cancel completes; Esc cancels at any point.
+// Map placement supports pan while aiming, then center and radius adjustment.
 function beginZoneMapPick(zone) {
   document.getElementById('settings-overlay').classList.add('hidden');
   const isSet = zone.lat != null && zone.lng != null;
@@ -3735,11 +3464,10 @@ function beginZoneMapPick(zone) {
     marker: null,
     ringDrag: false,
   };
-  setPrivacyZonesVisible(true); // other zones stay visible for context
+  setPrivacyZonesVisible(true);
   whenMapReady(() => {
     if (isSet) {
-      // Bring the zone on screen with breathing room, then hand over the
-      // move/resize handles.
+      // Fit the zone before enabling its move and resize handles.
       const latPad = (zone.radiusM * 1.8) / 111320;
       const lngPad = (zone.radiusM * 1.8) / (111320 * Math.max(0.2, Math.cos((zone.lat * Math.PI) / 180)));
       map.fitBounds(
@@ -3755,13 +3483,13 @@ function beginZoneMapPick(zone) {
   });
 }
 
-// Point on the circle's eastern edge — used to measure the ring's pixel radius.
+// Eastern edge point for measuring the ring in screen pixels.
 function zoneEdgeLngLat(center, radiusM) {
   const lngR = radiusM / (111320 * Math.max(0.2, Math.cos((center.lat * Math.PI) / 180)));
   return [center.lng + lngR, center.lat];
 }
 
-// Is the mouse on the zone's edge ring (within a grab tolerance, in pixels)?
+// Test the ring against a screen-pixel grab tolerance.
 function zoneNearRing(e) {
   const p = zonePlacement;
   if (!p?.center) return false;
@@ -3778,15 +3506,14 @@ function zoneConfirmHint() {
   setPickHint(`"${p.zone.name}" — Radius ${zoneRadiusLabel(p.radiusM)}. Drag the pin to move it, or drag the circle's edge to resize.`, true);
 }
 
-// Editable confirm stage: draggable center pin; the circle's edge itself is
-// the resize handle (see the mousedown/mousemove ring-drag in initMap).
+// Confirm stage: drag the center or the radius ring.
 function enterZoneConfirm() {
   const p = zonePlacement;
   if (!p || !p.center) return;
   p.stage = 'confirm';
   map.getCanvas().style.cursor = '';
 
-  if (!p.marker) zonePlacementPreview(); // ensures the pin exists
+  if (!p.marker) zonePlacementPreview();
   p.marker.getElement().classList.add('zone-marker--live');
   p.marker.setDraggable(true);
   p.marker.on('drag', () => {
@@ -3798,7 +3525,7 @@ function enterZoneConfirm() {
   zoneConfirmHint();
 }
 
-// Redraw the placement preview (staged circle + marker at the staged center).
+// Redraw the staged circle and center marker.
 function zonePlacementPreview() {
   const p = zonePlacement;
   if (!p || !mapReady || !p.center) return;
@@ -3840,9 +3567,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && zonePlacement) endZonePlacement(false);
 });
 
-// Find drives whose start OR end point falls inside the zone and queue them
-// for the shared bulk-removal confirm. Uses the same WGS-84 geodesic as the
-// drive stats, against the grouper's snapped endpoints.
+// Queue drives whose snapped endpoint falls inside the WGS-84 zone.
 function cullZoneDrives(zone) {
   if (zone.lat == null || zone.lng == null) return;
   if (!loadedFilePath || !drives.length) {
@@ -3866,13 +3591,10 @@ function cullZoneDrives(zone) {
 }
 
 // ─── Drive list multi-select ─────────────────────────────────────────────────
-// Ctrl/Cmd+click toggles a card; Shift+click selects the range from the last
-// toggle; Esc or the bar's X clears. Selection is cleared on every list
-// re-render (reload, tag filter, removal) so it can never reference stale
-// cards. Ids are kept as strings to match dataset.driveId.
+// Clear selection on list re-render so it cannot retain stale card IDs.
 const multiSelected = new Set();
-let multiAnchorId = null;      // shift-range anchor (last toggled card)
-let lastRenderedOrder = [];    // drive ids in the currently displayed order
+let multiAnchorId = null;
+let lastRenderedOrder = [];
 
 function toggleMultiSelect(id) {
   if (multiSelected.has(id)) multiSelected.delete(id);
@@ -3924,8 +3646,7 @@ async function renderDriveList(drives) {
     return;
   }
 
-  // Reverse-chronological. Filtering happened in the loader's query — this
-  // page IS the filtered result.
+  // This page is already filtered by the loader.
   const sorted = [...drives].sort((a, b) => b.startTime.localeCompare(a.startTime));
   lastRenderedOrder = sorted.map((d) => String(d.id));
 
@@ -3944,12 +3665,12 @@ async function renderDriveList(drives) {
     }
     frag.appendChild(buildDriveItem(drive));
 
-    // Flush + yield every BATCH so the renderer can paint between chunks.
+    // Yield between batches so the renderer can paint.
     if ((i + 1) % BATCH === 0 && i + 1 < sorted.length) {
       list.appendChild(frag);
       frag = document.createDocumentFragment();
       await new Promise((r) => requestAnimationFrame(r));
-      if (seq !== _driveListRenderSeq) return; // superseded by a newer render
+      if (seq !== _driveListRenderSeq) return;
     }
   }
   if (frag.childNodes.length) list.appendChild(frag);
@@ -4014,12 +3735,7 @@ function buildDriveItem(drive) {
     ? `<span class="drive-source-chip">${sourceLabel}</span>`
     : '';
 
-  // Battery % at each end of the drive (BLE telemetry rolled up by the
-  // grouper), shown beside Departed/Arrived. Only drives recorded since the
-  // Sentry USB BLE update carry it; older history and imports omit it.
-  // Icon fill tracks the charge across the 7 glyphs the vendored font has
-  // (battery_android_frame_1..6 + _full; no 0/7 frames), and the color
-  // follows the car's convention: green, amber under 20%, red under 10%.
+  // Map endpoint battery values onto the seven available icon frames.
   const battBadge = (pct) => {
     if (pct == null) return '';
     const lvl = Math.round((pct / 100) * 6);
@@ -4030,10 +3746,7 @@ function buildDriveItem(drive) {
   const battStart = battBadge(drive.batteryPctStart);
   const battEnd = battBadge(drive.batteryPctEnd);
 
-  // Place name if already resolved, else GPS coords as a fallback until
-  // reverse-geocoding fills it in (see applyDriveLocations). Escaped: names
-  // come from outside the app (Tesla's geocoder via the data file, Nominatim)
-  // and must never be interpreted as markup.
+  // Escape external place names; coordinates remain the unresolved fallback.
   const startPlace = escapeHtml(drive._startName || gpsLabel(drive, 'origin'));
   const endPlace = escapeHtml(drive._endName || gpsLabel(drive, 'dest'));
 
@@ -4072,7 +3785,6 @@ function buildDriveItem(drive) {
     </div>
   `;
 
-  // Remove drive button
   item.querySelector('.drive-remove-btn').addEventListener('click', (e) => {
     e.stopPropagation();
     pendingRemoveDrive = drive;
@@ -4082,7 +3794,6 @@ function buildDriveItem(drive) {
     document.getElementById('remove-drive-overlay').classList.remove('hidden');
   });
 
-  // Tag remove buttons
   item.querySelectorAll('.tag-remove').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -4090,7 +3801,6 @@ function buildDriveItem(drive) {
     });
   });
 
-  // Tag add button
   item.querySelector('.list-tag-add').addEventListener('click', (e) => {
     e.stopPropagation();
     const row = item.querySelector('.list-tag-input-row');
@@ -4099,14 +3809,13 @@ function buildDriveItem(drive) {
       const input = item.querySelector('.list-tag-input');
       input.value = '';
       input.focus();
-      showListTagSuggestions(drive, item, '');   // show all available tags as bubbles
+      showListTagSuggestions(drive, item, '');
     } else {
       const sug = item.querySelector('.list-tag-suggestions');
       if (sug) { sug.classList.add('hidden'); sug.innerHTML = ''; }
     }
   });
 
-  // Tag input
   const tagInput = item.querySelector('.list-tag-input');
   tagInput.addEventListener('click', (e) => e.stopPropagation());
   tagInput.addEventListener('input', () => {
@@ -4124,35 +3833,28 @@ function buildDriveItem(drive) {
     }
   });
 
-  // Shift+click builds a range selection — stop the browser text-selection
-  // that shift-clicking otherwise drags across the cards.
+  // Prevent text selection during Shift+click range selection.
   item.addEventListener('mousedown', (e) => { if (e.shiftKey) e.preventDefault(); });
   item.addEventListener('click', (e) => {
     if (e.ctrlKey || e.metaKey) { toggleMultiSelect(String(drive.id)); return; }
     if (e.shiftKey) { rangeMultiSelect(String(drive.id)); return; }
-    if (multiSelected.size) clearMultiSelect(); // plain click exits select mode
+    if (multiSelected.size) clearMultiSelect();
     selectDrive(drive);
   });
 
-  // Location pins: resolve start/end place names into the location line under
-  // each Departed/Arrived header. Names cache on the drive object so re-renders
-  // apply instantly; the main process caches across sessions.
+  // Cache resolved names on the drive; the main process caches across sessions.
   applyDriveLocations(item, drive);
 
   return item;
 }
 
 function endpointCoord(drive, which) {
-  // Prefer the grouper's stationary-median snapped endpoint — computed from
-  // the full-resolution filtered points (before they're stripped for IPC).
-  // A single raw fix is the noisiest sample of the drive; the snapped point
-  // averages the parked cluster at that end.
+  // Prefer full-resolution stationary-median endpoints over single GPS fixes.
   const snapped = which === 'origin' ? drive.geocodeStartPoint : drive.geocodeEndPoint;
   if (Array.isArray(snapped) && typeof snapped[0] === 'number' && typeof snapped[1] === 'number') {
     return { lat: snapped[0], lng: snapped[1] };
   }
-  // List drives only carry the downsampled overviewPoints (full points stay in
-  // the main process); the downsample preserves the exact first/last point.
+  // Downsampled overview data preserves exact endpoints.
   const pts = Array.isArray(drive.points) && drive.points.length ? drive.points : drive.overviewPoints;
   if (!Array.isArray(pts) || pts.length === 0) return null;
   const p = which === 'origin' ? pts[0] : pts[pts.length - 1];
@@ -4160,7 +3862,7 @@ function endpointCoord(drive, which) {
   return { lat: p[0], lng: p[1] };
 }
 
-// GPS coords as a placeholder location until reverse-geocoding resolves a name.
+// Coordinate placeholder shown until reverse geocoding resolves a name.
 function gpsLabel(drive, role) {
   const c = endpointCoord(drive, role);
   return c ? `${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}` : '';
@@ -4176,10 +3878,7 @@ function applyDriveLocations(item, drive) {
   const resolve = (role) => {
     const cacheKey = role === 'origin' ? '_startName' : '_endName';
     if (drive[cacheKey]) { setEndpointLabel(item, role, drive[cacheKey]); return; }
-    // Prefer the car's own label (Tesla-reverse-geocoded over BLE, rolled up
-    // by the grouper exactly as Sentry USB Rusty does) — more accurate than
-    // geocoding the noisy dashcam SEI endpoint, and zero network calls.
-    // Nominatim below remains the fallback for pre-BLE / imported drives.
+    // Prefer the car's BLE place label; use Nominatim when unavailable.
     const bleName = role === 'origin' ? drive.locationNameStart : drive.locationNameEnd;
     if (bleName) {
       drive[cacheKey] = bleName;
@@ -4222,9 +3921,7 @@ function showListTagSuggestions(drive, item, query) {
   });
 }
 
-// Drop the lazy-loaded heavy fields from a drive so renderer memory doesn't
-// grow unboundedly as the user clicks through many drives. The full detail
-// stays cached in the main process and is refetched on next selection.
+// Release lazy detail fields; the main-process cache retains them.
 function freeDriveDetail(driveId) {
   if (driveId == null) return;
   const d = drives.find((x) => x.id === driveId);
@@ -4236,17 +3933,13 @@ function freeDriveDetail(driveId) {
 }
 
 async function selectDrive(drive) {
-  // Toggle: clicking the same drive deselects it
   if (selectedDriveId === drive.id) {
     deselectDrive();
     return;
   }
 
-  // Stop the previous drive's replay BEFORE freeing its points — a running
-  // replayTick reads replayDrive.points, and freeing first left the interval
-  // dereferencing deleted fields until initReplay finally stopped it.
+  // Stop replay before releasing the points read by replayTick.
   cleanupReplay();
-  // Free the previously selected drive's heavy fields before swapping.
   freeDriveDetail(selectedDriveId);
 
   document.querySelectorAll('.drive-item').forEach((el) => el.classList.remove('selected'));
@@ -4258,18 +3951,14 @@ async function selectDrive(drive) {
   selectedDriveId = drive.id;
   logAction(`opened drive ${drive.startTime}${drive.source && drive.source !== 'sei' ? ` (${drive.source})` : ''}`);
 
-  // Context lines: the overview layers dim everything to grey, hide the
-  // selected drive's own line, or clear entirely per hideOtherDrives —
-  // selectedDriveId is already set, so one style pass applies the right state.
+  // Apply context-line state after selectedDriveId changes.
   updateOverviewStyleState();
 
   document.getElementById('btn-back-overview').classList.remove('hidden');
   if (!drive.points) {
     const requestedId = drive.id;
     const detail = await window.electronAPI.getDriveDetail(drive.id, driveCacheGen);
-    // Discard if the user navigated away while we were waiting on IPC —
-    // otherwise we'd reattach heavy fields to a drive that's no longer selected
-    // (and render a stale polyline on top of the current one).
+    // Discard detail that arrives after selection changed.
     if (selectedDriveId !== requestedId) return;
     if (detail.success) {
       drive.points = detail.points;
@@ -4290,7 +3979,6 @@ function applyFsdMarkerVisibility() {
 
 function applyOtherDrivesVisibility() {
   if (selectedDriveId === null) return;
-  // The overview layers derive hidden/dim state from the globals.
   updateOverviewStyleState();
 }
 
@@ -4305,19 +3993,15 @@ function deselectDrive() {
   document.getElementById('map-legend').classList.add('hidden');
   document.getElementById('btn-back-overview').classList.add('hidden');
 
-  // Restore the aggregate stats in the map overlay.
   if (drives.length > 0 && lastDrivesMeta) renderDriveStats(drives, lastDrivesMeta);
 
-  // Restore overview lines to original style (imports keep purple/dashed) —
-  // selectedDriveId is null again, so the style pass renders overview mode.
+  // Restore overview styling after selectedDriveId clears.
   updateOverviewStyleState();
 
-  // Fit map to all drives — the exact bounds renderOverviewOnMap computed
-  // from every overview point (fitting endpoints-only here left loop-shaped
-  // routes partly off-screen).
+  // Reuse bounds computed from every overview point.
   if (overviewBounds) map.fitBounds(overviewBounds, { padding: 30 });
 
-  // Apply an external drive-data change that arrived while a drive was open.
+  // Apply a file change deferred while the drive was open.
   if (pendingExternalReload) {
     pendingExternalReload = false;
     reloadDrivesAfterWrite();
@@ -4328,20 +4012,12 @@ function deselectDrive() {
 function removeMarkers(arr) {
   arr.forEach((m) => m.remove());
   arr.length = 0;
-  // A marker removed mid-hover never fires mouseleave, which would orphan
-  // its tooltip on the map forever — sweep any that are showing.
+  // Removed markers cannot emit mouseleave; clear their tooltips explicitly.
   document.querySelectorAll('#map .map-tooltip').forEach((t) => t.remove());
 }
 
-// Pre-rendered badge sprite: disc + white ring + letter + shadow baked into
-// one supersampled offscreen canvas. WHY A BITMAP: MapLibre rounds marker
-// positions to whole pixels (subpixelPositioning defaults to false) and
-// Chromium snaps DOM glyph origins to integer device pixels, so fractional
-// letter offsets inside a live DOM marker are quantized away at paint time —
-// DOM text can never be reliably sub-pixel centered in these badges. In a
-// baked raster the letter's ink is alpha-scanned and painted so its pixel
-// center lands exactly on the disc center, and the finished badge moves as
-// one image that nothing re-snaps.
+// Bake badge text into a supersampled sprite because DOM glyph origins snap to
+// device pixels while MapLibre positions markers on whole pixels.
 function renderBadgeSprite({ label, fill, radius, strokeW, labelColor }) {
   const dpr = Math.ceil(window.devicePixelRatio || 1);
   const cache = (renderBadgeSprite._cache ??= new Map());
@@ -4349,10 +4025,10 @@ function renderBadgeSprite({ label, fill, radius, strokeW, labelColor }) {
   const hit = cache.get(key);
   if (hit) return hit;
 
-  const px = Math.round(radius * 1.7); // letter size — same ratio as always
+  const px = Math.round(radius * 1.7);
   const font = `800 ${px}px 'Noto Sans', sans-serif`;
-  const S = dpr * 2;                   // supersample for clean downscaled AA
-  // Match the old content-box DOM disc: a 2R fill with the ring OUTSIDE it.
+  const S = dpr * 2;
+  // Keep the ring outside the 2R fill.
   const size = radius * 2 + strokeW * 2;
   const canvas = document.createElement('canvas');
   canvas.width = size * S;
@@ -4364,13 +4040,12 @@ function renderBadgeSprite({ label, fill, radius, strokeW, labelColor }) {
   ctx.beginPath();
   ctx.arc(c, c, radius + strokeW / 2, 0, Math.PI * 2);
   ctx.fillStyle = fill;
-  ctx.fill(); // fill runs under the ring — no seam at the join
+  ctx.fill(); // Fill under the ring to avoid a seam.
   ctx.strokeStyle = '#fff';
   ctx.lineWidth = strokeW;
   ctx.stroke();
 
-  // Letter: alpha-scan its ink on a scratch raster first, then paint it with
-  // the ink's pixel center exactly on the disc center.
+  // Alpha-scan glyph ink, then center its painted pixels on the disc.
   const scratch = document.createElement('canvas');
   scratch.width = px * 4 * S;
   scratch.height = px * 4 * S;
@@ -4394,13 +4069,12 @@ function renderBadgeSprite({ label, fill, radius, strokeW, labelColor }) {
     }
   }
   if (maxX >= 0) {
-    const inkCx = (minX + maxX + 1) / 2 / S - originX; // vs text origin, CSS px
+    const inkCx = (minX + maxX + 1) / 2 / S - originX;
     const inkCy = (minY + maxY + 1) / 2 / S - baselineY;
-    const BADGE_OPTICAL_DX = 0; // taste bias on a pixel-exact baseline
+    const BADGE_OPTICAL_DX = 0;
     ctx.font = font;
     ctx.fillStyle = labelColor;
-    // Canvas shadows ignore the transform (device-px units): scale them so
-    // the look matches the old CSS text-shadow `0 1px 2px rgba(0,0,0,.5)`.
+    // Canvas shadows use device pixels and must scale with supersampling.
     ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
     ctx.shadowBlur = 2 * S;
     ctx.shadowOffsetY = 1 * S;
@@ -4408,25 +4082,18 @@ function renderBadgeSprite({ label, fill, radius, strokeW, labelColor }) {
     ctx.shadowColor = 'transparent';
   }
 
-  // Cache only sprites drawn with the real font: a fallback-font render
-  // before fonts.ready must not poison the session.
+  // Do not cache fallback-font sprites created before fonts.ready.
   if (document.fonts?.check?.(font)) cache.set(key, canvas);
   return canvas;
 }
 
-// Circle DOM marker (start/end/FSD events) with a hover tooltip — replaces
-// L.circleMarker + bindTooltip. Anchored at its center like the old radius-
-// based markers. `label` centers a single letter inside the dot.
+// Center-anchored event marker with an optional pre-rendered label.
 function makeDotMarker(latLng, { fill, radius = 7, strokeW = 2, opacity = 1, tooltip, label, labelColor = '#fff' }) {
   const el = document.createElement('div');
   el.className = 'map-dot-marker';
   if (opacity !== 1) el.style.opacity = String(opacity);
   if (label) {
-    // Labeled badge: one pre-rendered bitmap (see renderBadgeSprite for why
-    // DOM text can't be centered here). The wrapper div stays a plain round
-    // hit target — the tooltip and the display toggle in
-    // applyFsdMarkerVisibility keep working on it — sized like the old
-    // content-box div: 2R disc with the ring outside.
+    // Keep a plain round wrapper as the tooltip and visibility hit target.
     const sprite = renderBadgeSprite({ label, fill, radius, strokeW, labelColor });
     const cssSize = radius * 2 + strokeW * 2;
     el.style.width = `${cssSize}px`;
@@ -4452,7 +4119,7 @@ function makeDotMarker(latLng, { fill, radius = 7, strokeW = 2, opacity = 1, too
     .addTo(map);
 }
 
-// Minimal hover tooltip for DOM markers, styled like the old Leaflet ones.
+// Minimal hover tooltip for DOM markers.
 function attachMapTooltip(el, text) {
   let tip = null;
   el.addEventListener('mouseenter', () => {
@@ -4471,18 +4138,12 @@ function attachMapTooltip(el, text) {
   });
 }
 
-// Display-only smoothing for imported (non-SEI) drives. Their cloud
-// breadcrumbs are 15-60 s apart, so raw segments render angular; Chaikin
-// corner-cutting rounds the DISPLAYED polyline only. Endpoints are preserved
-// exactly, and drive.points / distance math / the replay never see this —
-// rendering and stats are deliberately separate.
-// Iterations: the selected drive uses the default 2 (one line on screen —
-// full smoothness is free); the overview passes 1, since thousands of lines
-// at 4x points each is what made panning sluggish.
+// Smooth sparse imported breadcrumbs for display only; preserve endpoints and
+// keep calculations/replay on raw points. Overview uses fewer iterations.
 function smoothLatLngsForDisplay(latLngs, iterations = 2) {
   if (!Array.isArray(latLngs) || latLngs.length < 3) return latLngs;
   let pts = latLngs;
-  // Dense inputs need less rounding and would balloon the point count.
+  // Dense input needs less rounding and point expansion.
   const iters = pts.length > 100 ? 1 : iterations;
   for (let it = 0; it < iters; it++) {
     const out = [pts[0]];
@@ -4499,22 +4160,12 @@ function smoothLatLngsForDisplay(latLngs, iterations = 2) {
 }
 
 // ─── Overview routes ─────────────────────────────────────────────────────────
-// Every overview route lives in ONE GeoJSON source rendered by the GPU.
-// History: per-drive L.polyline layers cost ~1 FPS pans on a ~5,400-drive
-// history (per-layer overhead, not point count), and a single-pass 2D-canvas
-// overlay still redrew ~191k points on the CPU after every move. MapLibre
-// keeps the geometry in GPU buffers — pan/zoom no longer touches it at all.
-// Display states mirror the old styling: overview (blue solid / purple
-// dashed imports), dim-grey context under a selected drive, hidden when
-// "Hide other drives" is on.
+// One GPU-backed GeoJSON source holds every overview route.
 
-// Bounds covering every drive's overview points, cached by renderOverviewOnMap
-// so deselectDrive can restore the same viewport without recomputing.
+// Cache bounds over every overview point for deselection.
 let overviewBounds = null;
 
-// One central place derives the overview layers' visibility and filters from
-// (selectedDriveId, hideOtherDrives). The selected drive draws its own
-// highlighted route, so its grey twin is filtered out of the dim layer.
+// Derive overview visibility and filters from selection state in one place.
 function updateOverviewStyleState() {
   if (!mapReady) {
     whenMapReady(updateOverviewStyleState);
@@ -4536,24 +4187,17 @@ function updateOverviewStyleState() {
 }
 
 function renderOverviewOnMap() {
-  // Full teardown of any selected-drive state: without cleanupReplay a
-  // replay could keep ticking (and replayDrive kept the old drive's full
-  // points alive), and without freeDriveDetail the previously selected
-  // drive's heavy fields stayed attached — deselectDrive did both, but the
-  // reload/remove paths come through here instead.
+  // Stop replay and release selected-drive detail before rebuilding.
   cleanupReplay();
   freeDriveDetail(selectedDriveId);
   removeMarkers(selectedMarkers);
   removeMarkers(fsdEventMarkers);
   selectedDriveId = null;
   document.getElementById('map-legend').classList.add('hidden');
-  // Match deselectDrive's UI reset — reload paths land here with a drive
-  // still open, and the Back button would otherwise linger over the overview.
+  // Reload paths may enter while a drive is still open.
   document.getElementById('btn-back-overview').classList.add('hidden');
 
-  // Build one LineString feature per drive. Imported drives are sparse cloud
-  // breadcrumbs (15-60 s apart), smoothed so poll intervals don't render as
-  // hard corners; 1 iteration here vs the selected drive's 2.
+  // Smooth sparse imported routes once in overview mode.
   const bounds = new maplibregl.LngLatBounds();
   const features = [];
   let anyTessie = false;
@@ -4564,7 +4208,7 @@ function renderOverviewOnMap() {
     const lls = imported ? smoothLatLngsForDisplay(drive.overviewPoints, 1) : drive.overviewPoints;
     const coords = new Array(lls.length);
     for (let i = 0; i < lls.length; i++) {
-      coords[i] = [lls[i][1], lls[i][0]]; // [lat,lng] → GeoJSON [lng,lat]
+      coords[i] = [lls[i][1], lls[i][0]];
       bounds.extend(coords[i]);
     }
     features.push({
@@ -4581,20 +4225,17 @@ function renderOverviewOnMap() {
     updateOverviewStyleState();
   });
 
-  // Toggle the imported legend entry based on whether any imported drives exist.
   const tessieLegend = document.querySelector('.legend-tessie');
   if (tessieLegend) tessieLegend.classList.toggle('hidden', !anyTessie);
 
-  // Remember the full-coverage bounds so deselectDrive can restore this exact
-  // viewport (it used to refit from endpoints only, which cut off loops).
+  // Preserve full-route bounds so loops remain in view after deselection.
   overviewBounds = features.length > 0 ? bounds : null;
   if (features.length > 0) {
     map.fitBounds(bounds, { padding: 30 });
   }
 }
 
-// Darken a #rrggbb color — the not-yet-traveled route state. 0.45 keeps the
-// hue readable on both the Light and Dark basemaps while clearly receded.
+// Darken untraveled routes while preserving hue on both basemaps.
 function dimColor(hex, factor = 0.45) {
   const n = parseInt(hex.slice(1), 16);
   const ch = (shift) => Math.round(((n >> shift) & 255) * factor)
@@ -4602,12 +4243,7 @@ function dimColor(hex, factor = 0.45) {
   return `#${ch(16)}${ch(8)}${ch(0)}`;
 }
 
-// Push the drive-line palette everywhere it appears: CSS vars (legend + FSD
-// share bars follow automatically), the overview layers, and — when a drive
-// is selected — the per-segment colors baked into the route's GeoJSON. The
-// selected route is re-baked from replayTrailCtx.runs (each run knows its
-// palette role) rather than via drawSelectedDrive, which would re-fit the
-// camera and reset the replay position.
+// Apply the palette without redrawing, refitting, or resetting replay.
 function applyDriveLineColors() {
   const c = driveLineColors;
   const root = document.documentElement.style;
@@ -4632,26 +4268,22 @@ function applyDriveLineColors() {
       };
     });
     map.getSource('selected-route').setData({ type: 'FeatureCollection', features });
-    updateReplayTrail(replayIdx); // re-slice the traveled overlay in the new colors
+    updateReplayTrail(replayIdx);
   });
   logAction(`drive line colors — manual=${c.manual} fsd=${c.fsd} imported=${c.imported} overview=${c.overview}`);
 }
 
-// Repaint the traveled part of the selected route (everything at or before
-// the replay marker) in its normal colors; the base layers underneath stay
-// dimmed. Runs every replay tick and scrub — slicing plus one small setData
-// is cheap, and scrubbing backwards just shrinks the overlay again.
+// Paint the traveled prefix above the dim route on every tick or scrub.
 function updateReplayTrail(idx) {
   if (!mapReady || !replayTrailCtx) return;
   const { runs, latLngs, smooth } = replayTrailCtx;
   const features = [];
   for (const run of runs) {
-    if (run.from >= idx) break; // runs are in route order
+    if (run.from >= idx) break;
     const to = Math.min(run.to, idx);
     let seg = latLngs.slice(run.from, to + 1);
     if (seg.length < 2) continue;
-    // Chaikin preserves endpoints, so a smoothed partial run still ends
-    // exactly at the marker's current point.
+    // Chaikin preserves the partial run's endpoint at the marker.
     if (smooth) seg = smoothLatLngsForDisplay(seg);
     features.push({
       type: 'Feature',
@@ -4669,10 +4301,7 @@ function drawSelectedDrive(drive) {
 
   const pts = drive.points;
   if (!pts || pts.length < 2) {
-    // Nothing drawable — still clear the previous drive's highlighted route
-    // (the old per-layer code cleared it as a side effect of clearLayers),
-    // and stop any replay left over from the previous drive (this early
-    // return used to leave its interval ticking and its points retained).
+    // Empty drives must still clear route sources and replay state.
     cleanupReplay();
     whenMapReady(() => {
       map.getSource('selected-route').setData(EMPTY_FC);
@@ -4683,23 +4312,14 @@ function drawSelectedDrive(drive) {
 
   const fsd = drive.fsdStates;
   const isTessie = isImportedSource(drive.source);
-  // Tessie API drives have per-point autopilot from the /path endpoint, so
-  // we segment them too — just with a dashed line so the lower-fidelity
-  // source stays visually distinct from native SEI.
+  // Segment imported per-point AP data, but distinguish it with dashes.
   const hasFSD = Array.isArray(fsd) && fsd.length === pts.length && fsd.some((s) => s !== 0);
   const latLngs = pts.map((p) => [p[0], p[1]]);
 
-  // The route goes into the 'selected-route' GeoJSON source as one feature
-  // per styling run; the solid/dashed layer pair reads color/width/dash from
-  // the feature properties. driveId lets the map click handler treat clicks
-  // on the highlighted route as a toggle. The base route renders DIMMED
-  // (colorDim) — updateReplayTrail re-paints the traveled part in the normal
-  // color as the replay marker passes, using the index ranges in trailRuns.
+  // Store one GeoJSON feature per styling run for route and replay layers.
   const features = [];
   const trailRuns = [];
-  // Segments carry their palette ROLE (manual/fsd/imported) so a Settings
-  // color change can re-bake them via applyDriveLineColors without a full
-  // redraw (which would re-fit the camera and reset the replay).
+  // Retain palette roles so color changes can re-bake without resetting replay.
   const pushSeg = (from, to, role, dashed, w) => {
     if (to - from < 1) return;
     let seg = latLngs.slice(from, to + 1);
@@ -4714,12 +4334,9 @@ function drawSelectedDrive(drive) {
   };
 
   if (drive.summon) {
-    // Summon drives are driverless end to end (autopilot_state stays 0 in
-    // SEI during summon), so the whole route renders in the summon color
-    // rather than being segmented by FSD engagement.
+    // Summon has no AP state, so color the full driverless route uniformly.
     pushSeg(0, latLngs.length - 1, 'summon', false, 5);
   } else if (hasFSD) {
-    // Split into segments by FSD engagement
     let i = 0;
     while (i < pts.length) {
       const engaged = fsd[i] !== 0;
@@ -4736,7 +4353,7 @@ function drawSelectedDrive(drive) {
       i = j;
     }
   } else if (isTessie) {
-    // Tessie drive with no per-point FSD data (CSV import or missing path).
+    // Imported drive without per-point FSD data.
     pushSeg(0, latLngs.length - 1, 'imported', true, 5);
   } else {
     pushSeg(0, latLngs.length - 1, 'manual', false, 4);
@@ -4745,19 +4362,17 @@ function drawSelectedDrive(drive) {
   replayTrailCtx = { runs: trailRuns, latLngs, smooth: isTessie, driveId: drive.id };
   whenMapReady(() => {
     map.getSource('selected-route').setData({ type: 'FeatureCollection', features });
-    map.getSource('selected-traveled').setData(EMPTY_FC); // nothing traveled yet
+    map.getSource('selected-traveled').setData(EMPTY_FC);
   });
 
-  // Start / end markers
   selectedMarkers.push(makeDotMarker(latLngs[0], { fill: '#22cc55', tooltip: 'Start' }));
   selectedMarkers.push(makeDotMarker(latLngs[latLngs.length - 1], { fill: '#ff3344', tooltip: 'End' }));
 
-  // FSD event markers (visibility controlled by Settings toggle)
   if (Array.isArray(drive.fsdEvents)) {
     for (const ev of drive.fsdEvents) {
       const disengage = ev.type === 'disengagement';
       fsdEventMarkers.push(makeDotMarker([ev.lat, ev.lng], {
-        fill: disengage ? '#ef4444' : '#f59e0b',   // accel: yellowish-orange for legible white text
+        fill: disengage ? '#ef4444' : '#f59e0b',
         radius: 9,
         strokeW: 1.5,
         opacity: 0.95,
@@ -4769,12 +4384,10 @@ function drawSelectedDrive(drive) {
   }
   applyFsdMarkerVisibility();
 
-  // Fit map to selected drive
   const bounds = new maplibregl.LngLatBounds();
   for (const p of latLngs) bounds.extend([p[1], p[0]]);
   map.fitBounds(bounds, { padding: 50 });
 
-  // Show legend if FSD data present or this is a Tessie drive
   const legend = document.getElementById('map-legend');
   if (hasFSD || isTessie) {
     legend.classList.remove('hidden');
@@ -4782,25 +4395,19 @@ function drawSelectedDrive(drive) {
     legend.classList.add('hidden');
   }
 
-  // Add replay marker at start (navigation arrow, rotatable image inside a
-  // plain wrapper div; the wrapper is the marker element MapLibre positions,
-  // the inner #replay-arrow img is what the bearing code rotates).
-  // Use the first point where the car is actually moving, not idx 0 — the
-  // earliest samples are often stationary parked GPS noise that gives a
-  // meaningless bearing.
+  // Initialize orientation from confident motion, not parked GPS noise.
   const initBearing = computeInitBearing(drive.points, drive.gearStates);
   const { w: mW, h: mH } = getMarkerSize();
   const wrap = document.createElement('div');
   wrap.style.width = `${mW}px`;
   wrap.style.height = `${mH}px`;
-  wrap.style.zIndex = '1000'; // above the start/end/FSD dot markers
+  wrap.style.zIndex = '1000';
   wrap.innerHTML = buildMarkerHtml(initBearing);
   replayMarker = new maplibregl.Marker({ element: wrap, anchor: 'center' })
     .setLngLat([latLngs[0][1], latLngs[0][0]])
     .addTo(map);
   selectedMarkers.push(replayMarker);
 
-  // Initialize replay
   initReplay(drive);
 }
 
@@ -4810,15 +4417,13 @@ const GEAR_CLASSES = { 0: 'gear-p', 1: 'gear-d', 2: 'gear-r', 3: 'gear-n' };
 let replayCurrentBearing = 0;
 
 function initReplay(drive) {
-  // Stop any in-flight interval from a previous drive so we don't leak ticks
-  // into the new one (which would cause playback to continue through pauses).
+  // Stop the previous interval before replacing replay state.
   stopReplay();
   replayDrive = drive;
   replayIdx = 0;
   replaySpeed = 1;
   replayPlaying = false;
-  // Initialize bearing to the first point where the car is actually moving
-  // (matching the inline arrow transform set in drawSelectedDrive).
+  // Match the marker's confident initial heading.
   replayCurrentBearing = computeInitBearing(drive.points, drive.gearStates);
 
   const slider = document.getElementById('replay-slider');
@@ -4828,8 +4433,7 @@ function initReplay(drive) {
   document.getElementById('replay-play-icon').textContent = 'play_arrow';
   document.getElementById('btn-replay-speed').textContent = '1x';
 
-  // Set start/end times (some clips carry no per-point timestamp — show
-  // a placeholder instead of "Invalid Date", matching the slider label).
+  // Missing point timestamps retain the placeholder.
   if (drive.points.length > 0) {
     const t0 = drive.points[0][2];
     const t1 = drive.points[drive.points.length - 1][2];
@@ -4840,7 +4444,6 @@ function initReplay(drive) {
   updateReplayData(0);
   document.getElementById('replay-bar').classList.remove('hidden');
 
-  // Wire events
   slider.oninput = (e) => {
     if (replayPlaying) stopReplay();
     replayIdx = parseInt(e.target.value);
@@ -4881,8 +4484,7 @@ function replayTick() {
 function startReplay() {
   if (!replayDrive) return;
 
-  // If at end, restart from beginning. Snap so the marker and arrow reset
-  // to the departure position/heading instead of holding the final one.
+  // Restart completed playback at the departure position and heading.
   if (replayIdx >= replayDrive.points.length - 1) {
     replayIdx = 0;
     updateReplayPosition(0, true);
@@ -4903,14 +4505,13 @@ function stopReplay() {
 function setReplaySpeed(speed) {
   replaySpeed = speed;
   document.getElementById('btn-replay-speed').textContent = `${replaySpeed}x`;
-  // Restart interval at new speed if playing
   if (replayPlaying) {
     clearInterval(replayInterval);
     replayInterval = setInterval(replayTick, REPLAY_BASE_MS / replaySpeed);
   }
 }
 
-// Playback-speed pop-up list (replaces click-to-cycle).
+// Playback-speed pop-up list.
 let _closeSpeedMenuOutside = null;
 function toggleSpeedMenu() {
   const menu = document.getElementById('replay-speed-menu');
@@ -4924,8 +4525,7 @@ function openSpeedMenu() {
     item.classList.toggle('active', Number(item.dataset.speed) === replaySpeed);
   });
   menu.classList.remove('hidden');
-  // Close on any click outside the speed control (deferred so the opening
-  // click doesn't immediately dismiss it).
+  // Defer outside-click binding until after the opening click.
   _closeSpeedMenuOutside = (e) => { if (!e.target.closest('.replay-speed-wrap')) closeSpeedMenu(); };
   setTimeout(() => document.addEventListener('click', _closeSpeedMenuOutside), 0);
 }
@@ -4943,10 +4543,7 @@ function updateReplayPosition(idx, snap = false) {
   const pts = replayDrive.points;
   const pt = pts[idx];
 
-  // Move marker with a smooth transition on the marker element (MapLibre
-  // positions it via a CSS transform, same technique Leaflet used) — except
-  // while the map itself is moving, when MapLibre drives that transform
-  // every frame and easing it would drag the marker off the route.
+  // Ease marker transforms only while MapLibre is not moving the map.
   if (replayMarker) {
     const el = replayMarker.getElement();
     if (el && replayPlaying && !mapInteracting) {
@@ -4957,48 +4554,38 @@ function updateReplayPosition(idx, snap = false) {
     replayMarker.setLngLat([pt[1], pt[0]]);
   }
 
-  // Reveal the traveled portion of the route up to this point.
   updateReplayTrail(idx);
 
-  // Rotate arrow to face the direction the front of the car points.
   const arrow = document.getElementById('replay-arrow');
   if (arrow) {
-    // Skip the bearing update on gear-transition frames — the underlying
-    // points span a gear change and the computed bearing isn't reliable.
+    // Gear-transition windows do not provide a reliable bearing.
     const gears = replayDrive.gearStates;
     const gearNow = gears?.[idx];
     const gearPrev = idx > 0 ? gears?.[idx - 1] : gearNow;
     const gearNext = idx + 1 < gears?.length ? gears?.[idx + 1] : gearNow;
     const gearTransition = (gearNow !== gearPrev) || (gearNow !== gearNext);
 
-    // Playback: bearing at idx, or null when the car isn't actually moving
-    // there (stationary/jitter window) — hold the current heading rather
-    // than rotate to noise. Scrubbing: always orient — a stopped instant
-    // inherits the heading the car entered the stop with (its physical
-    // facing; flip-for-reverse handled inside, relative to the found sample).
+    // Playback holds through stationary noise; scrubbing inherits stop-entry heading.
     let bearing;
     if (snap) {
       bearing = findBearingNear(pts, idx, 7, gears);
     } else {
       bearing = gearTransition ? null : smoothBearing(pts, idx, 7, gears);
-      if (bearing != null && gearNow === 2) bearing = (bearing + 180) % 360; // reverse → flip to front
+      if (bearing != null && gearNow === 2) bearing = (bearing + 180) % 360;
     }
 
     if (bearing != null) {
       if (snap) {
-        // Snap directly — reset accumulated winding so subsequent playback
-        // starts from the correct angle with no leftover drift.
+        // Reset accumulated winding after a scrub.
         replayCurrentBearing = bearing;
         arrow.style.transition = 'none';
       } else {
-        // Shortest-path tracking: sign-preserving delta avoids ±180 drift
-        // that would accumulate into a full 360° rotation.
+        // Use the shortest angular delta without accumulating 360° drift.
         let delta = bearing - (replayCurrentBearing % 360 + 360) % 360;
         if (delta > 180) delta -= 360;
         else if (delta < -180) delta += 360;
         replayCurrentBearing += delta;
 
-        // Adaptive transition: longer at slow playback, shorter at high speeds.
         const transMs = Math.max(30, 150 / replaySpeed);
         arrow.style.transition = `transform ${transMs}ms linear`;
       }
@@ -5006,18 +4593,16 @@ function updateReplayPosition(idx, snap = false) {
     }
   }
 
-  // Update slider and current-time label (label follows the thumb)
   document.getElementById('replay-slider').value = String(idx);
   if (pt && pt[2] !== undefined) {
     const label = document.getElementById('replay-time-current');
     label.textContent = formatReplayTime(pt[2]);
     const max = pts.length - 1;
     const pct = max > 0 ? (idx / max) * 100 : 0;
-    const thumbW = 14; // matches .replay-slider::-webkit-slider-thumb width
+    const thumbW = 14;
     label.style.left = `calc(${pct}% + ${(thumbW / 2) - (pct / 100) * thumbW}px)`;
   }
 
-  // Update data display
   updateReplayData(idx);
 }
 
@@ -5035,9 +4620,7 @@ function calcBearing(lat1, lon1, lat2, lon2) {
 
 const ARROW_MARKER_SIZE = { w: 128, h: 128 };
 
-// Screen pixels per map metre at the marker's latitude and the map's current
-// zoom. MapLibre's Mercator scale stretches with latitude, so this is measured
-// at the marker itself rather than assumed from zoom alone.
+// Measure Mercator scale at the marker latitude.
 function pixelsPerMetreAt(lat) {
   const EARTH_CIRCUMFERENCE_M = 40075016.686;
   const metresPerPixel = (EARTH_CIRCUMFERENCE_M * Math.cos((lat * Math.PI) / 180))
@@ -5045,9 +4628,7 @@ function pixelsPerMetreAt(lat) {
   return metresPerPixel > 0 ? 1 / metresPerPixel : 0;
 }
 
-// A vehicle marker is a physical object, so it's drawn at its true length in
-// map metres — it grows and shrinks with the ground like the buildings under
-// it. Clamped at VEHICLE_MIN_PX so it never disappears when zoomed out.
+// Draw vehicles at physical map scale, clamped to a readable minimum.
 function vehicleMarkerSize(model) {
   const lat = replayMarker?.getLngLat()?.lat ?? map?.getCenter()?.lat ?? 0;
   const ppm = mapReady ? pixelsPerMetreAt(lat) : 0;
@@ -5057,7 +4638,7 @@ function vehicleMarkerSize(model) {
 
 function getMarkerSize() {
   const model = VEHICLE_MODELS[markerType];
-  if (!model) return ARROW_MARKER_SIZE; // the arrow is a cursor — fixed size
+  if (!model) return ARROW_MARKER_SIZE;
   return vehicleMarkerSize(model);
 }
 
@@ -5070,10 +4651,7 @@ function buildMarkerHtml(bearing) {
   return `<img id="replay-arrow" src="../../assets/map-ui/arrow.png" style="width:${w}px;height:${h}px;transform:rotate(${bearing}deg);transition:transform 60ms linear;${shadow};" />`;
 }
 
-// Rebuild the live replay-marker icon for the current markerType/size, keeping
-// its position and current bearing. Called when the marker setting changes
-// mid-view so the arrow/car swaps on the map immediately (without this it only
-// updated the next time the marker was recreated, e.g. re-selecting a drive).
+// Rebuild the live marker without changing position or bearing.
 function refreshReplayMarkerIcon() {
   if (!replayMarker) return;
   let bearing = 0;
@@ -5095,9 +4673,7 @@ function renderVehicleColor(color, model) {
     const imgC = new Image();
     let loaded = 0;
 
-    // Missing artwork (e.g. a model whose PNGs haven't shipped) resolves null
-    // instead of hanging the promise — buildMarkerHtml then falls back to the
-    // arrow and the option probe in initFooter prunes the dropdown.
+    // Resolve missing artwork so the caller can fall back to the arrow.
     imgT.onerror = imgC.onerror = () => resolve(null);
 
     const onLoad = () => {
@@ -5108,12 +4684,11 @@ function renderVehicleColor(color, model) {
       canvas.height = imgT.naturalHeight;
       const ctx = canvas.getContext('2d');
 
-      // Base texture
       ctx.drawImage(imgT, 0, 0);
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const d = imageData.data;
 
-      // Color mask (scaled to base dimensions in case they differ)
+      // Scale the color mask to the texture dimensions.
       const maskCanvas = document.createElement('canvas');
       maskCanvas.width  = imgT.naturalWidth;
       maskCanvas.height = imgT.naturalHeight;
@@ -5125,11 +4700,7 @@ function renderVehicleColor(color, model) {
       const tg = parseInt(color.slice(3, 5), 16);
       const tb = parseInt(color.slice(5, 7), 16);
 
-      // The art sets differ in body color — Model 3's _t is near-BLACK, Model
-      // Y's WHITE, Model X's RED — so detect the base from the average
-      // paintable luminance instead of hardcoding per model. Hue is always
-      // discarded (only luminance carries shading), so a colored base never
-      // tints the chosen paint.
+      // Infer base luminance across paintable pixels and discard source hue.
       let lumSum = 0;
       let lumCount = 0;
       for (let i = 0; i < d.length; i += 4) {
@@ -5140,22 +4711,16 @@ function renderVehicleColor(color, model) {
         lumCount++;
       }
       const avgLum = lumCount > 0 ? lumSum / lumCount : 0.5;
-      // Three shading regimes by base brightness:
-      //  dark  (<0.20)  black body — lerp toward white (tuned on Model 3)
-      //  light (>0.65)  white body — multiply (pure white = the paint tone,
-      //                 not specular; pivoting here would blotch the body)
-      //  mid            colored body (e.g. red) — pivot at the average: the
-      //                 typical body pixel becomes exactly the chosen color,
-      //                 darker shades it, brighter rolls into specular white
+      // Dark, light, and mid-tone bases require different shading transforms.
       const regime = avgLum < 0.2 ? 'dark' : avgLum > 0.65 ? 'light' : 'mid';
 
       for (let i = 0; i < d.length; i += 4) {
         if (d[i + 3] < 10) continue;
         const maskLum = (maskD[i] * 0.299 + maskD[i + 1] * 0.587 + maskD[i + 2] * 0.114) / 255;
-        if (maskLum < 0.5) continue; // black in _c = masked off (glass, tyres, trim)
+        if (maskLum < 0.5) continue;
         const baseLum = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255;
-        let s; // shadow factor (multiply by paint) …
-        let h; // … or highlight factor (lerp paint toward white)
+        let s;
+        let h;
         if (regime === 'dark') {
           s = 1;
           h = baseLum;
@@ -5191,11 +4756,9 @@ async function applyMarkerColor(color) {
   const model = VEHICLE_MODELS[markerType];
   vehicleColoredUrl = model ? await renderVehicleColor(color, model) : null;
 
-  // Keep swatch button in sync
   const swatch = document.getElementById('btn-car-color-swatch');
   if (swatch) swatch.style.background = color;
 
-  // Update preview canvas in settings
   const previewCanvas = document.getElementById('vehicle-preview-canvas');
   if (previewCanvas && vehicleColoredUrl) {
     const img = new Image();
@@ -5207,57 +4770,25 @@ async function applyMarkerColor(color) {
     img.src = vehicleColoredUrl;
   }
 
-  // Refresh live replay marker if one is on the map
   const arrowEl = document.getElementById('replay-arrow');
   if (arrowEl && model && vehicleColoredUrl) arrowEl.src = vehicleColoredUrl;
 }
 
-// First confident heading of the drive — where the replay marker points
-// before playback starts. Delegates to findBearingNear at index 0: a parked
-// start looks ahead to the departure heading through the same trust gates as
-// scrubbing (the old hand-rolled walk keyed on a single ~10 cm pair, which
-// GPS multipath can fake while parked), and the reverse flip follows the
-// samples that supplied the heading (backing out of a spot points the nose
-// away from the travel direction).
+// Derive initial orientation through the same motion gates used by scrubbing.
 function computeInitBearing(pts, gearStates) {
   if (!pts || pts.length < 2) return 0;
   return findBearingNear(pts, 0, 7, gearStates) ?? 0;
 }
 
-// Bearing trust gates. A pair of GPS fixes only proves a heading when the car
-// was really rolling through it:
-//   • MIN_BEARING_PAIR_M — single-fix jitter floor (stationary pairs give
-//     atan2(0,0) = "north"; near-stationary ones give random directions).
-//   • MIN_BEARING_SPEED_MPS — pt[3] is the car's own (CAN/SEI) speed where
-//     available, immune to GPS multipath. Parking rows reflect signal and can
-//     wander fixes 2-5 m between samples while the car sits still — far above
-//     any displacement floor — but the car reports ~0 speed the whole time.
-//   • Net-vs-gross displacement — real travel nets out (window start→end
-//     distance ≈ sum of steps); stationary multipath wanders metres gross
-//     but nets near zero.
+// Bearing trust combines displacement, recorded speed, and net/gross coherence.
 const MIN_BEARING_PAIR_M = 1.5;
 const MIN_BEARING_SPEED_MPS = 0.5;
-// Cap (samples each side) for widening the bearing window when the car's
-// speed proves motion but the default window hasn't covered the jitter
-// floor yet — ±3.2 s at SEI's ~10 Hz cadence. See smoothBearing.
+// Maximum expansion is ±3.2 seconds at SEI's typical 10 Hz cadence.
 const MAX_BEARING_HALF_SPAN = 32;
-// Heading of the car as it sits at idx — used when scrubbing so the arrow
-// matches the direction of travel at the thumb. A moving sample answers
-// directly. A stopped one inherits the last confident heading BEFORE the
-// stop: the car hasn't moved since, so that's its physical facing (the
-// reverse flip comes from the sample the heading was found at, so a car
-// that backed in correctly faces away from its travel). Searching forward
-// here instead would show the post-stop heading early — at a light before
-// a turn the arrow pointed where the car was about to go, not where it
-// faced. Only a scrub before the car's first movement looks ahead. Null
-// when the whole drive has no confident heading; the caller keeps the
-// current rotation.
+// Stopped samples inherit the last confident heading; only pre-departure
+// samples look ahead. Reverse uses the gear of the heading source sample.
 function findBearingNear(pts, idx, window, gearStates) {
-  // smoothBearing clamps its window to j's own gear run, so a non-null
-  // heading is always derived from samples sharing gearStates[j] — making
-  // it safe to key the reverse flip off j directly. (A parked sample can no
-  // longer "borrow" movement from an adjacent leg in a different gear; it
-  // returns null and the walk below moves into the leg itself.)
+  // smoothBearing confines evidence to j's contiguous gear run.
   const headingAt = (j) => {
     const b = smoothBearing(pts, j, window, gearStates);
     if (b == null) return null;
@@ -5265,8 +4796,7 @@ function findBearingNear(pts, idx, window, gearStates) {
   };
   const direct = headingAt(idx);
   if (direct != null) return direct;
-  // Stride keeps successive smoothBearing windows overlapping, so even a
-  // short movement burst between strides still lands inside some window.
+  // Overlap search windows so short movement bursts remain discoverable.
   const stride = Math.max(1, Math.floor(window / 2));
   for (let j = Math.max(0, idx - stride); ; j = Math.max(0, j - stride)) {
     const b = headingAt(j);
@@ -5281,16 +4811,8 @@ function findBearingNear(pts, idx, window, gearStates) {
 }
 
 function smoothBearing(pts, idx, window, gearStates) {
-  // Displacement-weighted circular mean over nearby point pairs.
-  // Skip pairs that cross a gear-state boundary (reverse ↔ drive), since
-  // raw travel bearing flips 180° there and the circular mean collapses.
-  // Returns null when the window doesn't show real movement — the caller
-  // holds the arrow's previous heading instead of rotating it to noise.
-  // Hard bounds for the window and its expansion below: the clip edges AND
-  // the contiguous same-gear run around idx. Travel direction inverts at a
-  // D↔R shift, so any mean or chord across that boundary points somewhere
-  // the car never faced — the net-vector fallback used to do exactly that
-  // during back-in maneuvers, then flip the poisoned chord for reverse.
+  // Use a displacement-weighted circular mean within one contiguous gear run.
+  // Return null when the window cannot distinguish motion from GPS noise.
   let lo = Math.max(0, idx - MAX_BEARING_HALF_SPAN);
   let hi = Math.min(pts.length - 1, idx + MAX_BEARING_HALF_SPAN);
   const gear = gearStates ? gearStates[idx] : null;
@@ -5303,16 +4825,7 @@ function smoothBearing(pts, idx, window, gearStates) {
   let end = Math.min(hi, idx + Math.ceil(window / 2));
   if (end <= start) return null;
 
-  // Structural gate — THE moving/parked decision.
-  //
-  // The car's own recorded speed (pt[3], CAN/SEI when present) is checked
-  // first: if any sample in the window shows real speed, the car IS moving —
-  // skip the GPS-statistics tests below, which under-trigger at low speed
-  // where jitter rivals the movement (that under-trigger froze the arrow
-  // below a walking pace). Speed can only EXPAND updates here, never veto:
-  // zero-filled speed channels (clips without SEI speed) fall through to the
-  // GPS tests instead of stranding the heading.
-  // Speed is signed (negative in reverse) — magnitude is what proves motion.
+  // Recorded speed can prove motion but never veto GPS-only evidence.
   let speedSaysMoving = false;
   for (let i = start; i <= end; i++) {
     const v = pts[i][3];
@@ -5321,14 +4834,7 @@ function smoothBearing(pts, idx, window, gearStates) {
 
   let net = geodesicM(pts[start][0], pts[start][1], pts[end][0], pts[end][1]);
   if (speedSaysMoving) {
-    // The window is sample-count based, but cadence differs by source: SEI
-    // points arrive ~10/s, so the default window spans only ~±0.35 s and
-    // its net displacement falls under the jitter floor below ~5 mph even
-    // though the car is genuinely rolling — which froze the arrow through
-    // exactly the parking-speed turns where heading changes most. When the
-    // car's own speed proves motion, widen the window until the travel
-    // clears the floor; only if it still can't (GPS pinned / sub-walking
-    // creep) is a bearing truly meaningless — hold the current heading.
+    // Expand when speed proves motion but net displacement remains below the floor.
     let half = Math.ceil(window / 2);
     while (net < MIN_BEARING_PAIR_M && (start > lo || end < hi)) {
       half *= 2;
@@ -5338,14 +4844,7 @@ function smoothBearing(pts, idx, window, gearStates) {
     }
     if (net < MIN_BEARING_PAIR_M) return null;
   } else {
-    // No speed evidence — decide from GPS statistics alone:
-    //   1. Net displacement ≥ ~0.4 m per 1 Hz sample (slow-walk pace).
-    //   2. Coherence (net ÷ gross): real travel moves one way, so the
-    //      straight-line distance ≈ the summed steps (≈1.0; ~0.85 through a
-    //      90° turn). Stationary multipath wanders back and forth — metres
-    //      gross, little net — and can fluke past a net threshold alone,
-    //      but not past both. (A U-turn apex can also dip below 0.5 —
-    //      holding for those few frames is correct anyway: it's mid-spin.)
+    // GPS-only evidence requires both net distance and path coherence.
     const minNet = Math.max(MIN_BEARING_PAIR_M, (end - start) * 0.4);
     if (net < minNet) return null;
     let gross = 0;
@@ -5354,13 +4853,9 @@ function smoothBearing(pts, idx, window, gearStates) {
     }
     if (gross > 0 && net / gross < 0.5) return null;
   }
-  // Past this point a bearing is ALWAYS returned: the filters below only
-  // pick which pairs to trust, they can no longer veto the update (an
-  // over-eager veto strands the arrow on a stale heading for whole legs).
+  // From here, pair filters choose evidence but cannot veto the update.
 
-  // requireSpeed: prefer pairs where the car's recorded speed (pt[3], CAN/SEI
-  // when available) confirms motion — but fail open below if that channel is
-  // zero-filled (clips without SEI speed) or missing.
+  // Prefer speed-confirmed pairs, then fall back when the channel is absent.
   const collect = (filterByGear, requireSpeed) => {
     let sinSum = 0, cosSum = 0, weight = 0;
     for (let i = start; i < end; i++) {
@@ -5370,13 +4865,11 @@ function smoothBearing(pts, idx, window, gearStates) {
       if (requireSpeed) {
         const v0 = pts[i][3];
         const v1 = pts[i + 1][3];
-        // abs: reverse records negative speed but is just as much motion.
         if (!Number.isFinite(v0) || !Number.isFinite(v1) || Math.max(Math.abs(v0), Math.abs(v1)) < MIN_BEARING_SPEED_MPS) continue;
       }
       const b = calcBearing(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]);
       const rad = (b * Math.PI) / 180;
-      // Weight by displacement so long, confident segments dominate over
-      // short ones that barely cleared the jitter floor.
+      // Let longer confident segments dominate the circular mean.
       sinSum += Math.sin(rad) * d;
       cosSum += Math.cos(rad) * d;
       weight += d;
@@ -5384,15 +4877,14 @@ function smoothBearing(pts, idx, window, gearStates) {
     return { sinSum, cosSum, weight };
   };
 
-  // Trust tiers, most to least picky. Whichever yields pairs first wins.
+  // Use the first trust tier with usable pairs.
   let r = gearStates ? collect(true, true) : collect(false, true);
   if (r.weight === 0 && gearStates) r = collect(true, false);
   if (r.weight === 0) r = collect(false, false);
   if (r.weight > 0) {
     return ((Math.atan2(r.sinSum, r.cosSum) * 180) / Math.PI + 360) % 360;
   }
-  // Every individual pair was under the jitter floor yet the window clearly
-  // travelled (e.g. steady creep ~1 m/s) — use the net vector itself.
+  // Use the net vector when only the full window clears the jitter floor.
   return calcBearing(pts[start][0], pts[start][1], pts[end][0], pts[end][1]);
 }
 
@@ -5401,12 +4893,10 @@ function updateReplayData(idx) {
   const drive = replayDrive;
   const pt = drive.points[idx];
 
-  // Speed (pt[3] is m/s, signed — negative in reverse; missing on clips
-  // without a speed channel). Show the magnitude: the gear readout carries R.
+  // Display speed magnitude; the separate gear readout conveys reverse.
   document.getElementById('replay-speed-val').textContent =
     Number.isFinite(pt[3]) ? `${speedVal(Math.abs(pt[3]) * MPS_TO_MPH)} ${speedShort()}` : '--';
 
-  // Gear (P/D/R/N, colored like the rest of the replay data)
   const gearSpan = document.getElementById('replay-gear-span');
   const gearEl = document.getElementById('replay-gear-val');
   if (gearSpan && gearEl) {
@@ -5420,8 +4910,7 @@ function updateReplayData(idx) {
     }
   }
 
-  // FSD readout. Summon drives report autopilot_state 0 the whole way, so
-  // instead of a misleading "Off" the readout names the actual drive mode.
+  // Summon has no AP state, so name the mode instead of showing Off.
   const fsdEl = document.getElementById('replay-fsd-val');
   const fsdSpan = document.getElementById('replay-fsd-span');
   if (drive.summon) {
@@ -5461,9 +4950,7 @@ function refreshAllTags(driveTags) {
 
 function renderTagFilter() {
   const container = document.getElementById('tag-filter');
-  // The detector's synthetic "summon" tag is pinned right after "All" when
-  // any summon drive exists — unless the user already has their own summon
-  // tag, which filters identically (the index column carries both).
+  // Avoid duplicating a user-created tag that matches the synthetic Summon filter.
   const pinSummon = hasSummonDrives && !allTags.includes('summon');
   if (allTags.length === 0 && !pinSummon) {
     container.classList.add('hidden');
@@ -5486,7 +4973,7 @@ function renderTagFilter() {
       const tag = btn.dataset.tag;
       driveFilters.tag = (driveFilters.tag === tag && tag !== '') ? '' : tag;
       renderTagFilter();
-      applyDriveFilters(); // re-query the loader — the filter spans ALL drives
+      applyDriveFilters();
     });
   });
 }
@@ -5505,9 +4992,7 @@ async function addTag(drive, tagName) {
   drive.tags = tags;
   logAction(`tag added: "${tagName}"`);
 
-  // Optimistic UI: render immediately so the pill appears without waiting for
-  // the (potentially large) drive-data.json write — set-drive-tags rewrites the
-  // whole file, which is what made this feel sluggish.
+  // Update optimistically before the full-file tag write completes.
   if (!allTags.includes(tagName)) {
     allTags.push(tagName);
     allTags.sort();
@@ -5516,7 +5001,7 @@ async function addTag(drive, tagName) {
   renderDriveList(drives);
   if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
 
-  // Persist; roll back the UI only if the write fails.
+  // Roll back the optimistic update if persistence fails.
   const res = await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags });
   if (res && res.success === false) {
     drive.tags = (drive.tags ?? []).filter((t) => t !== tagName);
@@ -5534,9 +5019,7 @@ async function removeTag(drive, tagName) {
   drive.tags = prev.filter((t) => t !== tagName);
   logAction(`tag removed: "${tagName}"`);
 
-  // Optimistic UI (see addTag). If the removed tag was the active filter and
-  // no drive carries it anymore, drop the filter (and re-query, since the
-  // filter is applied loader-side).
+  // Drop an active loader-side filter when its last matching tag is removed.
   rebuildAllTagsFromDrives();
   if (driveFilters.tag === tagName && !allTags.includes(tagName)) {
     driveFilters.tag = '';

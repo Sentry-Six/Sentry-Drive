@@ -92,10 +92,8 @@ async function groupIndexedDrives(index, options = {}) {
       aggregates.totalDistanceMi += drive.distanceMi ?? 0;
       aggregates.totalDurationMs += drive.durationMs ?? 0;
       if (drive.summon) {
-        // Summon drives count toward totals but are EXCLUDED from FSD
-        // analytics: the car drives itself with autopilot_state unset, so
-        // folding them in as "0% FSD" drives would dilute the score and the
-        // per-drive averages with trips no human (or FSD) ever drove.
+        // Summon contributes to lifetime totals, not FSD analytics; its
+        // autopilot_state is unset and would falsely dilute FSD scores.
         aggregates.summonDriveCount++;
       } else if (drive.source === 'sei') {
         const start = Date.parse(drive.startTime);

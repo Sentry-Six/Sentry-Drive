@@ -198,10 +198,6 @@ test('detail query enforces a fixed point budget and preserves aligned state arr
 });
 
 test('summon drives count in totals but are excluded from FSD aggregates', async (t) => {
-  // A summon drive (hazard bookends, no pedals, crawl speed) and a normal
-  // dashcam drive an hour later. The summon must appear in totalDistanceMi /
-  // summonDriveCount but stay out of every FSD-analytics accumulator —
-  // otherwise it dilutes the lifetime score as a fake "0% FSD" drive.
   const n = 100;
   const summonRoute = {
     file: 'RecentClips/2026-07-28_12-00-00-front.mp4',
@@ -237,11 +233,9 @@ test('summon drives count in totals but are excluded from FSD aggregates', async
 
   const agg = result.aggregates;
   assert.equal(agg.summonDriveCount, 1);
-  assert.equal(agg.seiDriveCount, 1); // the normal drive only
-  // FSD denominator excludes the summon drive's distance…
+  assert.equal(agg.seiDriveCount, 1);
   assert.equal(agg.seiDistanceM, (normalDrive.distanceKm ?? 0) * 1000);
   assert.equal(agg.fsdPercentSum, normalDrive.fsdPercent ?? 0);
-  // …but lifetime totals still include it.
   assert.equal(
     agg.totalDistanceMi,
     (summonDrive.distanceMi ?? 0) + (normalDrive.distanceMi ?? 0),

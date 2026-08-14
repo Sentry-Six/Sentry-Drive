@@ -1,9 +1,4 @@
-// worker.js - Worker thread for parallel GPS extraction.
-//
-// Pull model: the coordinator sends one file at a time and we ask for the
-// next by posting our result. This keeps all workers busy until the very
-// last file — the old pre-chunked split left finished workers idle while
-// the unluckiest one ground through its remaining chunk alone.
+// Pull-based GPS extraction worker; posting a result requests the next file.
 import { parentPort, workerData } from "node:worker_threads";
 import { extractGPSFromFile } from "./extract.js";
 import { computeGearRuns, computeFlagRuns } from "../shared/drive-calc.cjs";
@@ -63,7 +58,6 @@ parentPort.on("message", async (msg) => {
   parentPort.postMessage({ type: "result", workerId, result });
 });
 
-// Announce readiness — the coordinator answers with the first file.
 parentPort.postMessage({ type: "ready", workerId });
 
 function deduplicatePoints(points, gears, apStates, speeds, accelPositions) {

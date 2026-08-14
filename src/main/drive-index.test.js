@@ -51,8 +51,7 @@ test('indexes routes on disk with normalized deduplication and bounded time wind
     chargingSessionCount: 0,
     chargingSiteCount: 0,
   });
-  // Event-folder routes are stored now (gap-fill parity), and windows split
-  // on GAP_FILL_MAX_MS (30 min): [10:00 recent, 10:01 saved] | [11:00 recent].
+  // Windows split at GAP_FILL_MAX_MS, not at a fillable recording gap.
   const windows = [...index.iterateTimeWindows()];
   assert.equal(windows.length, 2);
   assert.equal(windows[0].length, 2);
@@ -157,26 +156,22 @@ test('listDriveSummaries filters by tag and inclusive date range; defaults filte
   put(1, '2026-07-10T08:00:00', ['Home']);
   put(2, '2026-07-15T09:30:00', ['Work', 'Road Trip']);
   put(3, '2026-07-15T18:00:00', []);
-  put(4, '2026-07-20T12:00:00', ['home']); // case-folded storage
+  put(4, '2026-07-20T12:00:00', ['home']);
 
-  // Defaults: no filtering
   const all = index.listDriveSummaries({});
   assert.equal(all.total, 4);
 
-  // Tag filter: whole-tag, case-insensitive; "work" must not match a
-  // hypothetical "homework"
+  // Whole-tag matching is case-insensitive and rejects substrings.
   assert.equal(index.listDriveSummaries({ tag: 'Home' }).total, 2);
   assert.equal(index.listDriveSummaries({ tag: 'work' }).total, 1);
   assert.equal(index.listDriveSummaries({ tag: 'Road Trip' }).total, 1);
   assert.equal(index.listDriveSummaries({ tag: 'o' }).total, 0);
 
-  // Date range: inclusive both ends, either side may be open
   assert.equal(index.listDriveSummaries({ startDate: '2026-07-15' }).total, 3);
   assert.equal(index.listDriveSummaries({ endDate: '2026-07-15' }).total, 3);
   assert.equal(index.listDriveSummaries({ startDate: '2026-07-15', endDate: '2026-07-15' }).total, 2);
   assert.equal(index.listDriveSummaries({ startDate: '2026-07-16', endDate: '2026-07-19' }).total, 0);
 
-  // Combined + filtered total drives the pager
   const combo = index.listDriveSummaries({ tag: 'home', startDate: '2026-07-11' });
   assert.equal(combo.total, 1);
   assert.equal(combo.drives[0].id, 4);
@@ -225,20 +220,15 @@ test('summon drives filter via the synthetic tag and survive tag edits', async (
     { points: [] },
   );
 
-  // The synthetic entry lives in the filter column only — the summary keeps
-  // user tags untouched.
   const summonPage = index.listDriveSummaries({ tag: 'summon' });
   assert.equal(summonPage.total, 1);
   assert.equal(summonPage.drives[0].id, 1);
   assert.deepEqual(summonPage.drives[0].tags, []);
 
-  // An in-session user tag edit must not knock the drive out of the Summon
-  // filter (setDriveTags re-reads the summary to re-append the synthetic tag).
   index.setDriveTags('2026-07-15T20:49:56', ['Errand']);
   assert.equal(index.listDriveSummaries({ tag: 'summon' }).total, 1);
   assert.equal(index.listDriveSummaries({ tag: 'Errand' }).total, 1);
 
-  // Clearing tags on a non-summon drive never invents a summon entry.
   index.setDriveTags('2026-07-15T21:00:00', []);
   assert.equal(index.listDriveSummaries({ tag: 'summon' }).total, 1);
 });

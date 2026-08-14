@@ -1,20 +1,6 @@
-// Replay-arrow heading tests for the timeline scrub path.
-//
-// findBearingNear answers "which way does the car FACE at the scrubbed
-// instant". The physical rules these tests pin down:
-//   • a moving sample faces its travel bearing (flipped 180° in reverse);
-//   • a stopped sample faces the heading the car ENTERED the stop with —
-//     it hasn't moved since (regression: a forward-biased search used to
-//     show the post-stop heading early, so a car waiting to turn left
-//     already pointed into the turn);
-//   • the reverse flip follows the samples that supplied the bearing, not
-//     the landed-on sample (regression: a car that backed into a parking
-//     spot rendered facing backward, because the parked sample's window
-//     borrowed movement from the reverse leg while its own gear said P);
-//   • only a scrub before the car's first movement looks ahead.
-//
-// renderer.js is a browser script (no exports), so the functions under test
-// are extracted from its source and evaluated with geodesicM injected.
+// A stopped sample keeps its entry heading; only pre-departure samples look
+// ahead. Reverse orientation follows the samples that supplied the bearing.
+// Browser-only functions are extracted from renderer.js with geodesicM injected.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -47,10 +33,7 @@ const { findBearingNear, smoothBearing } =
 const STEP = 8.983e-5; // ≈ 10 m/sample (10 m/s)
 const JIT = 2.2e-6;    // ≈ 0.25 m GPS multipath wiggle while stopped
 
-// Gear codes as recorded in gearStates: 0 = P, 1 = D, 2 = R.
-// pt = [lat, lng, t, speedMps] — speed is SIGNED like the SEI channel:
-// negative while reversing. seg.speed overrides the default (10 moving,
-// 0 stopped).
+// gearStates: 0=P, 1=D, 2=R. Point speed is signed as recorded by SEI.
 function build(segments) {
   const pts = [], gears = [];
   let lat = 0, lng = 0, t = 0;
@@ -79,7 +62,6 @@ test('stopped at a light before a left turn — faces the entry heading', () => 
     { n: 20, move: null, gear: 1 },
     { n: 20, move: 'north', gear: 1 },
   ]);
-  // Late in the stop, where a forward search would already see the turn.
   assertHeading(findBearingNear(pts, 35, 7, gears), 90, 'late-stop heading');
 });
 
@@ -125,13 +107,9 @@ test('no confident heading anywhere — returns null so the caller holds', () =>
 });
 
 // ── SEI cadence (~10 points/s) ───────────────────────────────────────────────
-// The default 7-sample window spans only ±0.35 s there, so below ~5 mph its
-// net displacement sat under the jitter floor and the arrow froze through
-// parking-speed turns. With speed proving motion, the window now widens
-// until the travel clears the floor.
+// Speed evidence expands the short default window at this cadence.
 
-// East 3 s, then a 90° left turn over 6 s (east → north), then north 3 s —
-// all at 2 m/s (~4.5 mph), sampled at 10 Hz.
+// East, then a 90° left turn, then north at 2 m/s and 10 Hz.
 function buildSlowTurn10Hz() {
   const pts = [], gears = [];
   let lat = 0, lng = 0, t = 0;
@@ -151,10 +129,8 @@ function buildSlowTurn10Hz() {
 
 test('10 Hz at ~4.5 mph — playback bearing keeps updating (froze below 5 mph)', () => {
   const { pts, gears } = buildSlowTurn10Hz();
-  // Straight east stretch: the playback path (smoothBearing directly).
   const straight = smoothBearing(pts, 15, 7, gears);
   assertHeading(straight, 90, 'slow straight roll');
-  // Mid-turn (~45° tangent): must track the turn, not hold.
   const midTurn = smoothBearing(pts, 60, 7, gears);
   assertHeading(midTurn, 45, 'slow mid-turn');
 });
@@ -166,11 +142,7 @@ test('10 Hz at ~4.5 mph — scrubbing matches the local heading too', () => {
 });
 
 test('reversing at 10 Hz — negative speed still proves motion (arrow froze in R)', () => {
-  // Backing south at ~4.5 mph with the SEI speed channel reading -2 m/s.
-  // The trust gates compared signed speed, so reverse never set
-  // speedSaysMoving and the 1 Hz-tuned GPS fallback floor could not pass
-  // at 10 Hz — the arrow held its pre-reverse heading for the whole
-  // maneuver. Magnitude must prove motion; the R flip then faces the nose.
+  // Signed speed magnitude proves movement; reverse then flips the nose.
   const pts = [], gears = [];
   let lat = 0, t = 0;
   for (let i = 0; i < 100; i++) {
@@ -183,13 +155,7 @@ test('reversing at 10 Hz — negative speed still proves motion (arrow froze in 
 });
 
 test('back-in maneuver at 10 Hz — bearing never mixes travel across the D→R shift', () => {
-  // Pull forward east in D, then back due north into a spot in R, both at
-  // ~4.5 mph. At this cadence every pair is under the jitter floor, so the
-  // bearing comes from the net-vector chord — which used to span the gear
-  // boundary, blend eastbound and northbound travel into a ~NE chord, then
-  // flip it for reverse: the arrow pointed ~SW, a direction the car never
-  // faced. The window must stay inside the current gear run: travel north
-  // (0°), nose south (180°).
+  // Bearing windows must not cross the D→R boundary.
   const pts = [], gears = [];
   let lat = 0, lng = 0, t = 0;
   for (let i = 0; i < 40; i++) {
@@ -202,11 +168,8 @@ test('back-in maneuver at 10 Hz — bearing never mixes travel across the D→R 
     pts.push([lat, lng, (t += 100), -2]);
     gears.push(2);
   }
-  // Early in the reverse run, where an unclamped expanded window would
-  // still reach well into the eastbound leg.
   assertHeading(smoothBearing(pts, 50, 7, gears), 0, 'reverse travel bearing (playback)');
   assertHeading(findBearingNear(pts, 50, 7, gears), 180, 'nose direction while backing (scrub)');
-  // And inside the forward leg, looking back across the start.
   assertHeading(smoothBearing(pts, 35, 7, gears), 90, 'forward travel near the shift');
 });
 

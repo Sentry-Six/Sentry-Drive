@@ -1,5 +1,4 @@
-// grouper.js - Drive grouping, FSD analytics, metrics calculation
-// Faithful port of Sentry-USB server/drives/grouper.go
+// Drive grouping, FSD analytics, and metrics calculation.
 
 import { GEAR_PARK, AUTOPILOT_OFF, AUTOPILOT_FSD, AUTOPILOT_AUTOSTEER, AUTOPILOT_TACC } from "./extract.js";
 import {
@@ -39,10 +38,8 @@ const { rollUpDriveTelemetry } = driveTelemetry;
 
 export { isEventFolderPath, telemetryHasDriving };
 
-// Sentry-USB is Go; its `[]uint8` fields (gearStates, autopilotStates) are
-// serialized by encoding/json as base64 strings. We normalize on read so the
-// rest of the pipeline always sees a Uint8Array, and encode on write so files
-// produced by Sentry-Drive match Sentry-USB's on-disk format.
+// Go serializes `[]uint8` fields as base64. Normalize them to Uint8Array in
+// memory and encode them again for the shared disk format.
 export function decodeByteField(field) {
   if (field == null) return field;
   if (typeof field === "string") {
@@ -57,16 +54,12 @@ export function encodeByteField(field) {
   return Buffer.from(field).toString("base64");
 }
 
-/**
- * Parse a Tesla dashcam filename into a Date object.
- */
 function parseFileTimestamp(filePath) {
   const timestampMs = parseClipTimestampMs(filePath);
   return timestampMs == null ? null : new Date(timestampMs);
 }
 
-// Compatibility surface retained for callers/tests added before the gap-fill
-// implementation moved into the shared CommonJS module.
+// Compatibility exports around the shared gap-fill implementation.
 export function parseClipTimestamp(filePath) {
   return parseFileTimestamp(filePath);
 }
@@ -107,30 +100,20 @@ export function selectGapFillEvents(recentSortedTsMs, candidates) {
   );
 }
 
-// geodesicM (WGS-84 ellipsoidal distance), round2, and every drive-calc
-// constant come from ../shared/drive-calc.cjs (imported above) — the single
-// source of truth. Grouping thresholds still mirror Sentry-USB-Rusty; the
-// distance formula intentionally leads Rust until the migration in
-// docs/RUST-GEODESIC-MIGRATION.md lands there.
+// WGS-84 distance, rounding, and grouping constants come from the shared
+// calculation contract and remain aligned with Sentry-USB-Rusty.
 
 /**
  * Group routes into logical drives based on time gaps and gear state.
  */
 export function groupIntoDrives(routes) {
-  // Deduplicate routes by normalized file path, decoding Go-serialized base64
-  // byte fields so downstream code always sees Uint8Array.
-  // Partition SavedClips/SentryClips event-folder routes off BEFORE dedup —
-  // parity with Rust group_clips. They contain (a) clips duplicating
-  // RecentClips data under a path dedup-by-path can't catch and (b) parked
-  // Sentry-mode recordings the gear splitter would surface as spurious
-  // drives. The only event routes admitted are gap-fills (below); the rest
-  // stay dropped exactly as before.
+  // Deduplicate normalized paths and partition event-folder routes before
+  // admission. Event paths may duplicate RecentClips under another name or
+  // contain parked recordings that are not drives.
   const seen = new Set();
   const unique = [];
   const eventCandidates = [];
   for (const r of routes) {
-    // Event paths stay partitioned until the gap-fill selector can distinguish
-    // moved driving footage from duplicates and parked Sentry recordings.
     const norm = normalizeClipPath(r?.file);
     if (seen.has(norm)) continue;
     seen.add(norm);
@@ -147,13 +130,8 @@ export function groupIntoDrives(routes) {
     });
   }
 
-  // Parse timestamps and sort. Clip-basename timestamps (parseClipTimestamp):
-  // identical to the old whole-path scan for RecentClips paths, and the only
-  // correct reading for event paths, whose event-FOLDER timestamp comes
-  // first. The entries in `unique` are already our own clones (built in the
-  // dedup loop above, never the caller's objects), so attach the timestamp in
-  // place instead of spread-cloning every route a second time — on a large
-  // library that second copy was pure peak waste.
+  // Parse the clip basename, not an event folder's earlier timestamp. Routes
+  // are already local clones, so attach timestamps without another full copy.
   const timed = [];
   for (const r of unique) {
     const t = parseClipTimestamp(r.file);
@@ -169,10 +147,8 @@ export function groupIntoDrives(routes) {
 
   timed.sort((a, b) => a.timestamp - b.timestamp);
 
-  // Tesla moves RecentClips into SavedClips when Save is pressed mid-drive.
-  // Admit only event routes selected by the canonical Rust gap-fill rules:
-  // positive driving telemetry, no occupied-slot/twin duplicate, and either
-  // inside a bounded RecentClips hole or in an anchored leading/trailing chain.
+  // Admit event routes only when driving telemetry and canonical gap-fill rules
+  // identify a missing RecentClips interval or anchored edge chain.
   if (eventCandidates.length > 0) {
     const candidates = [];
     for (const route of eventCandidates) {
@@ -199,7 +175,6 @@ export function groupIntoDrives(routes) {
     timed.sort((a, b) => a.timestamp - b.timestamp);
   }
 
-  // First pass: group by time gap
   const timeGroups = [];
   let current = [timed[0]];
 
@@ -214,9 +189,7 @@ export function groupIntoDrives(routes) {
   }
   timeGroups.push(current);
 
-  // Second pass: split each time group further by gear state,
-  // then by externalSignature so imported drives (Tessie) stay
-  // one-per-drive regardless of time/gear spacing.
+  // Imported-drive signatures refine the normal time/gear grouping.
   const groups = [];
   for (const tg of timeGroups) {
     for (const gearGroup of splitByGearState(tg)) {
@@ -224,7 +197,6 @@ export function groupIntoDrives(routes) {
     }
   }
 
-  // Build drive stats
   const drives = groups.map((group, idx) => buildDriveStats(group, idx));
   return {
     drives,
@@ -235,21 +207,15 @@ export function groupIntoDrives(routes) {
 }
 
 /**
- * Split a group by externalSignature. Clips without a signature (native SEI)
- * stay as one group. Consecutive clips with different signatures become
- * separate groups. This is how we keep Tessie-imported drives from being
- * merged with each other — grouper's time-gap / park-gap heuristics can't
- * reliably tell two back-to-back Tessie drives apart, but the signature
- * (baked into the clip at import time) is unambiguous.
+ * Split imported clips by externalSignature. Native SEI clips remain one
+ * group; signatures disambiguate back-to-back provider drives.
  */
 function splitByExternalSignature(group) {
   if (group.length <= 1) return [group];
   const hasAnySignature = group.some((c) => c.externalSignature);
   if (!hasAnySignature) return [group];
 
-  // Bucket by signature regardless of in-group order — adjacent Tessie drives
-  // can have tied clip timestamps that interleave when sorted, so a
-  // consecutive-run splitter would fragment one drive into multiple pieces.
+  // Bucket regardless of order because tied timestamps may interleave.
   const buckets = new Map();
   const noSig = [];
   for (const clip of group) {
@@ -292,10 +258,7 @@ function splitByGearState(group) {
     }
   }
   if (current.length > 0) result.push(current);
-  // Every segment was parked → no driving happened, so emit no drive.
-  // Mirrors Rust split_summary_by_gear_state (grouper.rs:1893, "return
-  // nothing so drives_count stays 0"). An isolated all-Park clip is a
-  // stationary recording, not a trip.
+  // All-Park groups are stationary recordings, not drives.
   if (result.length === 0) return [];
   return result;
 }
@@ -308,7 +271,6 @@ function splitClipAtParkGaps(clip) {
   const secondsPerFrame = 60.0 / totalRawFrames;
   const nPoints = clip.points.length;
 
-  // Identify raw segments
   const rawSegs = [];
   let frame = 0;
   for (const run of clip.gearRuns) {
@@ -318,7 +280,6 @@ function splitClipAtParkGaps(clip) {
     frame += run.frames;
   }
 
-  // Merge consecutive non-parked segments
   const merged = [];
   for (const seg of rawSegs) {
     if (merged.length > 0 && !merged[merged.length - 1].parked && !seg.parked) {
@@ -362,9 +323,7 @@ function splitClipAtParkGaps(clip) {
         speeds: segSpeeds,
         accelPositions: segAccel,
         timestamp: new Date(clip.timestamp.getTime() + offsetMs),
-        // Frame span of this sub-segment within its parent clip — lets
-        // buildDriveStats end the drive where driving actually stopped
-        // (mirrors Rust SubClipSummary start_frame/end_frame/total_frames).
+        // Preserve raw-frame bounds for duration and Summon evidence.
         subClipFrames: { startFrame: seg.startFrame, endFrame: seg.endFrame, totalFrames: totalRawFrames },
       },
       parked: false,
@@ -392,9 +351,7 @@ function splitByGearStateLegacy(group) {
     }
   }
   if (current.length > 0) result.push(current);
-  // All clips were mostly-parked → drop, matching Rust
-  // split_summary_by_gear_state_legacy (a single clip is still kept by the
-  // group.length <= 1 guard above; only the multi-clip all-park case drops).
+  // Drop multi-clip groups when every legacy clip is mostly parked.
   if (result.length === 0) return [];
   return result;
 }
@@ -415,10 +372,7 @@ function buildDriveStats(clips, idx) {
   const firstClip = clips[0];
   const lastClip = clips[clips.length - 1];
   const startTime = firstClip.timestamp;
-  // End time mirrors Rust build_summary_from_aggregates (grouper.rs:1992):
-  // when the drive's last clip is a park-split sub-segment, the drive ends
-  // where that segment's frames end — not a full minute after the clip
-  // started. Unsplit clips keep the +60 s convention (full frame span).
+  // A park-split drive ends at the segment boundary; unsplit clips span 60 s.
   let lastSegmentLenMs = CLIP_DURATION_MS;
   const lf = lastClip.subClipFrames;
   if (lf && lf.totalFrames > 0) {
@@ -426,7 +380,6 @@ function buildDriveStats(clips, idx) {
   }
   const endTime = new Date(lastClip.timestamp.getTime() + lastSegmentLenMs);
 
-  // Merge all points with interpolated timestamps
   const allPoints = [];
   for (const clip of clips) {
     const clipStart = clip.timestamp.getTime();
@@ -465,15 +418,11 @@ function buildDriveStats(clips, idx) {
   allPoints.length = w;
   filterGPSOutliers(allPoints);
 
-  // Compute distance and speeds
   let totalDistanceM = 0;
   let maxSpeedMps = 0;
   const speedSamples = [];
 
-  // SEI speed is SIGNED — negative in Reverse. Speed stats use the MAGNITUDE
-  // (deliberate divergence from Rusty, which still drops negative samples and
-  // so reports 0 mph for a reverse-only move; Drive leads here like it did on
-  // geodesic distance). Channel presence likewise counts reverse-only data.
+  // SEI speed is signed in Reverse; Drive display stats use its magnitude.
   const hasSEISpeeds = allPoints.some((p) => p.seiSpeed !== 0);
 
   for (let i = 1; i < allPoints.length; i++) {
@@ -505,7 +454,6 @@ function buildDriveStats(clips, idx) {
     avgSpeedMps = speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length;
   }
 
-  // Build point data array: [lat, lng, timeMs, speedMps]
   const pointData = [];
   const fsdStates = [];
   const gearStates = [];
@@ -531,9 +479,8 @@ function buildDriveStats(clips, idx) {
     if (p.gear !== GEAR_PARK) hasGearData = true;
   }
 
-  // Compute per-mode analytics.
-  // Disengagements and accel pushes are FSD (state=1) only — same as Sentry-USB.
-  // Autosteer (state=2) and TACC (state=3) get time/distance tracking only.
+  // Only FSD tracks disengagement and pedal events; other assisted modes track
+  // time and distance.
   let fsdEngagedMs = 0, fsdDisengagements = 0, fsdAccelPushes = 0, fsdDistanceM = 0;
   let autosteerEngagedMs = 0, autosteerDistanceM = 0;
   let taccEngagedMs = 0, taccDistanceM = 0;
@@ -571,13 +518,11 @@ function buildDriveStats(clips, idx) {
         }
       }
 
-      // Track FSD engagement start (state=1 only)
       if (!prevFSD && curFSD) {
         inAccelPress = false;
         fsdEngageTimeMs = cur.timeMs;
       }
 
-      // Accumulate time and distance per mode
       if (curEngaged) {
         assistedDistanceM += d;
         switch (cur.apState) {
@@ -596,7 +541,6 @@ function buildDriveStats(clips, idx) {
         }
       }
 
-      // Detect FSD disengagement (state=1 only)
       if (prevFSD && !curFSD) {
         pendingDisengage = true;
         pendingDisengageTimeMs = cur.timeMs;
@@ -605,19 +549,16 @@ function buildDriveStats(clips, idx) {
         inAccelPress = false;
       }
 
-      // Normalize pedal position to 0-100%
       let accelPct = cur.accelPos;
       if (accelPct <= 1.0) accelPct *= 100.0;
 
-      // Detect human accel press while FSD active (state=1 only).
-      // Skip 3-second grace window after FSD engagement.
+      // Ignore the first three seconds after FSD engagement.
       if (curFSD && !inAccelPress && accelPct > 1.0 && cur.timeMs - fsdEngageTimeMs >= 3000.0) {
         inAccelPress = true;
         accelPressLat = cur.lat;
         accelPressLng = cur.lng;
       }
 
-      // Press complete when pedal returns to 0%
       if (inAccelPress && accelPct <= 0.0) {
         fsdAccelPushes++;
         fsdEvents.push({ lat: accelPressLat, lng: accelPressLng, type: "accel_push" });
@@ -625,7 +566,6 @@ function buildDriveStats(clips, idx) {
       }
     }
 
-    // Flush any pending disengagement at drive end
     if (pendingDisengage && allPoints.length > 0) {
       if (allPoints[allPoints.length - 1].gear !== GEAR_PARK) {
         fsdDisengagements++;
@@ -638,14 +578,9 @@ function buildDriveStats(clips, idx) {
   const r2 = round2;
   const pct = (part) => totalDistanceM > 0 ? Math.round((part / totalDistanceM) * 1000) / 10 : 0;
 
-  // Summon detection — evidence lives in raw SEI frame space (flagRuns +
-  // park-split segment bounds), so it is immune to GPS dedup and to the
-  // fraction-based frame→point index mapping the splitter uses. Clips without
-  // flagRuns (pre-flags extractions, imports) make the drive unverifiable and
-  // detectSummon returns false. Speed inputs come straight from the drive
-  // stats: maxSpeedMps is magnitude-based (reverse counts — see above), and
-  // hasSeiSpeeds gates out GPS-derived speeds, which jitter past walking pace
-  // on a car that barely moved.
+  // Summon uses raw-frame flag/speed evidence so GPS dedup and point slicing
+  // cannot shift its bounds. Missing flagRuns are unverifiable; GPS-derived
+  // speeds are excluded at parking-lot scale.
   const summonEvidence = clips.map((clip) => {
     const runs = clip.flagRuns;
     let totalFrames = clip.subClipFrames?.totalFrames ?? clip.rawFrameCount ?? 0;
@@ -665,29 +600,17 @@ function buildDriveStats(clips, idx) {
     hasSeiSpeeds: hasSEISpeeds,
   });
 
-  // Geocoding-quality endpoints — Drive-leading enhancement (no Rust
-  // counterpart; used ONLY for reverse-geocode labels, never for the locked
-  // distance/speed stats). A single raw GPS fix carries 3–8 m of noise and
-  // the first fix of a drive is usually the worst one. Where the car sat
-  // still at either end, the component-wise median of that parked cluster
-  // estimates the true spot ~√N better and rejects single-fix outliers.
+  // Median stationary endpoint clusters improve geocode labels only; they do
+  // not affect distance or speed statistics.
   const geocodeStartPoint = snapGeocodeEndpoint(allPoints, false);
   const geocodeEndPoint = snapGeocodeEndpoint(allPoints, true);
 
-  // allPoints (seven-field object per GPS sample) is fully consumed at this
-  // point — release it before building the return object so the heavy
-  // intermediate and the final arrays don't coexist any longer than needed.
+  // Release the heavy intermediate before constructing the result.
   const pointCount = allPoints.length;
   allPoints.length = 0;
 
-  // v10 BLE location names — mirrors Rust roll_up_telemetry (grouper.rs:2785):
-  // first non-null locationNameStart / last non-null locationNameEnd across the
-  // drive's clips (time-ordered), deduped by parent file so a clip split into
-  // sub-segments isn't read twice. Stored verbatim — Tesla's reverse-geocoder
-  // picked the label (street address, business name, etc.); no post-processing.
-  // Absent on pre-BLE data, non-telemetry Pis, and imported drives.
-  // Battery % (BLE, same provenance) follows the identical convention:
-  // first non-null batteryPctStart / last non-null batteryPctEnd.
+  // BLE telemetry uses the first start and last end values across unique parent
+  // clips. Labels remain verbatim; older and imported data may omit them.
   const telemetry = rollUpDriveTelemetry(clips);
 
   return {
@@ -708,28 +631,27 @@ function buildDriveStats(clips, idx) {
     gearStates: hasGearData ? gearStates : undefined,
     fsdStates: hasAssistedData ? fsdStates : undefined,
     fsdEvents: fsdEvents.length > 0 ? fsdEvents : undefined,
-    // FSD (state=1) — disengagements and accel pushes tracked here only
+    // FSD
     fsdEngagedMs: Math.round(fsdEngagedMs),
     fsdDisengagements,
     fsdAccelPushes,
     fsdPercent: pct(fsdDistanceM),
     fsdDistanceKm: r2(fsdDistanceM / M_PER_KM),
     fsdDistanceMi: r2(fsdDistanceM / M_PER_MILE),
-    // Autosteer (state=2)
+    // Autosteer
     autosteerEngagedMs: Math.round(autosteerEngagedMs),
     autosteerPercent: pct(autosteerDistanceM),
     autosteerDistanceKm: r2(autosteerDistanceM / M_PER_KM),
     autosteerDistanceMi: r2(autosteerDistanceM / M_PER_MILE),
-    // TACC (state=3)
+    // TACC
     taccEngagedMs: Math.round(taccEngagedMs),
     taccPercent: pct(taccDistanceM),
     taccDistanceKm: r2(taccDistanceM / M_PER_KM),
     taccDistanceMi: r2(taccDistanceM / M_PER_MILE),
-    // Assisted aggregate (any state > 0 — for map/UI use)
+    // Any assisted mode
     assistedPercent: pct(assistedDistanceM),
     routeFiles: clips.map((c) => c.file),
-    // Provenance: "sei" (native dashcam extraction) or "tessie" (imported).
-    // Defaults to "sei" on old files that predate the source field.
+    // Missing provenance defaults to native SEI.
     source: firstClip.source ?? "sei",
     ...(summon ? { summon: true } : {}),
     ...(firstClip.externalSignature ? { externalSignature: firstClip.externalSignature } : {}),
@@ -741,12 +663,9 @@ function buildDriveStats(clips, idx) {
 }
 
 /**
- * Geocoding endpoint for one end of a drive: the component-wise median of the
- * stationary cluster at that end (points within RADIUS_M of the terminal fix,
- * walking inward, capped at ~30 s of samples). Falls back to the terminal fix
- * itself when the car was already rolling (cluster < 3 points) — averaging
- * moving points would drag the location along the path. Displacement-based on
- * purpose: works identically with or without SEI speed data.
+ * Use the median stationary endpoint cluster for geocoding, or the terminal
+ * point when fewer than three nearby samples exist. Displacement works with
+ * or without SEI speed data.
  */
 function snapGeocodeEndpoint(pts, fromEnd) {
   const n = pts.length;
@@ -779,8 +698,7 @@ function snapGeocodeEndpoint(pts, fromEnd) {
 function filterGPSOutliers(points) {
   if (points.length <= 2) return;
 
-  // Step 1: Find the median location to identify where the drive actually is.
-  // Use the middle 50% of points to avoid being skewed by leading/trailing junk.
+  // Estimate the drive's center from the middle half of its samples.
   const q1 = Math.floor(points.length * 0.25);
   const q3 = Math.floor(points.length * 0.75);
   let medLat = 0, medLng = 0, count = 0;
@@ -792,23 +710,15 @@ function filterGPSOutliers(points) {
   medLat /= count;
   medLng /= count;
 
-  // Step 2: Remove any point that is >1,000 km from the median cluster
-  // (MAX_FROM_MEDIAN_M, imported from the shared single-source calc module).
+  // Remove points farther than MAX_FROM_MEDIAN_M from the central cluster.
   let mw = 0;
   for (let i = 0; i < points.length; i++) {
     if (geodesicM(points[i].lat, points[i].lng, medLat, medLng) <= MAX_FROM_MEDIAN_M) points[mw++] = points[i];
   }
   points.length = mw;
 
-  // Step 3: Remove isolated outliers far from both neighbors.
-  // MAX_JUMP_M (5 km — impossible between consecutive ~1s samples) is imported
-  // from the shared single-source calc module.
-  //
-  // Semantics preserved from the old reverse splice loop: "prev" is the
-  // original lower neighbor (lower indices were untouched when index i was
-  // examined), "next" is the next SURVIVING higher neighbor (higher-index
-  // removals had already happened). One mark pass + one compact pass instead
-  // of splice-per-removal, which was O(n²) on dirty GPS.
+  // Mark from the end so `prev` is the original lower neighbor and `next` is
+  // the surviving higher neighbor, then compact in O(n).
   const removed = new Uint8Array(points.length);
   let nextSurvivor = null;
   for (let i = points.length - 1; i >= 0; i--) {

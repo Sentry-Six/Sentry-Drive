@@ -59,12 +59,8 @@ function featureCoordinates(element) {
     : null;
 }
 
-// Overpass is a free, shared service, and the Supercharger selectors are
-// heavy enough that it regularly answers with 429 (rate limited) or 504
-// (timeout) partway through a refresh. One attempt per query used to sink the
-// whole run — including the selectors that had already succeeded — so back
-// off and retry the transient statuses. A bad payload is never retried: that
-// is a real failure, not congestion.
+// Overpass commonly rate-limits or times out these selectors. Retry transient
+// transport/status failures, but reject invalid payloads immediately.
 const OVERPASS_RETRY_DELAYS_MS = [5_000, 20_000, 60_000];
 const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 const OVERPASS_MAX_BYTES = 25 * 1024 * 1024;
@@ -147,16 +143,9 @@ function validateCatalog(catalog) {
   return catalog;
 }
 
-// Per-stall power rating, in kW. OSM carries this on essentially every
-// Supercharger (socket:nacs:output, imported from supercharge.info) and it is
-// the only reliable generation signal: observed charge power is capped by the
-// car's own curve, its state of charge, and pack temperature, so a V4 stall
-// routinely reads lower than a V3 one. Values may list several sockets
-// ("72;250"); the fastest is the site's headline rating.
-// Values outside this range are OSM typos, not stalls — the live data has an
-// entry reading 250000 (watts keyed as kW). The ceiling still clears the
-// 1.2 MW Semi megachargers; a rejected value leaves the site unrated rather
-// than badging it wrongly.
+// Use the fastest declared socket-output rating; observed vehicle power is not
+// a reliable cabinet rating. Reject implausible OSM unit/value errors while
+// retaining ratings through the 1.2 MW Semi megacharger range.
 const MIN_PLAUSIBLE_KW = 1;
 const MAX_PLAUSIBLE_KW = 1500;
 
@@ -215,8 +204,7 @@ function normalizeOverpassCatalog(payload, generatedAt = new Date().toISOString(
     if (station.name === 'Tesla Supercharger' && name !== 'Tesla Supercharger') {
       station.name = name;
     }
-    // Highest stall rating across the merged features wins: a site that has
-    // both old and new cabinets is as fast as its fastest post.
+    // Mixed-generation sites use their fastest post.
     const powerKw = stationPowerKw(element.tags);
     if (powerKw != null && powerKw > (station.powerKw ?? 0)) station.powerKw = powerKw;
   }
@@ -229,11 +217,7 @@ function normalizeOverpassCatalog(payload, generatedAt = new Date().toISOString(
   });
 }
 
-// Most OSM Supercharger nodes carry no real name — 59% of the catalog (and
-// 92% of the Bay Area / Sacramento stations) is literally named "Tesla
-// Supercharger", which identifies nothing. The car, meanwhile, reports the
-// street it charged at ("150 Anza Blvd"). So a catalog name only wins when
-// it says more than the brand does; otherwise keep what the car reported.
+// Prefer the car's location label over OSM's generic brand-only name.
 const GENERIC_CATALOG_NAME = /^tesla\s+supercharger$/i;
 
 function preferredSiteName(catalogName, reportedName) {
@@ -244,14 +228,8 @@ function preferredSiteName(catalogName, reportedName) {
   return catalog || reported || 'Tesla Supercharger';
 }
 
-// Rating -> lightning bolts on the map pill. Thresholds land on the ratings
-// OSM actually publishes rather than between them, so a site badges by the
-// speed you get rather than by cabinet generation:
-//   3 bolts  >= 250 kW  V3 and V4
-//   2 bolts  >= 150 kW  the 150 kW V2 posts
-//   1 bolt    > 0 kW    slower urban and V1 posts
-// A site the catalog has no rating for draws none rather than guessing.
-const SPEED_TIER_MIN_KW = [250, 150, 0]; // tier 3, 2, 1
+// Bolt tiers: 3 at 250+ kW, 2 at 150+ kW, 1 below 150 kW, none if unrated.
+const SPEED_TIER_MIN_KW = [250, 150, 0];
 
 function speedTierFromPowerKw(powerKw) {
   const kw = Number(powerKw);

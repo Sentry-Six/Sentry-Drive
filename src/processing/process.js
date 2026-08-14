@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-// process.js - Main entry point for drives processing
-// Replicates Sentry USB drives processing for Z:\RecentClips
-// Uses worker threads for parallel extraction across all CPU cores
+// Parallel drive-processing entry point.
 
 import { Worker } from "node:worker_threads";
 import { readdir, readFile, unlink } from "node:fs/promises";
@@ -19,13 +17,9 @@ const { buildProcessedRoute } = processResult;
 const { normalizeClipPath } = clipPath;
 const { writeDriveDataJSON } = createRequire(import.meta.url)("../main/drive-data-writer.cjs");
 
-// Large-file-safe reader shared with the main process (native JSON.parse under
-// V8's string cap, stream-json above it). Loaded defensively: it pulls in
-// stream-chain/stream-json, and this child runs as plain Node in packaged
-// builds (ELECTRON_RUN_AS_NODE — no asar support), so the module and those
-// deps must be asarUnpacked (see package.json build.asarUnpack). If the
-// require ever fails, fall back to the plain readFile path below — the
-// ENOENT-only fresh-start rule still protects the existing file either way.
+// Packaged builds run this child as plain Node without asar support, so the
+// streaming reader and its dependencies must remain unpacked. Fall back to
+// JSON.parse if loading it fails; non-ENOENT read errors still abort safely.
 let readDriveData = null;
 try {
   ({ readDriveData } = createRequire(import.meta.url)("../main/drive-data-reader.cjs"));
@@ -44,10 +38,7 @@ const NUM_WORKERS = positional[2]
 // Only process clips on or after this date (YYYY-MM-DD, inclusive).
 const CUTOFF_DATE = "2025-12-01";
 
-// Shared-queue worker pool: every worker pulls the next file when it finishes
-// its current one, so all workers stay busy until the queue is empty. The old
-// up-front round-robin split left finished workers idle while the slowest
-// chunk's worker ground through its tail alone.
+// Workers pull from one queue to avoid uneven preallocated chunks.
 function runWorkerPool(files, numWorkers, onResult) {
   let nextIdx = 0;
   const promises = [];
@@ -91,9 +82,7 @@ async function main() {
   console.log(`Cutoff: ${CUTOFF_DATE} (front camera only)`);
   console.log();
 
-  // Sweep stale temp files from crashed or killed runs — the atomic writer
-  // renames its tmp away on success, so anything still matching the pattern
-  // is dead weight from an interrupted write.
+  // Successful atomic writes rename their temp files; leftovers are stale.
   try {
     const outDir = path.dirname(OUTPUT_PATH);
     const outBase = path.basename(OUTPUT_PATH);
@@ -106,15 +95,11 @@ async function main() {
     // Output dir may not exist yet — the writer creates the file later.
   }
 
-  // Load existing data if available (for incremental processing).
-  // In --reprocess-all mode we still read the file so user-authored driveTags
-  // survive a reprocess, but processedFiles/routes are discarded so every
-  // clip is re-extracted.
+  // Reprocess-all discards extracted routes but preserves user-authored tags.
   let existingData = { processedFiles: [], routes: [], driveTags: {}, extraSections: {} };
   try {
     let loaded;
     if (readDriveData) {
-      // Shared large-file-safe reader — handles libraries past V8's string cap.
       loaded = await readDriveData(OUTPUT_PATH, { wantProcessedFiles: true });
     } else {
       loaded = JSON.parse(await readFile(OUTPUT_PATH, "utf-8"));
@@ -132,23 +117,16 @@ async function main() {
       console.log(`Loaded existing data: ${existingData.processedFiles?.length || 0} processed files, ${existingData.routes?.length || 0} routes`);
     }
   } catch (err) {
-    // Only a MISSING file means "fresh start". Any other failure (a file too
-    // large for V8's string cap, corrupt JSON, a permission error) used to be
-    // swallowed here too — and the final save would then rewrite the file
-    // WITHOUT the old routes, imported drives, or tags. Abort instead: the
-    // existing drive-data.json is left untouched.
+    // Only a missing file is a fresh start. Abort other failures to avoid
+    // replacing unreadable existing data with an empty dataset.
     if (err.code !== "ENOENT") {
       console.error(`Failed to read existing ${OUTPUT_PATH}: ${err.message}`);
       console.error("Aborting so the existing drive data is not overwritten.");
       process.exit(1);
     }
-    // No existing data, start fresh
   }
 
-  // The fallback JSON.parse path returns the raw file shape (unmodeled
-  // sections as top-level keys); fold them into extraSections so the writers
-  // below echo them back instead of dropping them. readDriveData already
-  // returns them collected.
+  // Normalize the fallback reader's raw top-level shape.
   if (!existingData.extraSections || typeof existingData.extraSections !== "object") {
     const known = new Set(["processedFiles", "processedFileCount", "routes", "driveTags", "extraSections"]);
     existingData.extraSections = {};
@@ -168,7 +146,6 @@ async function main() {
     }
   }
 
-  // Discover files
   console.log("Scanning for front camera clips...");
   const discovery = await discoverProcessingFiles(CLIPS_DIR, {
     cutoffDate: CUTOFF_DATE,
@@ -182,7 +159,6 @@ async function main() {
   console.log(`Found ${discovery.recentCount} RecentClips front camera clips` +
     `${discovery.gapFillCount > 0 ? ` + ${discovery.gapFillCount} event gap-fill candidate(s)` : ''}`);
 
-  // Filter already processed
   const newFiles = allFiles.filter((f) => !processedSet.has(f.relativePath));
   console.log(`New files to process: ${newFiles.length}`);
 
@@ -198,19 +174,14 @@ async function main() {
   const poolSize = Math.max(1, Math.min(NUM_WORKERS, newFiles.length));
   console.log(`\nProcessing ${newFiles.length} files across ${poolSize} workers (shared queue)...\n`);
 
-  // Shared state for incremental result collection
   let filesWithGPS = 0;
   let totalPoints = 0;
   let errors = 0;
   let parkedEventSkipped = 0;
   let totalDone = 0;
 
-  // Time-based checkpoints. The old every-100-files policy rewrote the whole
-  // (growing) dataset more and more often relative to runtime — O(N²) total
-  // checkpoint I/O that could rival the extraction itself on big libraries.
-  // One write per minute keeps crash-loss bounded at ~60s of work regardless
-  // of library size. `checkpointBusy` guarantees checkpoints never overlap
-  // each other; `pendingCheckpoint` lets the final save wait for the last one.
+  // Time-based checkpoints bound crash loss without O(N²) file-count-based
+  // rewrites. Checkpoints never overlap, and the final save waits for the last.
   const CHECKPOINT_MS = 60_000;
   let lastCheckpointMs = Date.now();
   let checkpointBusy = false;
@@ -230,7 +201,6 @@ async function main() {
 
   const driveTags = existingData.driveTags || {};
 
-  // Called by each worker for every file result
   const onResult = ({ result }) => {
     totalDone++;
 
@@ -247,13 +217,11 @@ async function main() {
       routeMap.set(processed.processedPath, processed.route);
     }
 
-    // Progress display
     const pct = Math.round((totalDone / newFiles.length) * 100);
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
     const rate = totalDone > 0 ? (totalDone / ((Date.now() - startTime) / 1000)).toFixed(0) : 0;
     process.stdout.write(`\r  Progress: ${totalDone}/${newFiles.length} (${pct}%) | ${rate} files/sec | ${elapsed}s elapsed`);
 
-    // Checkpoint periodically (time-based, never overlapping)
     if (!checkpointBusy && Date.now() - lastCheckpointMs >= CHECKPOINT_MS) {
       checkpointBusy = true;
       const routes = Array.from(routeMap.values());
@@ -268,14 +236,10 @@ async function main() {
     }
   };
 
-  // Run the shared-queue pool
   await runWorkerPool(newFiles, poolSize, onResult);
 
-  // A checkpoint that fired on one of the last files can still be writing.
-  // Wait it out: the final save below must be the LAST writer, both so the
-  // two never interleave and so a stale checkpoint can't land on top of the
-  // complete final file. (Skipping this once crashed the final rename with
-  // ENOENT when the checkpoint consumed the shared tmp file first.)
+  // The final save must follow the last checkpoint to prevent stale overwrite
+  // or competing temp-file renames.
   if (pendingCheckpoint) await pendingCheckpoint;
 
   const routes = Array.from(routeMap.values());
@@ -287,13 +251,11 @@ async function main() {
   console.log(`  Errors:          ${errors}`);
   console.log(`  Parked event gap-fill clips skipped: ${parkedEventSkipped}`);
 
-  // Group into drives
   console.log("\nGrouping into drives...");
   const { drives, timeGroupCount, droppedCount } = groupIntoDrives(routes);
   console.log(`  Drives found: ${drives.length} (from ${timeGroupCount} time groups, ${routes.length} routes)`);
   if (droppedCount > 0) console.log(`  Routes without timestamps (dropped): ${droppedCount}`);
 
-  // Compute aggregate stats
   let totalDistKm = 0, totalDistMi = 0, totalDurMs = 0;
   let totalFsdMs = 0, totalFsdKm = 0, totalFsdMi = 0;
   let totalDisengagements = 0, totalAccelPushes = 0;
@@ -320,15 +282,12 @@ async function main() {
   console.log(`  Disengagements:     ${totalDisengagements}`);
   console.log(`  Accel pushes:       ${totalAccelPushes}`);
 
-  // Save drive-data.json (same format as Sentry USB)
-  // Stream JSON to disk to avoid exceeding Node's max string length on large datasets
   console.log(`\nSaving to ${OUTPUT_PATH}...`);
   await streamWriteJSON(OUTPUT_PATH, processedFiles, routes, driveTags, extraSections);
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`\nDone in ${elapsed}s`);
-  // Single machine-readable line the main process lifts into the app log
-  // (Settings → Support → Logs), so a crash log still shows the outcome.
+  // Machine-readable outcome consumed by the main-process log.
   const noSei = totalDone - filesWithGPS;
   console.log(`SUMMARY: scanned ${totalDone} clip(s) → ${drives.length} drive(s)` +
     `${noSei > 0 ? `, ${noSei} without GPS` : ''}${errors > 0 ? `, ${errors} error(s)` : ''}` +
@@ -344,13 +303,8 @@ function routeForDisk(r) {
   };
 }
 
-// Atomic + backpressure-aware: write to a temp file and rename over the
-// target, so a crash mid-checkpoint can't leave a truncated drive-data.json
-// and concurrent readers never see a half-written file. Honoring `drain`
-// keeps memory flat instead of buffering the whole serialized dataset.
-// The tmp name carries a per-call sequence number: a pid-only name once let
-// an overlapping checkpoint and final save share (and corrupt) one tmp file,
-// crashing the rename with ENOENT when the other call consumed it first.
+// The shared writer provides atomic replacement, backpressure, structural
+// validation, and unique temp names for overlapping attempts.
 async function streamWriteJSON(filePath, processedFiles, routes, driveTags, _extraSections) {
   return writeDriveDataJSON(filePath, {
     processedFiles,

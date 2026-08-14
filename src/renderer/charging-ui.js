@@ -18,11 +18,9 @@ function initChargingTab() {
   document.getElementById('charging-osm-attribution').addEventListener('click', () => {
     window.electronAPI.openExternal('https://www.openstreetmap.org/copyright');
   });
-  // Cluster pills are only known once clustering runs, so mint whatever the
-  // style asks for on demand.
+  // Cluster pill IDs are available only after clustering.
   map.on('styleimagemissing', (event) => addChargingPillImage(event.id));
-  // Pull both icon faces in now so the first home pill draws the solid glyph
-  // rather than a fallback it would then cache for the session.
+  // Load both faces before the first Home pill can cache a fallback.
   document.fonts?.load?.(`24px ${ICON_FONT}`).catch(() => {});
   ensureFilledIconFont();
   renderChargingSites();
@@ -124,9 +122,7 @@ function renderChargingSites(options = {}) {
     type.className = 'charging-type';
     type.textContent = site.isSupercharger ? 'Supercharger' : 'Other charger';
     const latest = document.createElement('span');
-    // The "Latest" prefix is dropped so the power fits on the same line; a
-    // bare date under a visit count already reads as the most recent one,
-    // and the tooltip spells it out.
+    // The tooltip supplies the omitted "Latest" label.
     latest.textContent = formatChargingDate(site.latestVisit, false);
     latest.title = `Latest visit: ${formatChargingDate(site.latestVisit, false)}`;
     const power = chargingPowerLabel(site);
@@ -175,11 +171,7 @@ async function selectChargingSite(siteId, options = {}) {
   }
 }
 
-// The kW shown on a site row. Two different quantities can fill it, so the
-// tooltip says which: the catalog's per-stall rating when the site is a
-// known Supercharger, otherwise the fastest charge actually recorded there
-// — which is all we can know for an AC charger, and is a floor rather than
-// a rating, since the car's own curve and state of charge cap it.
+// Use catalog stall power when known; otherwise show observed peak as a floor.
 function chargingPowerLabel(site) {
   const rated = Number(site.powerKw);
   if (Number.isFinite(rated) && rated > 0) {
@@ -341,7 +333,7 @@ function renderChargingSessionDetail(summary, container) {
 
 const CHARGING_PILL_FILL = { sc: '#e82127', other: '#22c55e', mixed: '#8b5cf6' };
 
-// One lightning bolt, drawn in a unit box so it scales with the pill.
+// Draw one scalable bolt in a unit box.
 function traceBolt(context, x, y, w, h) {
   context.beginPath();
   context.moveTo(x + w * 0.62, y);
@@ -354,17 +346,10 @@ function traceBolt(context, x, y, w, h) {
   context.fill();
 }
 
-// The house is Material Symbols' `other_houses`, matching the icon set the
-// rest of the app draws from. Canvas resolves the ligature, but only once
-// the bundled font is in — before that the same call would paint the literal
-// string "other_houses" across the pill, so an unloaded font falls back to
-// the traced house below rather than risking that.
+// Avoid drawing the `other_houses` ligature until its font is loaded.
 const HOUSE_ICON = 'other_houses';
 const ICON_FONT = '"Material Symbols Outlined"';
-// Material Symbols is a variable font whose FILL axis switches the icons
-// between outlined and solid. Canvas has no way to set a variation axis on
-// ctx.font, so the axis is baked into a private family registered through
-// the Font Loading API — the one route that survives into canvas.
+// Canvas needs a private FontFace with the Material Symbols FILL axis baked in.
 const FILLED_ICON_FAMILY = 'Sentry Drive Icons Filled';
 const FILLED_ICON_FONT = `"${FILLED_ICON_FAMILY}"`;
 
@@ -376,16 +361,14 @@ function fontReady(font) {
   }
 }
 
-// The vendored icon font has a content-hashed filename, so read its URL back
-// out of the stylesheet that declares it instead of hard-coding one that a
-// re-vendor would silently break.
+// Resolve the content-hashed font URL from its stylesheet.
 function materialSymbolsFontUrl() {
   for (const sheet of document.styleSheets) {
     let rules;
     try {
       rules = sheet.cssRules;
     } catch {
-      continue; // cross-origin sheet, not ours
+      continue; // Cross-origin stylesheets are unreadable.
     }
     for (const rule of rules ?? []) {
       if (rule.type !== CSSRule.FONT_FACE_RULE) continue;
@@ -410,20 +393,17 @@ function ensureFilledIconFont() {
     await face.load();
     document.fonts.add(face);
     return true;
-  })().catch(() => false); // outlined glyph still renders; see drawHouse
+  })().catch(() => false); // The outlined glyph remains available.
   return filledIconFontPromise;
 }
 
 function drawHouse(context, x, y, w, h) {
-  // Solid first, outlined if the FILL-axis family didn't register, and the
-  // traced house only if the icon font itself is missing — never the literal
-  // ligature text.
+  // Fall back from solid to outline, then geometry; never paint ligature text.
   const family = fontReady(FILLED_ICON_FONT) ? FILLED_ICON_FONT
     : fontReady(ICON_FONT) ? ICON_FONT
       : null;
   if (!family) {
-    // The fallback draws a single house, so keep it square and centred in
-    // the wider box the two-house icon reserves.
+    // Center the single-house fallback in the two-house box.
     traceHouse(context, x + (w - h) / 2, y, h, h);
     return;
   }
@@ -432,8 +412,7 @@ function drawHouse(context, x, y, w, h) {
   context.textAlign = 'left';
   context.textBaseline = 'alphabetic';
   const m = context.measureText(HOUSE_ICON);
-  // Centre the painted ink in the box, exactly as the marker letters do:
-  // the glyph's advance is square and larger than the icon inside it.
+  // Center the icon's ink rather than its larger glyph advance.
   const inkW = m.actualBoundingBoxLeft + m.actualBoundingBoxRight;
   const inkH = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
   context.fillText(
@@ -444,21 +423,20 @@ function drawHouse(context, x, y, w, h) {
   context.restore();
 }
 
-// Geometric fallback: gabled roof over a body, with a punched-out doorway.
-// Drawn in a unit box like the bolt so both sit on the same baseline.
+// Geometric house fallback in the bolt's unit coordinate system.
 function traceHouse(context, x, y, w, h) {
-  const eaves = h * 0.44;   // where the roof meets the walls
+  const eaves = h * 0.44;
   const wallInset = w * 0.14;
   context.beginPath();
-  context.moveTo(x + w / 2, y);                    // ridge
-  context.lineTo(x + w, y + eaves);                // right eave
+  context.moveTo(x + w / 2, y);
+  context.lineTo(x + w, y + eaves);
   context.lineTo(x + w - wallInset, y + eaves);
-  context.lineTo(x + w - wallInset, y + h);        // right wall
-  context.lineTo(x + wallInset, y + h);            // floor
-  context.lineTo(x + wallInset, y + eaves);        // left wall
-  context.lineTo(x, y + eaves);                    // left eave
+  context.lineTo(x + w - wallInset, y + h);
+  context.lineTo(x + wallInset, y + h);
+  context.lineTo(x + wallInset, y + eaves);
+  context.lineTo(x, y + eaves);
   context.closePath();
-  // Doorway, cut out so the pill's fill shows through.
+  // Cut out the doorway.
   const doorW = w * 0.24;
   const doorH = h * 0.34;
   context.moveTo(x + w / 2 - doorW / 2, y + h);
@@ -469,24 +447,19 @@ function traceHouse(context, x, y, w, h) {
   context.fill('evenodd');
 }
 
-// Draws one map marker: a rounded pill with the visit count on the left and,
-// on the right, `bolts` lightning bolts plus a house when the site is tagged
-// Home. Sized to its contents, so a 3-visit V4 site is wider than a 1-visit
-// AC charger. Rendered at devicePixelRatio so it stays crisp, and handed to
-// MapLibre with a matching pixelRatio.
+// Render a content-sized, device-pixel-ratio-aware charging pill for MapLibre.
 function renderChargingPill({ type, count, bolts, home }) {
   const dpr = Math.max(1, Math.ceil(window.devicePixelRatio || 1));
   const label = String(count);
-  const H = 26;                              // pill height, CSS px
+  const H = 26;                              // CSS pixels
   const padX = 9;
   const boltW = 8;
   const boltH = 13;
   const boltGap = 1;
-  // other_houses is two houses side by side — measured ink is 4:3, not
-  // square like the bolts, so the pill reserves the wider box.
+  // `other_houses` uses a 4:3 ink box.
   const houseW = 16;
   const houseH = 12;
-  const glyphGap = 5;                        // text -> first glyph
+  const glyphGap = 5;
   const font = '800 14px "Noto Sans Mono", monospace';
 
   const measure = document.createElement('canvas').getContext('2d');
@@ -604,7 +577,7 @@ function enterChargingMapMode() {
   stopReplay();
   setChargingMarkerGroupVisible(selectedMarkers, false);
   setChargingMarkerGroupVisible(fsdEventMarkers, false);
-  updatePrivacyZoneLayer(); // drops the zone markers for the charging map
+  updatePrivacyZoneLayer(); // Hide zone markers on the charging map.
   whenMapReady(() => {
     for (const layerId of DRIVE_MAP_LAYER_IDS_FOR_CHARGING) {
       map.setLayoutProperty(layerId, 'visibility', 'none');
@@ -625,7 +598,7 @@ function leaveChargingMapMode() {
   document.getElementById('charging-map-legend').classList.add('hidden');
   setChargingMarkerGroupVisible(selectedMarkers, true);
   setChargingMarkerGroupVisible(fsdEventMarkers, showFsdMarkers);
-  updatePrivacyZoneLayer(); // restores them for the drive map
+  updatePrivacyZoneLayer(); // Restore zone markers on the drive map.
   if (driveCameraBeforeCharging) {
     map.jumpTo(driveCameraBeforeCharging);
     driveCameraBeforeCharging = null;

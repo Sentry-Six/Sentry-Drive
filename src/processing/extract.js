@@ -1,12 +1,8 @@
-// extract.js - MP4 parsing and GPS extraction from Tesla SEI metadata
-// Faithful port of Sentry-USB server/drives/extract.go
-// Optimized: reads entire file into memory for fast NAS access
+// Tesla MP4 SEI metadata extraction, kept compatible with Sentry USB.
 
 import { readFile } from "node:fs/promises";
 
-// Gear and autopilot enums are defined once in the shared single-source calc
-// module; re-export them here so existing `./extract.js` importers (grouper.js,
-// worker.js) keep working unchanged.
+// Re-export the shared enums through the processing module's public surface.
 export {
   GEAR_PARK,
   GEAR_DRIVE,
@@ -43,9 +39,7 @@ export async function extractGPSFromFile(path) {
   return extractFromMdat(buf, mdat.offset, mdat.size);
 }
 
-/**
- * Scan MP4 top-level boxes to find the mdat box.
- */
+/** Find the MP4 mdat payload. */
 function findMdatBox(buf, fileSize) {
   let pos = 0;
 
@@ -73,9 +67,7 @@ function findMdatBox(buf, fileSize) {
   return null;
 }
 
-/**
- * Read through the mdat box parsing NAL units and extracting GPS from SEI.
- */
+/** Parse SEI NAL units from an mdat payload. */
 function extractFromMdat(buf, offset, size) {
   const points = [];
   const gears = [];
@@ -95,7 +87,7 @@ function extractFromMdat(buf, offset, size) {
 
     const nalType = buf[cursor] & 0x1f;
 
-    // NAL type 6 = SEI
+    // H.264 NAL type 6 is supplemental enhancement information.
     if (nalType === 6 && nalSize <= 65536) {
       const result = parseTeslaSEI(buf, cursor, nalSize);
       if (result) {
@@ -126,7 +118,7 @@ function extractFromMdat(buf, offset, size) {
  * Find Tesla magic bytes (0x42...0x69) in a SEI NAL and decode GPS + gear + autopilot + speed + accel.
  */
 function parseTeslaSEI(buf, nalOffset, nalSize) {
-  // Skip NAL header, look for 0x42 sequence followed by 0x69
+  // Tesla payload marker: repeated 0x42 bytes followed by 0x69.
   let i = nalOffset + 3;
   const nalEnd = nalOffset + nalSize;
   while (i < nalEnd && buf[i] === 0x42) {
@@ -136,7 +128,6 @@ function parseTeslaSEI(buf, nalOffset, nalSize) {
     return null;
   }
 
-  // Payload starts after 0x69, ends before trailing byte
   const payloadStart = i + 1;
   const payloadEnd = nalEnd - 1;
   if (payloadEnd <= payloadStart) return null;
@@ -169,7 +160,7 @@ function stripEmulationBytes(buf, start, end) {
  * gear_state (field 2), autopilot_state (field 10), vehicle_speed_mps (field 4),
  * accelerator_pedal_position (field 5), blinker_on_left/right (fields 7/8),
  * brake_applied (field 9). proto3 omits zero/false fields from the wire, so
- * absent simply decodes as off.
+ * absent decodes as off.
  */
 function decodeSeiGPS(data) {
   let i = 0;

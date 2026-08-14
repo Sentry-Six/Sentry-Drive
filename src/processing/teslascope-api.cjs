@@ -1,32 +1,15 @@
-// teslascope-api.cjs - Teslascope REST API client
-//
-// Fetches drives (and, where available, per-drive GPS) from teslascope.com.
-// Mirrors tessie-api.cjs in shape so the import pipeline can treat both
-// providers the same way.
-//
-// Auth: Bearer access token from Teslascope (Account → Developer / API).
-// Endpoints (per https://teslascope.com/developers/documentation):
-//   GET /api/account                       → account + vehicles list
-//   GET /api/vehicle/:public_id/drives      → list of driving sessions
-//   GET /api/vehicle/:public_id/drive/:id   → one driving session (may include a path)
-//
-// IMPORTANT: Teslascope's per-drive field schema is NOT published (the docs
-// hide example bodies behind JS "View Response" widgets). So normalizeDrive()
-// and the point extractor accept common field-name variants, and the first raw
-// response is logged when TESLASCOPE_DEBUG=1 — paste that log (or a sample
-// response) to lock the exact mapping. Until then this is best-effort.
+// Teslascope REST client shaped like the Tessie provider. The per-drive schema
+// is not published, so normalization accepts known field variants and debug
+// mode logs a truncated first response.
 
 'use strict';
 
 const https = require('https');
 
 const API_HOST = 'teslascope.com';
-const DEFAULT_RATE_MS = 1000; // self-throttle; documented limits unknown
+const DEFAULT_RATE_MS = 1000;
 
-// Diagnostics. The field mapping here is best-effort against an undocumented
-// schema, so key milestones (and truncated raw responses) are always logged —
-// through the injected app logger when running in the main process (exported
-// via Settings → Support → Logs), else to stderr when TESLASCOPE_DEBUG=1.
+// Send milestones through the app logger, or stderr in debug mode.
 let appLogger = null;
 function setLogger(l) { appLogger = l; }
 function dbg(...args) {
@@ -34,8 +17,7 @@ function dbg(...args) {
   else if (process.env.TESLASCOPE_DEBUG) console.error('[teslascope-api]', ...args);
 }
 
-// Teslascope wraps payloads in envelopes (e.g. { response: {...} }); descend
-// through the common single-wrapper keys so the pickers see the real body.
+// Unwrap common single-key response envelopes.
 function unwrapEnvelope(body) {
   let b = body;
   for (let i = 0; i < 3 && b && typeof b === 'object' && !Array.isArray(b); i++) {
@@ -46,12 +28,8 @@ function unwrapEnvelope(body) {
   return b;
 }
 
-// Teslascope accepts two credential styles:
-//   • personal access tokens → "Authorization: Bearer <token>" (current),
-//   • legacy API keys → "?api_key=<key>" query param (deprecated but still
-//     issued from the account page, and they do NOT work as Bearer tokens).
-// Users paste whichever they have, so on 401/403 the other style is retried
-// once and the working style is remembered for the rest of the session.
+// Support Bearer tokens and legacy `api_key` credentials. Retry the alternate
+// style once after authorization failure and remember the successful form.
 let authMode = 'bearer';
 
 function requestOnce(path, token, mode, timeoutMs) {
@@ -103,7 +81,7 @@ async function httpGet(path, token, timeoutMs = 15000) {
       return res;
     } catch (e) {
       lastErr = e;
-      if (!e.unauthorized) throw e; // network/HTTP errors: don't retry as auth
+      if (!e.unauthorized) throw e;
     }
   }
   throw new Error(
@@ -134,7 +112,6 @@ function pick(obj, names) {
   if (!obj || typeof obj !== 'object') return undefined;
   for (const n of names) {
     if (obj[n] != null) return obj[n];
-    // case-insensitive fallback
     const lk = Object.keys(obj).find((k) => k.toLowerCase() === n.toLowerCase());
     if (lk && obj[lk] != null) return obj[lk];
   }
@@ -161,9 +138,7 @@ function num(v) {
   return Number.isFinite(n) ? n : undefined;
 }
 
-// Teslascope autopilot/state → our enum (extract.js AUTOPILOT_{OFF,FSD}=0,1).
-// Conservative: only an explicit "on/active/engaged/autopilot/fsd" counts as
-// engaged; everything else (and missing) is off. Mirrors tessie-api's policy.
+// Count only explicit engagement states; missing or ambiguous states are off.
 const AP_ON = /^(on|active|engaged|autopilot|autosteer|fsd|true|1)$/i;
 function mapAutopilot(v) {
   if (v == null) return 0;
@@ -183,7 +158,6 @@ async function fetchVehicles(token) {
   try {
     ({ body } = await httpGet('/api/account', token));
   } catch (e) {
-    // Some deployments expose vehicles directly.
     ({ body } = await httpGet('/api/vehicles', token));
   }
   dbg('account/vehicles raw:', JSON.stringify(body).slice(0, 1200));
@@ -191,9 +165,7 @@ async function fetchVehicles(token) {
   const vehicles = (Array.isArray(list) ? list : []).map((v) => ({
     publicId: pick(v, ['public_id', 'publicId', 'id', 'uuid']),
     vin: pick(v, ['vin', 'VIN']),
-    // The renderer's vehicle dropdown reads `displayName` (same contract as
-    // the Tessie validate path) — returning `name` left it falling back to
-    // the VIN/ID instead of the car's nickname.
+    // Match the renderer's shared provider contract.
     displayName: pick(v, ['name', 'display_name', 'vehicle_name', 'nickname']) || pick(v, ['vin']) || 'Vehicle',
   })).filter((v) => v.publicId != null);
   return vehicles;
@@ -205,19 +177,16 @@ async function fetchVehicles(token) {
  */
 async function fetchDrives(token, publicId, { from, to } = {}) {
   const listFrom = (body) => pickArray(body, ['drives', 'results', 'data', 'response']);
-  // Date params are sent as local YYYY-MM-DD; the 0-result fallback below
-  // covers the param names/format being wrong.
+  // Fall back to client-side filtering if date parameters are unsupported.
   const toDateStr = (sec) => {
     const d = new Date(sec * 1000);
     const p = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   };
   const base = `/api/vehicle/${encodeURIComponent(publicId)}/drives`;
-  // Verified against the live API: limit > 100 → HTTP 422 "The limit may not
-  // be greater than 100." (Laravel-style validation), so page through with
-  // the maximum page size instead of relying on one big response.
+  // The API rejects limits above 100; page at its maximum.
   const PAGE_LIMIT = 100;
-  const MAX_PAGES = 50; // safety stop: 5,000 drives per fetch
+  const MAX_PAGES = 50;
 
   const fetchAll = async (withWindow) => {
     const all = [];
@@ -233,8 +202,8 @@ async function fetchDrives(token, publicId, { from, to } = {}) {
         dbg(`drives raw (${withWindow ? 'windowed' : 'unfiltered'}, page 1):`, JSON.stringify(body).slice(0, 1200));
       }
       all.push(...batch);
-      if (batch.length < PAGE_LIMIT) break; // short page = last page
-      await new Promise((r) => setTimeout(r, 300)); // be polite between pages
+      if (batch.length < PAGE_LIMIT) break;
+      await new Promise((r) => setTimeout(r, 300));
     }
     return all;
   };
@@ -242,9 +211,8 @@ async function fetchDrives(token, publicId, { from, to } = {}) {
   let drives = await fetchAll(true);
   dbg('drives count (windowed):', drives.length);
 
-  // The from/to parameter names are guesses against an undocumented API — if
-  // a windowed query returns nothing, fetch unfiltered and apply the window
-  // client-side off each drive's start timestamp instead.
+  // An empty windowed response may indicate unsupported parameters; retry
+  // unfiltered and apply the window locally.
   if (drives.length === 0 && (from != null || to != null)) {
     const all = await fetchAll(false);
     const fromMs = from != null ? from * 1000 : -Infinity;
@@ -274,8 +242,7 @@ async function fetchDrivePath(token, publicId, driveId) {
 
 // Pull a GPS point list out of a drive detail, accepting several shapes.
 function extractPoints(detail) {
-  // Teslascope returns the GPS path under `progress`; the other keys cover
-  // alternate response shapes.
+  // `progress` is the observed path key; retain compatible alternatives.
   const arr = pickArray(detail, ['progress', 'path', 'points', 'locations', 'coordinates', 'gps', 'route']);
   return arr
     .map((p) => {
@@ -286,8 +253,7 @@ function extractPoints(detail) {
       return {
         latitude: num(pick(p, ['latitude', 'lat'])),
         longitude: num(pick(p, ['longitude', 'lng', 'lon', 'long'])),
-        // Normalize to epoch ms — `progress` gives ISO strings, but clip-building
-        // expects a numeric timestamp.
+        // Clip construction expects epoch milliseconds.
         timestamp: toMs(pick(p, ['timestamp', 'time', 'date', 'recorded_at', 'created_at', 't'])),
         speed: num(pick(p, ['speed', 'speed_mph', 'velocity'])),
         autopilot: pick(p, ['autopilot', 'autopilot_state', 'state', 'ap']),
@@ -303,14 +269,9 @@ function extractPoints(detail) {
  *     startingOdometer, startLat, startLng, endLat, endLng,
  *     points: [{ timestamp, latitude, longitude, speed, autopilot }] }
  */
-// Verified against the live API (drives list, 2026-06): a drive looks like
-//   { id, name, distance: "9.570000" (string miles), duration: 4161 (sec),
-//     latitude_start/longitude_start/latitude_end/longitude_end (strings),
-//     created_at: "2026-06-08T19:01:53.000000Z" (the drive's timestamp —
-//     there is NO explicit end field; end = created_at + duration),
-//     self_driving_miles_start/_end, self_driving_perc, battery_*, ... }
-// The earlier guessed names are kept as fallbacks for the (unseen) per-drive
-// detail endpoint, which may use a richer shape.
+// Observed list responses use string miles/coordinates, `created_at` as start,
+// duration in seconds, no explicit end, and self-driving start/end counters.
+// Retain alternate names for richer detail responses.
 function normalizeDrive(raw, detail) {
   const d = { ...(raw || {}), ...(detail || {}) };
   const startedAt = toMs(pick(d, ['started_at', 'start_date', 'start_time', 'starting_time', 'start', 'startedAt', 'created_at']));
@@ -320,8 +281,7 @@ function normalizeDrive(raw, detail) {
     endedAt = startedAt + durationSec * 1000;
   }
   const distanceMi = num(pick(d, ['distance', 'distance_miles', 'distance_mi', 'miles', 'odometer_distance'])) ?? 0;
-  // Teslascope reports FSD usage as start/end mile counters; fall back to the
-  // delta when no direct autopilot-distance field exists.
+  // Derive FSD distance from counters when no direct value exists.
   const sdStart = num(pick(d, ['self_driving_miles_start']));
   const sdEnd = num(pick(d, ['self_driving_miles_end']));
   const apDistMi = num(pick(d, ['autopilot_distance', 'autopilot_distance_miles', 'fsd_distance', 'autopilotDistanceMi']))
@@ -339,9 +299,7 @@ function normalizeDrive(raw, detail) {
     startLng: num(pick(d, ['longitude_start', 'starting_longitude', 'start_longitude', 'start_lng', 'from_longitude'])),
     endLat: num(pick(d, ['latitude_end', 'ending_latitude', 'end_latitude', 'end_lat', 'to_latitude'])),
     endLng: num(pick(d, ['longitude_end', 'ending_longitude', 'end_longitude', 'end_lng', 'to_longitude'])),
-    // buildClipsForApiDrive maps autopilot via tessie-api's mapAutopilotString
-    // (off-values are specific strings; 0 would read as "on"). Bridge our
-    // boolean mapping to the 'Active'/'Off' strings it understands.
+    // Bridge boolean engagement into the shared provider string contract.
     points: extractPoints(d).map((p) => ({
       ...p,
       autopilot: mapAutopilot(p.autopilot) ? 'Active' : 'Off',
@@ -357,6 +315,5 @@ module.exports = {
   fetchDrivePath,
   normalizeDrive,
   mapAutopilot,
-  // exported for unit-level checks
   _internals: { pick, pickArray, toMs, num, extractPoints },
 };

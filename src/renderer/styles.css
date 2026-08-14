@@ -1,7 +1,5 @@
 /* ── Variables ──────────────────────────────────────────────────────────── */
-/* Palette aligned to the Sentry USB (Rust) UI scheme — dark slate surfaces,
-   glass cards, Noto Sans type — with the accent kept on Sentry Drive's blue
-   (the USB build remaps its blue tokens to green; here we keep real blue). */
+/* Dark slate surfaces, glass cards, and an emerald UI accent. */
 :root {
   /* Surfaces — slate scale, darkest → raised */
   --bg:          #07090c;
@@ -12,7 +10,7 @@
   --border:      #1e242f;
   --border-light:#2a3140;
 
-  /* Accent — Sentry USB green (emerald) */
+  /* Accent — emerald */
   --accent:      #34d399;
   --accent-hover:#6ee7b7;
   --accent-dim:  #10b981;
@@ -27,17 +25,13 @@
   --drive-bg:    #10141b;
   --drive-hover: #161b24;
   --drive-sel:   rgba(52, 211, 153, 0.1);
-  /* --blue / --blue-light are the UI accent (now green); kept under these names
-     so the many var(--blue*) call sites don't all need renaming. Both point at
-     the base emerald: Sentry USB renders accent TEXT in the base accent color
-     (its halo/chip/pill classes), and the paler #6ee7b7 read washed-out. */
+  /* Legacy variable names map to the emerald UI accent. */
   --blue:        #34d399;
   --blue-light:  #34d399;
-  --ap-blue:       #3e6ae1; /* Tesla Blue — Autopilot in the FSD analytics (stays blue) */
-  --ap-blue-light: #8aa4f0; /* same hue, lifted for small text on dark glass */
+  --ap-blue:       #3e6ae1; /* Tesla Blue for Autopilot analytics */
+  --ap-blue-light: #8aa4f0; /* lighter text variant */
 
-  /* Drive line colors — defaults; overridden at runtime from Settings →
-     Map UI → Customization (renderer sets these on documentElement). */
+  /* Runtime settings can override these drive-line defaults. */
   --line-manual:   #2266cc;
   --line-fsd:      #22cc55;
   --line-imported: #a855f7;
@@ -48,16 +42,10 @@
   --danger:      #f87171;
   --warn:        #fbbf24;
 
-  /* ── Liquid Glass surface (Apple-inspired, from Sentry USB) ──────────────
-     Translucent frosted material: a faint white gradient body, a bright
-     specular top rim, a deep float shadow, and heavy backdrop blur+vibrancy
-     on the surfaces that have real content behind them (modals over the map,
-     stat tiles). Tiles sit over an ambient accent glow (#left-panel / the map)
-     so the glass picks up colour to refract. */
+  /* ── Liquid glass surfaces ─────────────────────────────────────────────── */
   --glass-blur:    blur(20px) saturate(180%);
   --glass-border:  rgba(255, 255, 255, 0.12);
-  /* Map overlays sit over the (often bright) map, so they keep a dark tint
-     under the white sheen for text legibility, then blur the map behind. */
+  /* Map overlays retain a dark tint for legibility over bright tiles. */
   --map-glass-bg:  linear-gradient(150deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02) 58%, rgba(255, 255, 255, 0.05)), rgba(11, 14, 19, 0.66);
   --card-bg:       linear-gradient(150deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.03) 55%, rgba(255, 255, 255, 0.05));
   --card-hover-bg: linear-gradient(150deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.05) 55%, rgba(255, 255, 255, 0.085));
@@ -71,8 +59,7 @@
   --font-mono: 'Noto Sans Mono', 'Consolas', 'Menlo', 'Monaco', monospace;
 }
 
-/* Material Symbols (loaded from Google Fonts) reused under the existing
-   .material-icons class so all existing markup keeps working. */
+/* Material Symbols use the existing .material-icons markup contract. */
 .material-icons {
   font-family: 'Material Symbols Outlined';
   font-weight: normal;
@@ -115,15 +102,14 @@ html, body {
 
 /* ── Left Panel ─────────────────────────────────────────────────────────── */
 #left-panel {
-  /* 330px (was 300) so the distance/time/FSD chips always fit one row. */
+  /* Keep distance, time, and FSD chips on one row. */
   width: 330px;
   min-width: 300px;
   max-width: 380px;
   height: 100%;
   display: flex;
   flex-direction: column;
-  /* Ambient glow spans the full panel — through the (transparent) app-title
-     header at the top and the footer at the bottom. */
+  /* The transparent header and footer share this ambient glow. */
   background:
     radial-gradient(660px 480px at 24% -8%, rgba(52, 211, 153, 0.30), transparent 70%),
     radial-gradient(560px 440px at 112% 4%, rgba(139, 92, 246, 0.22), transparent 66%),
@@ -255,9 +241,7 @@ html, body {
 .text-input::placeholder { color: var(--text-dim); }
 .text-input:focus { border-color: var(--accent); }
 
-/* Date fields: Chromium's native calendar-picker icon is black by default —
-   invisible on the dark theme, so users never knew the calendar existed.
-   Recolor it; clicking the field also opens the picker (wired in renderer). */
+/* Recolor Chromium's dark calendar icon for the dark theme. */
 input[type="date"].text-input { cursor: pointer; }
 input[type="date"].text-input::-webkit-calendar-picker-indicator {
   filter: invert(0.75);
@@ -297,7 +281,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 #btn-repair-gps .material-icons { font-variation-settings: 'FILL' 1; }
 .footer-gear { font-variation-settings: 'FILL' 1; }
 
-/* Inside a btn-row, buttons split the space equally */
+/* Buttons share row width equally. */
 .btn-row .btn-primary,
 .btn-row .btn-danger { flex: 1; align-self: auto; }
 
@@ -305,14 +289,11 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   width: 100%;
   padding: 10px 14px;
   font-size: 13px;
-  /* Accent text on the accent glass — Sentry USB's accent-chip pattern —
-     instead of the white label, so the toolbar reads as one emerald set. */
+  /* Accent text keeps the toolbar visually consistent. */
   color: var(--blue-light);
 }
 
-/* Liquid Glass buttons: specular top rim + soft depth, matching --card-bg
-   surfaces. Primary keeps the emerald identity under a glass highlight;
-   secondary/danger are frosted tiles that pick up color on hover. */
+/* Glass buttons add a specular rim and hover tint. */
 .btn-primary {
   background: linear-gradient(150deg, rgba(110, 231, 183, 0.3), rgba(52, 211, 153, 0.14) 55%, rgba(110, 231, 183, 0.2));
   color: #fff;
@@ -370,11 +351,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 .btn-danger:disabled { opacity: 0.35; cursor: not-allowed; }
 
-/* Toolbar destructive pair (Revert / Remove Imported Drives): rest GREEN like
-   their siblings once armed — enabled means a backup or imported drives exist.
-   The :not(:hover) guard lets .btn-danger's red hover keep the warning cue;
-   disabled stays the muted faded grey. Confirm-modal danger buttons and the
-   processing Stop button are untouched. */
+/* Armed destructive toolbar buttons stay green until their red hover state. */
 #btn-revert-gps:not(:disabled):not(:hover),
 #btn-remove-tessie:not(:disabled):not(:hover),
 #btn-multi-remove:not(:hover) { color: var(--blue-light); }
@@ -631,8 +608,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   position: sticky;
   top: 0;
   z-index: 10;
-  /* Translucent + blur so the panel glow flows through while still masking
-     cards that scroll beneath it. */
+  /* Blur masks cards scrolling beneath the translucent toolbar. */
   background: rgba(11, 14, 19, 0.72);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -644,7 +620,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   color: var(--text-dim);
 }
 
-/* ── Drive cards (Sentry USB Rusty style, adapted to the narrow panel) ── */
+/* ── Drive cards ───────────────────────────────────────────────────────── */
 .drive-item {
   display: flex;
   flex-direction: column;
@@ -659,9 +635,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   transition: border-color 0.15s, background 0.15s;
   flex-shrink: 0;
   scroll-margin-top: 44px;
-  /* Skip layout/paint for off-screen cards so large histories (1000s of drives)
-     stay responsive while every card stays in the DOM. contain-intrinsic-size is
-     a placeholder height for unrendered cards; `auto` remembers the real size. */
+  /* Defer off-screen layout while preserving an estimated card height. */
   content-visibility: auto;
   contain-intrinsic-size: auto 140px;
 }
@@ -758,7 +732,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 .journey-labels .jt-label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 
-/* Battery % beside Departed/Arrived (BLE telemetry; absent on old drives). */
+/* Optional BLE battery values beside Departed/Arrived. */
 .jt-batt {
   display: inline-flex;
   align-items: center;
@@ -796,7 +770,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 .drive-diseng .material-icons { font-size: 13px; }
 
-/* Stat chips — compact so all three (incl. FSD) fit one baseline-aligned row */
+/* Keep all three stat chips on one baseline-aligned row. */
 .drive-chips { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 5px; }
 .drive-chip {
   display: inline-flex;
@@ -990,8 +964,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .tag-input:focus { border-color: var(--accent); }
 .tag-input::placeholder { color: var(--text-dim); }
 
-/* Suggestions render as inline dotted-outline bubbles (matching the dashed
-   "+" add button), not a dropdown — shown next to the input on "+" click. */
+/* Suggestions appear inline beside the add button. */
 .tag-suggestions {
   display: inline-flex;
   flex-wrap: wrap;
@@ -1035,8 +1008,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   background: var(--map-glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  /* 32px glyph + 15px padding + 1px borders = 64px box, matching the
-     layers control. */
+  /* Match the 64px layers control. */
   padding: 15px;
   color: var(--text);
   font-size: 32px;
@@ -1053,27 +1025,22 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   outline: none;
 }
 #btn-back-overview .material-icons {
-  /* The base .material-icons rule pins 24px; restate the 32px glyph here
-     so the box actually reaches 64px. */
+  /* Override the base 24px material-icon size. */
   font-size: 32px;
 }
 #btn-back-overview:hover {
   border-color: rgba(110, 231, 183, 0.5);
 }
-/* The back button replaces the zoom buttons while a drive is open — its
-   translucent glass would otherwise show them blurred underneath and
-   sticking out past its edges. */
+/* Hide zoom controls beneath the translucent back button. */
 #map-container:has(#btn-back-overview:not(.hidden)) .maplibregl-ctrl-top-left {
   visibility: hidden;
 }
 
 /* ── Map Layer Control (custom radio list, top right of the map) ────────── */
-/* Collapsed to a layers icon (like the old Leaflet control); hovering the
-   control swaps the icon for the radio list. */
+/* Hover expands the layers icon into a radio list. */
 #map-layers-control {
   position: absolute;
-  /* Mirrors #btn-back-overview's 14px corner offset and 46px box (44px
-     toggle + 1px borders vs the button's 24px glyph + 10px padding). */
+  /* Align with the overview button's corner offset. */
   top: 14px;
   right: 14px;
   z-index: 5;
@@ -1090,7 +1057,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   display: flex;
   align-items: center;
   justify-content: center;
-  /* 62px + the control's 1px borders = 64px box, matching the back button. */
+  /* Borders bring the collapsed control to 64px. */
   width: 62px;
   height: 62px;
   font-size: 32px;
@@ -1101,7 +1068,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 #map-layers-control:hover .map-layers-toggle { display: none; }
 #map-layers-control:hover label { display: flex; }
 #map-layers-control label {
-  display: none; /* collapsed; the :hover rule above expands the list */
+  display: none; /* expanded on control hover */
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
@@ -1198,9 +1165,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 
 .map-stats-summary {
   display: flex;
-  /* Always one line: the panel grows to fit its stats (it's centered with
-     max-width to the map edge), and spacing compresses with the viewport
-     before anything else gives. Values never break mid-text. */
+  /* Compress spacing before allowing stat values to wrap. */
   gap: clamp(14px, 4vw, 48px);
   align-items: center;
   padding: 18px clamp(24px, 4.5vw, 56px) 18px clamp(18px, 4vw, 56px);
@@ -1278,10 +1243,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   flex-shrink: 0;
   box-shadow: 0 0 0 1px var(--border-light);
 }
-/* The ring itself: the conic gradient (--donut-bg, set inline by the
-   renderer) lives on a pseudo-element with a radial mask punching a truly
-   transparent 24px-thick ring. Masking the pseudo — not .map-stats-chart —
-   keeps the center label unclipped. */
+/* Mask only the gradient pseudo-element so the center label remains visible. */
 .map-stats-chart::after {
   content: '';
   position: absolute;
@@ -1446,8 +1408,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 
 .map-stat-val {
-  /* Shrinks a touch on very narrow windows so the one-line summary keeps
-     fitting after the gaps have bottomed out. */
+  /* Preserve the single-line summary on narrow windows. */
   font-size: clamp(19px, 4.4vw, 28px);
   font-weight: 700;
   color: var(--text);
@@ -1463,9 +1424,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   white-space: nowrap;
 }
 
-/* Info affordance beside a stat value (e.g. Summon's N/A FSD usage). Sized
-   off the value's own font so it tracks the clamp() as the panel narrows,
-   and vertically centered against the digits rather than the line box. */
+/* Scale info icons with their stat value. */
 .map-stat-info {
   font-size: 0.5em;
   line-height: 1;
@@ -1761,16 +1720,14 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.6);
-  /* blur lives on ::before — see the popup-safe glass section */
+  /* Blur lives on ::before for popup compatibility. */
 }
 
 #settings-modal {
-  /* Wide enough for the five tab labels (General/Privacy/Map UI/Integrations/
-     Support) to sit comfortably on one row. */
+  /* Keep all five settings tabs on one row. */
   width: 500px;
   max-height: 86vh;
-  /* Match the FSD Stats panel's glass surface: translucent dark glass + sheen
-     with a white translucent edge (the backdrop blur is on ::before). */
+  /* Match the map-stat glass surface. */
   background: var(--map-glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: 16px;
@@ -1814,7 +1771,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   gap: 2px;
   margin: 2px 14px 0;
   padding: 3px;
-  /* Frosted track so the glass shows through instead of an opaque dark bar. */
+  /* The frosted track keeps the modal glass visible. */
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--glass-border);
   border-radius: 12px;
@@ -1852,9 +1809,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   display: grid;
 }
 
-/* Panes share one grid cell so the body sizes to the TALLEST tab — the modal
-   stays a constant size no matter which tab is active. Inactive panes stay in
-   the layout (visibility:hidden) so they keep reserving that height. */
+/* Hidden panes reserve height so switching tabs does not resize the modal. */
 .settings-pane {
   grid-area: 1 / 1;
   display: flex;
@@ -1993,9 +1948,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 .settings-section-icon .material-icons { font-size: 17px; }
 
-/* Brand logo in the icon slot (integration cards) — the PNG carries its own
-   background, so no halo tint; a faint inset ring keeps the edge crisp on the
-   dark card (esp. the black Tessie tile). */
+/* Brand logos use their own backgrounds plus a faint inset edge. */
 .settings-section-icon.is-logo {
   overflow: hidden;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
@@ -2180,9 +2133,9 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.7);
-  /* blur lives on ::before — see the popup-safe glass section */
+  /* Blur lives on ::before for popup compatibility. */
 }
-/* Sits above the still-open Import Drives modal (also 9500). */
+/* Stack above the Import Drives modal. */
 #import-json-confirm-overlay { z-index: 9600; }
 
 .reprocess-modal {
@@ -2257,8 +2210,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   line-height: 1.35;
 }
 
-/* Import Drives — a floating window with the settings-modal chrome
-   (header + top-right ×) instead of a centered confirm dialog. */
+/* Import Drives uses the settings-modal window chrome. */
 #tessie-modal {
   width: 400px;
   max-width: calc(100vw - 48px);
@@ -2558,9 +2510,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .zone-icon-btn:hover { border-color: var(--glass-border); background: rgba(255, 255, 255, 0.06); }
 .zone-icon-btn .material-icons { font-size: 17px; }
 
-/* Icon picker popover (shared, anchored to the clicked zone row icon).
-   Dark-tinted glass + the ::before backdrop blur (popup-safe glass group) —
-   plain --card-bg let the settings text underneath bleed through. */
+/* Icon picker uses popup-safe glass anchored to its zone row. */
 #zone-icon-popup {
   position: fixed;
   z-index: 9600;
@@ -2664,9 +2614,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .btn-add-zone:hover { color: var(--accent); border-color: var(--accent); }
 .btn-add-zone .material-icons { font-size: 16px; }
 
-/* Zone center markers — amber disc with the zone's icon. pointer-events off
-   so the preview marker gliding under the cursor never swallows the map's
-   mousemove/mousedown during placement. */
+/* Placement markers ignore pointer events so the map retains drag input. */
 .zone-marker {
   width: 26px;
   height: 26px;
@@ -2821,10 +2769,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   overflow: hidden;
 }
 
-/* Height only — the width follows the canvas's intrinsic ratio, so vehicles
-   with different render aspects (0.49 Cybertruck … 0.52 Model 3) preview
-   undistorted. A fixed width here squashed everything into the old art's
-   0.625 box. Rotated 90deg, so the wrap's height bounds the car's LENGTH. */
+/* Intrinsic canvas width preserves each vehicle's aspect ratio. */
 .vehicle-preview-canvas {
   display: block;
   width: auto;
@@ -3067,8 +3012,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   cursor: not-allowed;
 }
 
-/* Update available: pulse yellow until the user acts on it. The class is
-   removed once downloading starts (progress state shouldn't blink). */
+/* Pulse only while an update awaits user action. */
 .footer-update-btn.update-attention {
   border-color: #facc15;
   background: rgba(250, 204, 21, 0.12);
@@ -3085,8 +3029,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   50%      { opacity: 0.55; box-shadow: 0 0 6px 2px rgba(250, 204, 21, 0.25); }
 }
 
-/* Downloading: the arrow travels down and fades, so the button reads as
-   active work rather than a static icon (the % stays in the tooltip). */
+/* Animate the arrow while downloading; percentage remains in the tooltip. */
 .footer-update-btn.update-downloading {
   border-color: var(--accent);
   background: rgba(52, 211, 153, 0.12);
@@ -3104,7 +3047,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   100% { transform: translateY(-5px); opacity: 0.15; }
 }
 
-/* Ready to install: orange, flashing, until the user restarts. */
+/* Flash orange while an update is ready to install. */
 .footer-update-btn.update-ready {
   border-color: #fb923c;
   background: rgba(251, 146, 60, 0.14);
@@ -3132,9 +3075,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 
 /* ── Loading Overlay ───────────────────────────────────────────────────── */
 #loading-overlay {
-  /* Fixed + above every modal (highest sibling is 9600): a data load must
-     block the whole app — panel tabs, footer links, settings — not just the
-     map it used to cover when it lived inside #map-container. */
+  /* Data loading blocks the entire app above all modals. */
   position: fixed;
   inset: 0;
   z-index: 9700;
@@ -3231,13 +3172,13 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 /* The +/- glyphs are dark SVG background images — invert them for the theme. */
 .maplibregl-ctrl button .maplibregl-ctrl-icon { filter: invert(0.75); }
 
-/* Circle markers (start/end/FSD events) — DOM replacements for circleMarker. */
+/* DOM circle markers for start, end, and FSD events. */
 .map-dot-marker {
   box-sizing: content-box;
   border-radius: 50%;
   box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
 }
-/* Hover tooltip for map markers, styled like the old Leaflet tooltips. */
+/* Hover tooltip for map markers. */
 .map-tooltip {
   position: absolute;
   transform: translate(-50%, -100%);
@@ -3348,8 +3289,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .tessie-mode-btn.active {
   background: rgba(168, 85, 247, 0.22);
   color: #c084fc;
-  /* The selected tab isn't a button anymore — re-clicking it used to
-     re-enable Import past a "0 to import" preview. */
+  /* The selected tab is inert after a zero-result preview. */
   pointer-events: none;
   cursor: default;
 }
@@ -3364,11 +3304,9 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 #tessie-api-token { font-family: monospace; letter-spacing: 0.5px; }
 #tessie-token-link { color: #c084fc; text-decoration: underline; cursor: pointer; }
 
-/* ── Liquid Glass tiles ─────────────────────────────────────────────────
-   Placed last so the brighter glass rim wins over each tile's own border.
-   Backdrop blur is reserved for surfaces that sit over real content (modals
-   over the map, stat tiles) — the drive list uses translucency over the
-   panel's ambient glow instead, to keep a long list cheap to scroll. */
+/* ── Liquid glass tiles ──────────────────────────────────────────────────
+   Keep backdrop blur off long scrolling lists; translucent tiles use the
+   panel glow without the per-card rendering cost. */
 .drive-item,
 .stat,
 .settings-section,
@@ -3387,11 +3325,8 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 
 /* ── Popup-safe glass ───────────────────────────────────────────────────────
-   Native <select> and date-picker popups fail to open inside elements with
-   backdrop-filter (Chromium bug — the Import/Settings dropdowns went dead).
-   Modals and modal overlays keep their glass blur on a ::before layer painted
-   behind the content instead: identical look, but the popups' ancestor chain
-   is filter-free. Do not move backdrop-filter back onto these containers. */
+   Chromium native popups can fail inside backdrop-filter ancestors. Keep
+   modal blur on ::before so select and date-picker popups remain functional. */
 #settings-modal,
 #tessie-modal,
 .reprocess-modal,
@@ -3526,9 +3461,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .charging-session-button:hover {
   background: rgba(255, 255, 255, 0.045);
 }
-/* Same badge the map draws: solid fill, 2px white ring, white numerals.
-   Colors mirror the charging-sites circle layers (#22c55e other,
-   #e82127 supercharger) so the list and the map read as one set. */
+/* Match charging-list badges to the map's circle colors. */
 .charging-visit-count {
   width: 40px;
   height: 40px;
@@ -3561,10 +3494,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   margin-top: 3px;
   color: var(--text-muted);
   font-size: 10px;
-  /* One line, always. Type and power are short and fixed; the date is the
-     long variable part, so it is the one allowed to ellipsize when a wide
-     rating and a long month coincide. Without this the row silently grew to
-     two lines once the power was added. */
+  /* Ellipsize the variable date while keeping type and power visible. */
   white-space: nowrap;
   overflow: hidden;
 }
@@ -3579,8 +3509,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   color: #4ade80;
 }
 .charging-site.is-supercharger .charging-type { color: #ff5a5f; }
-/* Charger power. Mono like every other figure in the app, and a shade
-   brighter than the rest of the meta line so it stays scannable. */
+/* Charger power uses the brighter numeric treatment. */
 .charging-power {
   color: var(--text);
   font-family: var(--font-mono);

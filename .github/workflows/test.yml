@@ -1,6 +1,6 @@
 name: Test
 
-# Gates PRs (including Dependabot's) — release builds run in build.yml.
+# Release builds run in build.yml.
 
 on:
   pull_request:

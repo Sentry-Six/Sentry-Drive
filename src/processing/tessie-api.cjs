@@ -1,13 +1,4 @@
-// tessie-api.cjs - Tessie REST API client
-//
-// Fetches drives and dense driving paths from api.tessie.com. Unlike the
-// CSV export, the API provides per-point GPS + autopilot state at Tesla's
-// native polling cadence, so imported drives match Tessie's website.
-//
-// Auth: Bearer token from Tessie dashboard → Developer Settings → Generate
-// Access Token. The token covers drives, path, vehicles, and fleet APIs.
-//
-// Rate limits aren't documented — we self-throttle at 1 req/sec.
+// Rate-limited Tessie REST client for vehicles, drives, and detailed paths.
 
 'use strict';
 
@@ -71,8 +62,7 @@ class Throttler {
  * List vehicles on the user's account. Use this to confirm the token works
  * and pick the VIN for subsequent calls.
  */
-// Diagnostics — injected by the main process so milestones land in the app
-// log (Settings → Support → Logs), matching the Teslascope client.
+// Main-process diagnostics hook.
 let appLogger = null;
 function setLogger(l) { appLogger = l; }
 function dbg(...args) {
@@ -136,18 +126,13 @@ async function fetchPath(token, vin, { from, to, separate = true, simplify = fal
   return out;
 }
 
-// Tessie's autopilot string → our internal enum.
-// See extract.js:AUTOPILOT_{OFF,FSD,AUTOSTEER,TACC} = 0,1,2,3.
-//
-// Per Tessie: their /path autopilot field only tracks FSD engagement (not
-// Autosteer or TACC). So "Active" / engaged → AUTOPILOT_FSD, anything else
-// → off. Disengagement / accel-push detection in grouper.js only fires when
-// SEI accel-pedal data is present, so mapping Tessie to FSD doesn't
-// generate false events — Tessie clips carry no accelPositions data.
+// Tessie's path field distinguishes FSD engagement only, not Autosteer or
+// TACC. Imported clips have no accelerator samples, so mapping engagement to
+// FSD cannot create pedal-based events.
 const AP_OFF_VALUES = new Set(['Unavailable', 'Standby', 'Off', '', null, undefined]);
 function mapAutopilotString(s) {
   if (AP_OFF_VALUES.has(s)) return 0;
-  return 1; // FSD
+  return 1;
 }
 
 module.exports = {

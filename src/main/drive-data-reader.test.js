@@ -1,7 +1,4 @@
-// Parity tests for the hybrid drive-data reader: the fast native-JSON.parse
-// path and the stream-json fallback MUST return identical results for the
-// same file — the strategy is picked by file size, so any divergence would
-// mean small and large files parse differently.
+// Fast and streaming readers must return identical data.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,10 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { readDriveData, FAST_PARSE_LIMIT_BYTES } from './drive-data-reader.cjs';
 
-// A fixture exercising the shapes that appear in real drive-data.json files:
-// Go-style base64 byte fields (with '=' padding), backslashes in Windows
-// paths, quotes/unicode in strings, nested gearRuns objects, floats with full
-// precision, null/absent optional fields, and BLE telemetry strings.
+// Covers exporter byte fields, Windows paths, Unicode, nested runs, precision,
+// optional values, and BLE telemetry.
 const FIXTURE = {
   processedFiles: [
     'RecentClips/2026-05-17_18-47-34-front.mp4',
@@ -66,7 +61,6 @@ test('fast and streaming paths return identical data (pretty-printed file)', asy
 });
 
 test('fast and streaming paths return identical data (compact single-line file)', async () => {
-  // Go/Rust exporters write the whole document on one line.
   const file = writeFixture(JSON.stringify(FIXTURE));
   const fast = await readDriveData(file, { wantProcessedFiles: true });
   const streamed = await readDriveData(file, { wantProcessedFiles: true, forceStreaming: true });
@@ -111,11 +105,9 @@ test('threshold constant is sane (under V8 max string length)', () => {
 });
 
 test('unmodeled top-level sections are captured verbatim (both paths)', async () => {
-  // Rusty's exports carry sections Drive doesn't model (telemetrySamples,
-  // chargeTags, chargeCosts, …). They must round-trip through read-modify-
-  // write untouched — dropping them shrank the shared file by ~40 MB once.
+  // Exporter-specific sections must survive read-modify-write cycles.
   const withExtras = {
-    formatVersion: 3, // scalar BEFORE the known sections
+    formatVersion: 3,
     ...FIXTURE,
     telemetrySamples: [
       { ts: 1752606000, batteryPct: 81.5, hvacOn: 1, source: 'state' },
@@ -140,11 +132,9 @@ test('unmodeled top-level sections are captured verbatim (both paths)', async ()
     partial: null,
     complete: true,
   });
-  // Known sections never leak into extras.
   assert.equal('routes' in fast.extraSections, false);
   assert.equal('driveTags' in fast.extraSections, false);
   assert.equal('processedFiles' in fast.extraSections, false);
-  // And a file with no extras yields an empty object.
   const plain = await readDriveData(writeFixture(JSON.stringify(FIXTURE)), { forceStreaming: true });
   assert.deepEqual(plain.extraSections, {});
 });

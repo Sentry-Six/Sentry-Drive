@@ -1,17 +1,6 @@
-// Locked tests for the single-source drive-calc module.
-//
-// These pin the constants and formulas so any accidental change fails the
-// build before it can ship (`npm test`, wired to `prebuild`/`publish`/CI).
-//
-// Distance: the canonical function is geodesicM (Andoyer–Lambert on WGS-84).
-// Its golden values below were cross-validated against Vincenty (agreement
-// within 0.4 m over 4,100 km). haversineM is kept as the legacy spherical
-// reference mirroring Sentry-USB-Rusty — its vectors come verbatim from the
-// Rust crate's own tests — until the Rust side migrates per
-// docs/RUST-GEODESIC-MIGRATION.md:
-//   - grouper.rs   test_haversine_m             (NYC→LA ≈ 3,944 km, ±50 km)
-//   - grouper.rs   test_haversine_m_same_point  (identical point → 0)
-//   - aggregate.rs haversine_known_distance_sf_to_nyc (SF→NYC 4,000–4,200 km)
+// Locks the shared calculation contract against accidental drift. geodesicM is
+// the WGS-84 production distance in both Drive and Sentry-USB-Rusty;
+// haversineM remains only as a spherical comparison reference.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -39,7 +28,7 @@ test('constants match the canonical Rust crate', () => {
   assert.equal(calc.PARK_GAP_SECONDS, 2.0);
   assert.equal(calc.CLIP_DURATION_MS, 60000);
 
-  // Event-clip gap-fill (mirrors Rusty grouper.rs GAP_FILL_*)
+  // Event-clip gap-fill
   assert.equal(calc.GAP_FILL_MIN_MS, 90000);
   assert.equal(calc.GAP_FILL_MAX_MS, 1800000);
   assert.equal(calc.GAP_FILL_ADJ_MS, 180000);
@@ -71,9 +60,8 @@ test('module is frozen — cannot be mutated at runtime', () => {
 });
 
 // ─── geodesicM golden vectors (canonical distance — WGS-84 Andoyer–Lambert) ───
-// Golden values computed from this implementation and cross-validated against
-// an independent Vincenty inverse (|Δ| ≤ 0.4 m on the long pairs, ≤ 1 mm on the
-// short ones). Tolerances allow sub-metre libm variation across platforms.
+// Cross-validated against an independent Vincenty inverse; tolerances allow
+// sub-metre libm variation across platforms.
 
 test('geodesicM: NYC → LA golden value (Vincenty: 3,944,422.232 m)', () => {
   const d = calc.geodesicM(40.7128, -74.006, 34.0522, -118.2437);
@@ -115,7 +103,7 @@ test('geodesicM stays within 0.5% of haversineM (sanity tie between the two)', (
   }
 });
 
-// ─── Haversine golden vectors (legacy spherical — Rust parity reference) ──────
+// ─── Haversine reference vectors (non-production) ────────────────────────────
 
 test('haversineM: NYC → LA ≈ 3,944 km (grouper.rs:test_haversine_m)', () => {
   const d = calc.haversineM(40.7128, -74.006, 34.0522, -118.2437);
@@ -145,25 +133,19 @@ test('round2 rounds half up to two decimals', () => {
   assert.equal(calc.round2(0), 0);
 });
 
-// ─── Aggregation method (guards Part A: sum pre-rounded, NOT metres) ──────────
-//
-// The headline lifetime total must be the sum of each drive's already-rounded
-// distanceMi, matching Rust db.rs:1059 (Σ d.distance_mi). The Go server instead
-// accumulates metres and converts once. For the fixture below the two methods
-// disagree at 2 dp, so this test documents and guards the chosen method.
+// ─── Aggregation method ──────────────────────────────────────────────────────
+// Lifetime totals sum stored, two-decimal per-drive mileage. Converting the
+// aggregate metres once produces a different result and breaks Rust parity.
 
 test('lifetime total sums pre-rounded per-drive miles, not metres (Rust db.rs:1059)', () => {
-  // Each drive truly travelled 1.006 mi; the pipeline stores that per drive as
-  // a 2-dp distanceMi of 1.01.
+  // Each 1.006 mi drive is stored as 1.01 mi.
   const trueMeters = 1.006 * calc.M_PER_MILE;
   const drives = [0, 1, 2].map(() => ({ distanceMi: calc.round2(trueMeters / calc.M_PER_MILE) }));
   assert.equal(drives[0].distanceMi, 1.01);
 
-  // Rust / Sentry-Drive method: sum the rounded per-drive miles.
   const sumOfRounded = calc.round2(drives.reduce((s, d) => s + d.distanceMi, 0));
   assert.equal(sumOfRounded, 3.03);
 
-  // Go method: accumulate metres, convert once. Differs at 2 dp here.
   const metresMethod = calc.round2((trueMeters * 3) / calc.M_PER_MILE);
   assert.equal(metresMethod, 3.02);
 
@@ -171,28 +153,23 @@ test('lifetime total sums pre-rounded per-drive miles, not metres (Rust db.rs:10
 });
 
 // ─── Summon detection ────────────────────────────────────────────────────────
-// Fixtures mirror real probed footage: the 2026-07-15 Actually Smart Summon
-// (two clips, ~29.9 fps) and the 2026-07-28 human parking-lot reposition that
-// superficially matches summon on gear/speed but fails every no-human tell.
+// Fixtures cover representative Summon and human parking-lot repositioning.
 
 test('summon flag constants and thresholds are locked', () => {
   assert.equal(calc.FLAG_BLINKER_LEFT, 1);
   assert.equal(calc.FLAG_BLINKER_RIGHT, 2);
   assert.equal(calc.FLAG_BRAKE, 4);
   assert.equal(calc.FLAG_ACCEL, 8);
-  assert.equal(calc.SUMMON_MAX_SPEED_MPS, 4.5); // 8 mph newer-car summon cap + margin
+  assert.equal(calc.SUMMON_MAX_SPEED_MPS, 4.5);
   assert.equal(calc.SUMMON_BOOKEND_SECONDS, 10);
   assert.equal(calc.SUMMON_MAX_DURATION_MS, 600000);
 });
 
 test('flagRunsOverlap: requireAll needs both bits in the SAME run', () => {
   const HAZARD = calc.FLAG_BLINKER_LEFT | calc.FLAG_BLINKER_RIGHT;
-  // Hazards: one run carrying both bits.
   assert.equal(calc.flagRunsOverlap([{ flags: 3, frames: 10 }], 0, 10, HAZARD, true), true);
-  // A left-only run followed by a right-only run must NOT read as hazards.
   const alternating = [{ flags: 1, frames: 10 }, { flags: 2, frames: 10 }];
   assert.equal(calc.flagRunsOverlap(alternating, 0, 20, HAZARD, true), false);
-  // …but requireAll=false (any-bit) sees them.
   assert.equal(calc.flagRunsOverlap(alternating, 0, 20, HAZARD, false), true);
 });
 
@@ -205,15 +182,12 @@ test('flagRunsOverlap honors [from, to) frame bounds', () => {
   ];
   assert.equal(calc.flagRunsOverlap(runs, 0, 60, 3, true), true);
   assert.equal(calc.flagRunsOverlap(runs, 60, 600, 3, true), false);
-  // Run ending exactly at `from` is outside the window…
   assert.equal(calc.flagRunsOverlap(runs, 660, 1800, 3, true), false);
-  // …and a window ending exactly at a run start excludes it too.
   assert.equal(calc.flagRunsOverlap(runs, 360, 600, 3, true), false);
   assert.equal(calc.flagRunsOverlap(runs, 360, 601, 3, true), true);
 });
 
-// Probe shape of 2026-07-15_20-49-54 (start clip): hazards through the P→D
-// shift, a 29 s left-signal run while maneuvering, no pedal bits anywhere.
+// Start clip: hazards through P→D and no pedal input.
 const ASS_START_CLIP = {
   flagRuns: [
     { flags: 0, frames: 27 },
@@ -226,8 +200,7 @@ const ASS_START_CLIP = {
   endFrame: 1786,
   totalFrames: 1786,
 };
-// Probe shape of 2026-07-15_20-50-43 (end clip): hazards through the stop
-// and D→P shift at the tail.
+// End clip: hazards through the stop and D→P shift.
 const ASS_END_CLIP = {
   flagRuns: [
     { flags: 0, frames: 471 },
@@ -261,7 +234,6 @@ test('detectSummon: single-clip dumb-summon shape is summon', () => {
 });
 
 test('detectSummon: pedal input anywhere disqualifies (human reposition)', () => {
-  // 2026-07-28_21-05-46 shape: brake to shift, accel to creep, no hazards.
   const humanClip = {
     flagRuns: [
       { flags: 0, frames: 1200 },
@@ -278,7 +250,7 @@ test('detectSummon: pedal input anywhere disqualifies (human reposition)', () =>
     calc.detectSummon([humanClip], { maxSpeedMps: 1.3, durationMs: 10000, hasSeiSpeeds: true }),
     false,
   );
-  // Even WITH hazard bookends, a single accel frame anywhere kills it.
+  // Hazard bookends do not override pedal evidence.
   const hazardsButPedal = {
     flagRuns: [
       { flags: 3, frames: 90 },
@@ -342,9 +314,7 @@ test('detectSummon: any clip without flagRuns makes the drive unverifiable', () 
 });
 
 test('detectSummon: park-split segment bounds gate the bookend windows', () => {
-  // Full clip has hazards at frames 0-59 and 600-659; a 2 s park gap split
-  // the clip at frame 660. The FIRST segment sees both hazard windows; the
-  // SECOND segment (frames 660+) contains none and must not inherit them.
+  // The split at frame 660 must isolate both hazard windows in the first segment.
   const flagRuns = [
     { flags: 3, frames: 60 },
     { flags: 0, frames: 540 },
@@ -366,8 +336,7 @@ test('computeFlagRuns RLEs raw frames and round-trips totals', () => {
     { flags: 1, frames: 1 },
     { flags: 0, frames: 1 },
   ]);
-  // Run totals must reconstruct the frame count — the summon detector's
-  // segment bounds depend on flagRuns living in raw frame space.
+  // Raw-frame segment bounds require exact run totals.
   const flags = [0, 8, 8, 4, 0, 0, 3, 3, 2, 1];
   const total = calc.computeFlagRuns(flags).reduce((s, r) => s + r.frames, 0);
   assert.equal(total, flags.length);
@@ -386,11 +355,10 @@ test('computeFlagRuns carries per-run max |SEI speed| when speeds are given', ()
   const flags  = [0, 0, 3, 3, 8, 8, 8];
   const speeds = [0, -1.5, 0.4, 0.26, 2.0, 4.73, 3.1];
   assert.deepEqual(calc.computeFlagRuns(flags, speeds), [
-    { flags: 0, frames: 2, maxMps: 1.5 },  // reverse counts via magnitude
+    { flags: 0, frames: 2, maxMps: 1.5 },
     { flags: 3, frames: 2, maxMps: 0.4 },
-    { flags: 8, frames: 3, maxMps: 4.7 },  // rounded to 0.1
+    { flags: 8, frames: 3, maxMps: 4.7 },
   ]);
-  // Without speeds the legacy shape is unchanged.
   assert.deepEqual(calc.computeFlagRuns([0, 3], undefined), [
     { flags: 0, frames: 1 },
     { flags: 3, frames: 1 },
@@ -403,24 +371,17 @@ test('segmentMaxSpeed: frame-space max over the segment, null on legacy runs', (
     { flags: 0, frames: 400, maxMps: 2.7 },
     { flags: 8, frames: 500, maxMps: 4.7 },
   ];
-  // Segment covering only the first two runs never sees the fast run.
   assert.equal(calc.segmentMaxSpeed({ flagRuns: runs, startFrame: 0, endFrame: 500 }), 2.7);
-  // Full clip includes it.
   assert.equal(calc.segmentMaxSpeed({ flagRuns: runs, startFrame: 0, endFrame: 1000 }), 4.7);
-  // A run merely straddling the segment boundary still contributes.
   assert.equal(calc.segmentMaxSpeed({ flagRuns: runs, startFrame: 450, endFrame: 550 }), 4.7);
-  // Any overlapping run without maxMps makes the answer unknowable.
   const legacy = [{ flags: 3, frames: 100 }, { flags: 0, frames: 100, maxMps: 1 }];
   assert.equal(calc.segmentMaxSpeed({ flagRuns: legacy, startFrame: 0, endFrame: 200 }), null);
-  // …but only if it actually overlaps.
   assert.equal(calc.segmentMaxSpeed({ flagRuns: legacy, startFrame: 100, endFrame: 200 }), 1);
 });
 
 test('detectSummon: frame-space speed evidence overrides polluted drive stats', () => {
-  // Real 2026-07-27 00:34 failure: the park splitter's fraction->point slice
-  // overshoots on deduped points, so the summon drive's stats inherited the
-  // following drive's 4.05 m/s samples. Per-run maxMps confines the gate to
-  // the summon's own frames.
+  // Per-run maxMps prevents deduped point-slice spillover from an adjacent,
+  // faster drive.
   const clipA = {
     flagRuns: [
       { flags: 0, frames: 7, maxMps: 0 },
@@ -444,12 +405,9 @@ test('detectSummon: frame-space speed evidence overrides polluted drive stats', 
     ],
     startFrame: 0, endFrame: 579, totalFrames: 1855,
   };
-  // Polluted stats say 4.05 m/s — over the cap — yet the drive is summon.
   const polluted = { maxSpeedMps: 4.05, durationMs: 42000, hasSeiSpeeds: true };
   assert.equal(calc.detectSummon([clipA, clipB], polluted), true);
-  // The inverse guard: fast frames INSIDE the segment still reject on speed
-  // alone (hazard bookends present, zero pedal bits), even when the sliced
-  // stats happen to look slow.
+  // Fast frames inside the segment still reject despite slow aggregate stats.
   const fastNoPedals = {
     flagRuns: [
       { flags: 3, frames: 100, maxMps: 0.5 },

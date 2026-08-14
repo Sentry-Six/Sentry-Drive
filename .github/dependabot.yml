@@ -1,10 +1,5 @@
-# Dependency monitoring for Sentry-Drive.
-#
-# Weekly grouped PRs for minor + patch updates to keep noise down.
-# Majors stay ungrouped so Electron/builder/updater bumps are always
-# their own reviewable PR (Electron minors can ship a new Chromium —
-# review them as runtime updates, not routine npm noise). Security
-# advisories fire immediately as separate ungrouped PRs.
+# Group routine updates weekly. Keep major updates separate, and review Electron
+# minor updates as runtime changes because they may include a new Chromium.
 
 version: 2
 

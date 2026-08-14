@@ -1,26 +1,14 @@
 'use strict';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SINGLE SOURCE OF TRUTH for Tesla drive calculations.
-//
-// Every constant and formula here is mirrored from the canonical Rust
-// implementation at Sentry-USB-Rusty/crates/drives/src (grouper.rs,
-// aggregate.rs, extract.rs). Sentry Drive must stay byte-for-byte equivalent
-// in its drive math, so DO NOT change any value here without:
-//   (a) making the matching change in that Rust crate, and
-//   (b) updating the locked tests in drive-calc.test.js.
-// Those tests run on `prebuild`, so a drifted constant or formula fails the
-// build before it can ship.
-//
-// CommonJS on purpose so it loads in every context of this mixed-module app:
-//   • ESM processing modules (grouper.js, …) `import { … }` the named exports
-//   • CommonJS main/helper files (electron-main.cjs, …) `require()` it
-//   • the sandboxed renderer receives the constants via electron-preload.cjs
+// Shared calculation contract for ESM processing, CommonJS helpers, and the
+// sandboxed renderer. Keep parity-bound values aligned with
+// Sentry-USB-Rusty's `crates/drives/src/calc.rs` and update the lock tests in
+// both projects whenever the contract changes.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─── Geodesy ─────────────────────────────────────────────────────────────────
-// Earth radius in metres. Mirrors EARTH_RADIUS_M (aggregate.rs:27) and the
-// inline `R` used by the legacy haversine here and in the Rust crate.
+// Mean Earth radius retained for the legacy haversine reference.
 const R_EARTH_M = 6371000.0;
 
 // WGS-84 ellipsoid — used by geodesicM, the canonical distance function.
@@ -35,20 +23,17 @@ const MPS_TO_MPH = 2.23694;             // metres/sec → miles/hour
 const MPS_TO_KMH = 3.6;                 // metres/sec → km/hour
 const MPH_TO_MPS = 0.44704;             // miles/hour → metres/sec (Tessie import)
 
-// ─── GPS outlier filtering (grouper.rs:1119-1123, 1453-1454) ─────────────────
+// GPS outlier filtering
 const MAX_FROM_MEDIAN_M = 1000000; // drop points >1,000 km from the median cluster
 const MAX_JUMP_M = 5000;           // drop a point >5 km from BOTH neighbours
 const NULL_ISLAND_DEG = 1;         // |lat|<1 && |lon|<1 ⇒ pre-GPS-lock junk
 
-// ─── Trip grouping (grouper.rs:22-25) ────────────────────────────────────────
+// Trip grouping
 const DRIVE_GAP_MS = 5 * 60 * 1000; // >5 min between clips ⇒ separate drives
 const PARK_GAP_SECONDS = 2.0;       // ≥2 s in Park ⇒ split the drive
 const CLIP_DURATION_MS = 60000;     // each dashcam clip spans ~60 s
 
-// Event-clip gap-fill (mirrors Sentry-USB-Rusty grouper.rs — commits
-// 23f1cb2/f8ac749/109254d there). RecentClips recording gaps can be covered
-// by SavedClips/SentryClips pre-roll clips; these bound which event clips
-// qualify.
+// Bounds for filling RecentClips gaps with SavedClips/SentryClips pre-rolls.
 const GAP_FILL_MIN_MS = 90 * 1000;        // hole must exceed one missing minute-clip
 const GAP_FILL_MAX_MS = 30 * 60 * 1000;   // beyond this a gap is a park/drive boundary
 const GAP_FILL_ADJ_MS = 3 * 60 * 1000;    // max hop between chained trailing/leading clips
@@ -71,43 +56,24 @@ const AUTOPILOT_FSD = 1;
 const AUTOPILOT_AUTOSTEER = 2;
 const AUTOPILOT_TACC = 3;
 
-// Per-frame SEI flag bits (SeiMetadata fields 7/8/9, plus derived accel bit).
-// Carried per clip as `flagRuns`: an RLE over RAW SEI frame indices
-// [{ flags, frames }] — the same frame space as gearRuns, so park-split
-// segment bounds index into it exactly, unaffected by GPS point dedup.
+// `flagRuns` is RLE over raw SEI frame indices, matching gearRuns so park-split
+// bounds remain exact despite GPS-point deduplication.
 const FLAG_BLINKER_LEFT = 1;  // blinker_on_left (steady switch state, not lamp flash)
 const FLAG_BLINKER_RIGHT = 2; // blinker_on_right
 const FLAG_BRAKE = 4;         // brake_applied (pedal-only; summon's own braking never sets it)
 const FLAG_ACCEL = 8;         // accelerator_pedal_position > 0 (human-only input)
 
-// Summon detection thresholds, verified against real Actually Smart Summon
-// footage (2026-07-15 20:49/20:50): hazards = both blinker bits in the same
-// frame, held 1-4 s spanning BOTH gear transitions; accel/brake stay 0 the
-// whole drive; autopilot_state stays 0 during summon, so it plays no part
-// here. Speed cap: Tesla limits summon to ~6 mph on older firmware and 8 mph
-// (3.58 m/s) on newer cars — 4.5 m/s (10.1 mph) gives the 8 mph ceiling the
-// same headroom the previous 3.5 gate gave the 6 mph one (observed ASS peak
-// on the 6 mph firmware: 2.7 m/s).
+// Summon evidence requires hazard bookends, no pedal input, and parking-lot
+// speed. The cap leaves margin above Tesla's 8 mph Summon limit.
 const SUMMON_MAX_SPEED_MPS = 4.5;
 const SUMMON_BOOKEND_SECONDS = 10;      // hazards must appear this close to each end
 const SUMMON_MAX_DURATION_MS = 10 * 60 * 1000;
 
 // ─── Pure helpers ────────────────────────────────────────────────────────────
 
-// Ellipsoidal distance in metres between two GPS coordinates — Andoyer–Lambert
-// first-order geodesic on WGS-84. THE canonical distance function for all
-// drive math (distance, speed, GPS filters).
-//
-// Why not haversine: haversine assumes a sphere (R = 6371 km) and carries a
-// systematic 0.1–0.5% error vs the real ellipsoid depending on latitude and
-// bearing. Andoyer–Lambert corrects to first order in the flattening; residual
-// error is O(f²) ≈ 1e-5 relative (metres over thousands of km) — far below GPS
-// noise. Chosen over Vincenty because it is closed-form (no iteration), so JS
-// and Rust produce bit-comparable results from the same operations.
-//
-// NOTE: the Rust crate (Sentry-USB-Rusty) still uses haversine_m. Migration
-// plan for the Rust dev: docs/RUST-GEODESIC-MIGRATION.md. Until that lands,
-// Drive's distances intentionally lead Rust by the accuracy delta above.
+// Canonical WGS-84 Andoyer–Lambert distance. Unlike spherical haversine, it
+// removes direction-dependent ellipsoid bias. Its closed form also keeps the
+// JavaScript and Rust implementations directly comparable.
 function geodesicM(lat1, lon1, lat2, lon2) {
   if (lat1 === lat2 && lon1 === lon2) return 0;
   const toRad = (d) => (d * Math.PI) / 180.0;
@@ -142,9 +108,7 @@ function geodesicM(lat1, lon1, lat2, lon2) {
   return WGS84_A * (sigma - (f / 2) * (X + Y));
 }
 
-// Great-circle distance in metres between two GPS coordinates (spherical).
-// Identical to haversine_m (grouper.rs:2108, aggregate.rs:32). LEGACY — kept
-// only as the Rust-parity reference for tests; app code must use geodesicM.
+// Legacy spherical comparison reference; production paths use geodesicM.
 function haversineM(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180.0;
   const dLat = toRad(lat2 - lat1);
@@ -158,16 +122,14 @@ function haversineM(lat1, lon1, lat2, lon2) {
   return R_EARTH_M * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// Round to 2 decimals — mirrors round2 (grouper.rs) and the per-drive `r2`.
+// Shared two-decimal rounding rule.
 function round2(v) {
   return Math.round(v * 100) / 100;
 }
 
 /**
- * RLE the per-frame gear states over RAW frame indices. Shared by the
- * extraction worker and the Check for Summon backfill — the backfill
- * re-derives gearRuns because Rusty-written routes can miss short trailing
- * Park runs, which glues a summon onto the drive that follows it.
+ * RLE per-frame gear states over raw frame indices. The Summon backfill
+ * re-derives this evidence for routes missing short trailing Park runs.
  */
 function computeGearRuns(gears) {
   if (!gears || gears.length === 0) return [];
@@ -188,11 +150,8 @@ function computeGearRuns(gears) {
 }
 
 /**
- * RLE the per-frame SEI flag bytes (blinkers/brake/accel bits) over RAW frame
- * indices — the same frame space as gearRuns, deliberately computed BEFORE
- * GPS point dedup: a stationary car with hazards on produces few unique GPS
- * points, and the summon detector needs those frames, not the survivors.
- * Shared by the extraction worker and the Check for Summon backfill.
+ * RLE per-frame SEI flags before GPS deduplication. Summon detection needs raw
+ * hazard/pedal frame evidence even when stationary GPS points collapse.
  */
 function computeFlagRuns(flags, speeds) {
   if (!flags || flags.length === 0) return [];
@@ -200,11 +159,8 @@ function computeFlagRuns(flags, speeds) {
   const r1 = (v) => Math.round(v * 10) / 10;
   let currentFlags = flags[0];
   let count = 1;
-  // Per-run max |SEI speed| (maxMps) travels with the run so the summon
-  // detector can gate speed in FRAME space: the park splitter slices point
-  // arrays by frame fraction, and on deduped points that slice overshoots
-  // into the next segment — a summon's stats can inherit the following
-  // drive's speed samples (observed live: a 6 mph summon read 9 mph).
+  // Per-run speed keeps the Summon gate in frame space, avoiding point-slice
+  // spillover from an adjacent drive after GPS deduplication.
   let maxAbs = speeds ? Math.abs(speeds[0] ?? 0) : 0;
   for (let i = 1; i < flags.length; i++) {
     if (flags[i] === currentFlags) {
@@ -268,26 +224,15 @@ function flagRunsOverlap(flagRuns, fromFrame, toFrame, mask, requireAll) {
 }
 
 /**
- * Detect a Summon / Smart Summon drive from per-clip SEI flag evidence.
- *
- * clipEvidence — one entry per clip of the drive, in drive order:
- *   { flagRuns, startFrame, endFrame, totalFrames }
- * where [startFrame, endFrame) bounds the drive's segment of that clip in
- * raw SEI frame space (the full clip when the park splitter left it whole).
- *
- * The verified signature: hazards within the opening seconds of the first
- * segment AND the closing seconds of the last, no pedal input anywhere in
- * between, and the whole drive at parking-lot speed. A driverless car is
- * the only thing that satisfies all three at once — a human repositioning
- * with hazards on still touches a pedal or exceeds the summon speed cap.
+ * Detect Summon from raw-frame clip evidence. Each entry supplies flagRuns,
+ * startFrame, endFrame, and totalFrames. The signature is hazard bookends,
+ * no pedal input, and parking-lot speed.
  */
 function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
   if (!Array.isArray(clipEvidence) || clipEvidence.length === 0) return false;
   if (!(durationMs > 0) || durationMs > SUMMON_MAX_DURATION_MS) return false;
 
-  // Every clip needs flag evidence — a single pre-flags clip (older
-  // extraction, or routes written by a tool that hasn't ported flagRuns yet)
-  // makes the drive unverifiable, and unverifiable must mean "not summon".
+  // Missing flag evidence makes the complete drive unverifiable.
   for (const c of clipEvidence) {
     if (!c || !Array.isArray(c.flagRuns) || c.flagRuns.length === 0 ||
         !(c.totalFrames > 0) || !(c.endFrame > c.startFrame)) {
@@ -295,11 +240,8 @@ function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
     }
   }
 
-  // Speed gate, frame-accurate when possible: per-run maxMps evidence is
-  // immune to the dedup point-slice overshoot that can leak the following
-  // drive's speed into a summon segment's stats. Legacy evidence (no maxMps)
-  // falls back to the drive stats — and there GPS-derived speeds are still
-  // untrustworthy at summon magnitudes, so SEI presence is required.
+  // Prefer frame-space speed. Legacy evidence falls back to drive stats only
+  // when genuine SEI speeds are available.
   let speedMps = 0;
   let frameAccurate = true;
   for (const c of clipEvidence) {
@@ -344,10 +286,8 @@ function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
   return hazardAtStart && hazardAtEnd;
 }
 
-// IMPORTANT: assign a plain object literal first so Node's cjs-module-lexer can
-// statically detect the named exports for ESM `import { … }`. Freeze on the
-// next line — `module.exports = Object.freeze({…})` wraps the literal in a call
-// expression, which hides the names from the lexer and breaks named imports.
+// Keep the object literal assignment visible to cjs-module-lexer; freezing it
+// inline would hide named exports from ESM importers.
 module.exports = {
   R_EARTH_M,
   M_PER_MILE,

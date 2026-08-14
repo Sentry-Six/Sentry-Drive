@@ -114,7 +114,7 @@ class DriveLoaderClient {
     try {
       child.postMessage({ id: 0, type: 'close', payload: {} });
     } catch {
-      // Process has already gone away.
+      // Child already exited.
     }
     child.kill();
   }

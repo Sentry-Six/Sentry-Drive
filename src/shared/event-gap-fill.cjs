@@ -1,16 +1,12 @@
 'use strict';
 
-// Rust-parity event-folder gap-fill selection. Shared as CommonJS so both the
-// ESM processing pipeline and CommonJS disk-backed loader use one decision.
+// Shared Rust-parity event-folder gap-fill selection and constants.
 
 const {
   isEventFolderPath,
   parseClipTimestampMs,
 } = require('./clip-path.cjs');
 
-// Constants come from the frozen single-source module, never local copies:
-// they are parity-bound to Sentry-USB-Rusty and lock-tested in
-// drive-calc.test.js, so a second definition here could silently drift.
 const {
   GEAR_PARK,
   GAP_FILL_MIN_MS,

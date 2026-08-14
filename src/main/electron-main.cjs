@@ -17,11 +17,7 @@ let activeChild = null;
 let driveLoaderClient = null;
 
 // ─── drive-data.json reading ─────────────────────────────────────────────────
-// All reads go through src/main/drive-data-reader.cjs: native JSON.parse for
-// files that fit under V8's string cap (~16x faster than token streaming),
-// stream-json above it. Every handler that used to JSON.parse(readFileSync())
-// here would crash with ERR_STRING_TOO_LONG on >512 MiB files — the shared
-// reader fixes that everywhere at once.
+// The shared reader streams files that exceed V8's string limit.
 const { readDriveData } = require('./drive-data-reader.cjs');
 const {
   readTopLevelValues,
@@ -44,16 +40,13 @@ function getSuperchargerCatalog() {
 }
 
 // ─── Logging ─────────────────────────────────────────────────────────────────
-// Terminal echo + in-memory buffer; exported from Settings → Support → Logs.
 const logger = require('./logger.cjs');
 const os = require('os');
 logger.setAppInfo({ version: app.getVersion(), osBuild: os.release() });
-// Crash-surviving sink: appended live; last session rotates to
-// previous-session.log and is included in exports.
+// Keep a disk sink so crashes remain visible in the next support export.
 logger.initFileSink(path.join(app.getPath('userData'), 'logs'));
 logger.info('main', `app starting — v${app.getVersion()} | ${process.platform} ${process.arch} (${os.release()}) | ` +
   `${os.cpus().length} CPUs | electron ${process.versions.electron} | node ${process.versions.node}`);
-// API-client diagnostics flow into this log (Settings → Support → Logs).
 require('../processing/teslascope-api.cjs').setLogger(logger);
 require('../processing/tessie-api.cjs').setLogger?.(logger);
 
@@ -62,7 +55,6 @@ app.on('before-quit', () => {
   logger.info('main', 'app quitting');
   logger.flushNow();
 });
-// The "app went blank / video died" class of crash — record the reason.
 app.on('render-process-gone', (_e, _wc, details) => {
   logger.error('main', `renderer process gone: ${details.reason} (exit ${details.exitCode})`);
 });
@@ -71,21 +63,16 @@ app.on('child-process-gone', (_e, details) => {
   logger.warn('main', `${details.type} process gone: ${details.reason}`);
 });
 
-// Log instead of crash: a background hiccup (e.g. a failed async callback)
-// shouldn't take down the viewer. The error is preserved in the log export.
+// Preserve background failures without terminating the viewer.
 process.on('uncaughtException', (err) => logger.error('main', 'Uncaught exception:', err));
 process.on('unhandledRejection', (reason) => logger.error('main', 'Unhandled rejection:', reason));
 
-// Renderer-side errors/warnings arrive here (see the forwarder in renderer.js).
 ipcMain.on('app-log', (_e, { level, scope, text } = {}) => {
   const lv = level === 'error' || level === 'warn' ? level : 'info';
   logger[lv](typeof scope === 'string' && scope ? scope : 'renderer', String(text ?? ''));
 });
 
-// The logs save dialog remembers its own folder (persisted in userData),
-// independent of the app-wide "last used directory" — which is usually the
-// TeslaCam clips folder and a poor default for a log export. First use
-// defaults to the system Downloads folder.
+// Support exports remember a directory independently of footage selection.
 const LOGS_PREFS_FILE = () => path.join(app.getPath('userData'), 'support-prefs.json');
 
 function loadLogsDir() {
@@ -116,17 +103,8 @@ ipcMain.handle('download-logs', async () => {
   }
 });
 
-// The drive index for a multi-GB drive-data.json is itself large, and the
-// system temp folder sits on the OS drive — the one most likely to be full.
-// (A full temp drive surfaces as a bare "database or disk is full" from
-// SQLite mid-load.) Keep the cache next to the app instead, which is usually
-// on the same roomy drive the user keeps their footage on.
-//
-// Falls back to the system temp folder when the app directory isn't writable:
-// a machine-wide install under Program Files needs elevation, and the
-// packaged app itself lives inside a read-only asar (only the surrounding
-// directory is real). Writability is proven by writing, not by accessSync —
-// on Windows that reports W_OK for directories the process cannot write.
+// Keep large indexes beside the app when writable, otherwise use system temp.
+// Probe with an actual write because Windows access checks can be optimistic.
 function resolveLoaderCacheRoot() {
   const appDir = app.isPackaged ? path.dirname(process.execPath) : app.getAppPath();
   const preferred = path.join(appDir, 'temp', 'load-cache');
@@ -143,9 +121,7 @@ function resolveLoaderCacheRoot() {
   }
 }
 
-// Each load builds its index in a fresh UUID directory that's removed when the
-// load closes; a crash or a kill leaves one behind. Sweep them at startup so
-// they can't accumulate next to the app.
+// Crashed loads can leave disposable UUID cache directories behind.
 function sweepStaleLoaderCaches(cacheRoot) {
   let removed = 0;
   let bytes = 0;
@@ -200,8 +176,7 @@ function saveWindowState() {
   try {
     const isMaximized = mainWindow.isMaximized();
     const isFullScreen = mainWindow.isFullScreen();
-    // When maximized/fullscreen, getBounds() returns the fullscreen rect, which
-    // isn't useful as a restore size. Prefer getNormalBounds() (Electron ≥ 12).
+    // Preserve the normal bounds while maximized or fullscreen.
     const bounds = isMaximized || isFullScreen
       ? (mainWindow.getNormalBounds?.() ?? mainWindow.getBounds())
       : mainWindow.getBounds();
@@ -210,7 +185,7 @@ function saveWindowState() {
       JSON.stringify({ ...bounds, isMaximized, isFullScreen }, null, 2),
     );
   } catch {
-    // Best-effort; losing the file on next launch just reverts to defaults.
+    // Persistence is best-effort; defaults remain usable.
   }
 }
 
@@ -254,7 +229,7 @@ function createWindow() {
   if (state.isFullScreen) mainWindow.setFullScreen(true);
 
   mainWindow.on('close', saveWindowState);
-  // DevTools shortcuts (application menu is disabled, so wire them here).
+  // The disabled application menu cannot provide these shortcuts.
   mainWindow.webContents.on('before-input-event', (_e, input) => {
     if (input.type !== 'keyDown') return;
     const key = input.key?.toLowerCase();
@@ -272,7 +247,7 @@ Menu.setApplicationMenu(null);
 
 app.whenReady().then(() => {
   createWindow();
-  // Connected integrations — presence only, never the tokens themselves.
+  // Log integration presence without credentials.
   try {
     logger.info('import', `integrations: tessie=${loadTessieToken() ? 'yes' : 'no'} teslascope=${loadTeslascopeToken() ? 'yes' : 'no'}`);
   } catch { /* safeStorage may be unavailable — non-fatal */ }
@@ -310,10 +285,7 @@ ipcMain.handle('find-drive-data', async (_e, dir) => {
   return fs.existsSync(filePath) ? filePath : null;
 });
 
-// Packaged builds run from inside the read-only app.asar, so a __dirname-
-// relative default isn't writable — use a dedicated Documents folder instead
-// (repo root in dev). Created by start-processing, not here, so merely opening
-// the app never touches the user's Documents.
+// Packaged builds use Documents because app.asar is read-only.
 ipcMain.handle('get-default-output-dir', () =>
   app.isPackaged
     ? path.join(app.getPath('documents'), 'Sentry Six', 'Sentry Drive')
@@ -325,9 +297,7 @@ ipcMain.handle('check-drive-data', (_e, dir) =>
 
 ipcMain.handle('get-cpu-count', () => require('os').cpus().length);
 
-// Reverse geocoding for drive-list location pins. Lazy-init the disk cache on
-// first use (app is ready by then), then geocode via Nominatim in the main
-// process (throttled, cached, no renderer CSP involved).
+// Reverse geocoding stays in the main process and lazily initializes its cache.
 let _geocodeInited = false;
 ipcMain.handle('reverse-geocode', async (_e, { lat, lng } = {}) => {
   try {
@@ -373,9 +343,7 @@ ipcMain.handle('remove-drive', (_e, { filePath, driveStartTime }) => withDriveDa
   }
 }));
 
-// Bulk removal for the drive list's multi-select: same semantics as
-// remove-drive, but one read → one filter pass → one atomic write for the
-// whole batch (a rewrite per drive would grind on large libraries).
+// Batch removals use one read and one atomic write.
 ipcMain.handle('remove-drives', (_e, { filePath, driveStartTimes }) => withDriveDataLock(async () => {
   try {
     const wanted = new Set(driveStartTimes ?? []);
@@ -408,15 +376,13 @@ ipcMain.handle('revert-to-stable', () => {
 });
 
 ipcMain.handle('check-for-update', () => {
-  // Unpacked dev runs: electron-updater silently skips the check without
-  // emitting any event, which left the button looking dead. Answer explicitly.
+  // electron-updater emits no result for unpackaged builds.
   if (!app.isPackaged) {
     sendUpdateStatus('error', { message: 'Update checks only work in the installed app.' });
     return;
   }
   return autoUpdater.checkForUpdates().catch((err) => {
-    // autoUpdater normally emits 'error' itself — this is the safety net so
-    // the renderer always gets an answer (its UI handles duplicates fine).
+    // Ensure the renderer receives a result if no updater event is emitted.
     sendUpdateStatus('error', { message: err?.message });
   });
 });
@@ -459,8 +425,7 @@ ipcMain.handle('get-changelog', () => {
   }
 });
 
-// Serialize loads because each one replaces the utility process's disposable
-// disk index. A second load waits for the first, then re-reads fresh state.
+// Loads are serialized because each replaces the utility process's disk index.
 let driveLoadChain = Promise.resolve();
 function withDriveLoadLock(fn) {
   const result = driveLoadChain.then(fn, fn);
@@ -468,8 +433,7 @@ function withDriveLoadLock(fn) {
   return result;
 }
 
-// Bumped on every completed load. Summary/detail requests carry this generation
-// so a reload can never serve data for a same-numbered drive from another file.
+// Generations prevent detail requests from crossing reload boundaries.
 let driveDetailGen = 0;
 
 ipcMain.handle('load-and-group-drives', (_e, filePath) => withDriveLoadLock(async () => {
@@ -481,8 +445,7 @@ ipcMain.handle('load-and-group-drives', (_e, filePath) => withDriveLoadLock(asyn
     logger.info('main', `loaded ${loaderResult.totalDriveCount} drive(s) from ${loaderResult.totalRoutes} clips — ${filePath}`);
     return { ...loaderResult, cacheGen: driveDetailGen };
 
-    /* Legacy in-main loader retained below temporarily while the disk-backed
-       loader is exercised; unreachable by design. */
+    /* Unreachable compatibility implementation. */
     const sendProgress = (phase, current, total) => {
       mainWindow?.webContents.send('load-progress', { phase, current, total });
     };
@@ -497,15 +460,11 @@ ipcMain.handle('load-and-group-drives', (_e, filePath) => withDriveLoadLock(asyn
     sendProgress('grouping', 0, 0);
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives: groupedDrives, timeGroupCount, routeCount, droppedCount } = groupIntoDrives(parsed.routes);
-    // groupedDrives owns fresh point arrays and doesn't reference the input,
-    // so release the raw clip array now to free hundreds of MB.
+    // Grouped drives own their point arrays, so the raw routes can be released.
     parsed.routes = null;
     sendProgress('preparing', 0, 0);
 
-    // SEI always wins: any imported (Tessie / Teslascope) drive whose time
-    // window overlaps a real dashcam drive is hidden at load time. The imported
-    // clips remain in drive-data.json so the user can recover them by removing
-    // SEI later; they're just filtered out of the displayed drive list.
+    // Hide imports that overlap SEI footage without deleting their source clips.
     const seiRanges = [];
     for (const d of groupedDrives) {
       if (d.source !== 'sei' || !d.startTime || !d.endTime) continue;
@@ -524,8 +483,8 @@ ipcMain.handle('load-and-group-drives', (_e, filePath) => withDriveLoadLock(asyn
         const e = Date.parse(d.endTime);
         let overlapsSEI = false;
         for (const r of seiRanges) {
-          if (r.e <= s) continue;   // SEI ends at-or-before Tessie starts → no overlap
-          if (r.s >= e) break;       // SEI starts at-or-after Tessie ends → no overlap
+          if (r.e <= s) continue;
+          if (r.s >= e) break;
           overlapsSEI = true;
           break;
         }
@@ -542,26 +501,16 @@ ipcMain.handle('load-and-group-drives', (_e, filePath) => withDriveLoadLock(asyn
       drives.push(d);
     }
 
-    // Attach tags to drives
     for (const d of drives) {
       d.tags = driveTags[d.startTime] ?? [];
     }
 
-    // Cache full drive detail in the main process; strip large point arrays from
-    // the IPC payload so we don't serialize millions of GPS coordinates over the
-    // context bridge (the main cause of the V8 heap OOM on large files).
-    // Each cache entry is stored as a v8.serialize() Buffer rather than the
-    // live object graph: one contiguous native buffer per drive instead of
-    // millions of small point arrays resident for the whole session. It
-    // deserializes to the exact same structure in get-drive-detail.
-    // Build into a local map and swap in only when complete — a load that
-    // dies mid-loop (e.g. OOM during serialize) must not leave a new
-    // generation with a partial cache while the old, valid one is gone.
+    // Keep full detail as compact serialized buffers outside the IPC summary.
+    // Swap caches only after a complete build to preserve the prior generation
+    // if serialization fails.
     const newCache = new Map();
     for (const d of drives) {
-      // Bridge routes are the synthetic `-front-bridge.mp4` entries Check
-      // Drives writes into GPS gaps — flag drives containing one so the UI
-      // can show which drives were bridged.
+      // Synthetic bridge routes identify gap-filled drives in the UI.
       d.bridged = (d.routeFiles ?? []).some((f) => f.includes('-front-bridge.mp4'));
       newCache.set(d.id, v8.serialize({
         points: d.points,
@@ -569,16 +518,13 @@ ipcMain.handle('load-and-group-drives', (_e, filePath) => withDriveLoadLock(asyn
         gearStates: d.gearStates,
         fsdEvents: d.fsdEvents,
       }));
-      // 120 pts is visually identical at overview zooms and cuts both the IPC
-      // payload and the canvas point count ~40% vs the old 200.
+      // Overview routes use 120 points to bound IPC and canvas costs.
       d.overviewPoints = downsampleForIPC(d.points, 120);
       delete d.points;
       delete d.fsdStates;
       delete d.gearStates;
       delete d.fsdEvents;
-      // Fields the renderer never reads — verified against renderer.js. The
-      // biggest is routeFiles (one path string per clip); dropping them cuts
-      // IPC serialization and renderer residency without any UI change.
+      // Omit detail-only fields from the renderer summary.
       delete d.routeFiles;
       delete d.clipCount;
       delete d.pointCount;
@@ -709,10 +655,7 @@ ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount
   const scriptPath = path.join(__dirname, '..', 'processing', 'process.js');
   const outputPath = path.join(outputDir, 'drive-data.json');
 
-  // The default output dir under Documents doesn't exist until first use, and
-  // an uncreatable path (read-only asar, dead drive letter) would otherwise
-  // only surface at the end of the run as a cryptic ENOENT from the atomic
-  // writer's temp-file open. Create it now and fail fast if we can't.
+  // Validate the output directory before starting a long processing run.
   try {
     fs.mkdirSync(outputDir, { recursive: true });
   } catch (err) {
@@ -724,10 +667,7 @@ ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount
   if (workerCount && workerCount > 0) args.push(String(workerCount));
   if (reprocessAll) args.push('--reprocess-all');
 
-  // Keep a local handle: the close/error callbacks below fire after this run
-  // may already have been stopped (and a NEW run started). Guarding on
-  // `activeChild === child` keeps a dying child from clobbering the new run's
-  // reference or sending it a spurious 'done'.
+  // Callback identity checks prevent an exiting child from affecting a newer run.
   let child;
   try {
     child = spawn(process.execPath, args, {
@@ -746,7 +686,6 @@ ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount
   child.stdout.on('data', (chunk) => {
     const text = chunk.toString();
     mainWindow?.webContents.send('processing-output', { type: 'stdout', text });
-    // Lift the child's one-line outcome summary into the app log timeline.
     for (const line of text.split('\n')) {
       if (line.startsWith('SUMMARY:')) logger.info('processing', line.slice(8).trim());
     }
@@ -760,9 +699,7 @@ ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount
     child.on('close', (code) => {
       const wasCurrent = activeChild === child;
       if (wasCurrent) activeChild = null;
-      // A user Stop already painted its own final state in the renderer —
-      // sending 'done' with the SIGTERM exit code would overwrite a clean
-      // "Stopped" with a spurious error line.
+      // A user stop owns the renderer's final status.
       if (wasCurrent && !child.userStopped) {
         mainWindow?.webContents.send('processing-output', { type: 'done', code });
       }
@@ -782,14 +719,9 @@ ipcMain.handle('start-processing', async (_e, { clipsDir, outputDir, workerCount
 ipcMain.handle('stop-processing', () => {
   if (!activeChild) return { success: false, error: 'No process running' };
   const child = activeChild;
-  child.userStopped = true; // suppress the close handler's 'done' — the renderer paints "Stopped" itself
+  child.userStopped = true; // suppress the close handler's status
   child.kill('SIGTERM');
-  // Hold activeChild until the child actually exits so a quick Start can't
-  // spawn a second run alongside the dying one ('start-processing' refuses
-  // while activeChild is set). If the child ignores SIGTERM, escalate to
-  // SIGKILL after 5s — never release the slot while the old process could
-  // still be writing the output file; SIGKILL can't be ignored, so 'close'
-  // always arrives.
+  // Retain the slot until exit; force termination after the SIGTERM grace period.
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       try { child.kill('SIGKILL'); } catch { /* already gone */ }
@@ -802,9 +734,7 @@ ipcMain.handle('stop-processing', () => {
 });
 
 // ─── drive-data.json wire format ─────────────────────────────────────────────
-// gearStates / autopilotStates are written as base64 strings to match
-// Sentry-USB's []uint8 JSON encoding. Codec lives in the ESM grouper module;
-// memoize the dynamic import so we pay it once per process.
+// Byte fields use base64 to match Sentry-USB's []uint8 JSON encoding.
 let _byteFieldCodec;
 async function getByteFieldCodec() {
   if (!_byteFieldCodec) {
@@ -824,11 +754,7 @@ async function routesToWireFormat(routes) {
   }));
 }
 
-// Stream-write the full drive-data.json so large files don't blow past
-// V8's max string length (~512MB) during JSON.stringify. The routes array
-// is emitted route-by-route; top-level maps/arrays use a normal stringify.
-// Serialize drive-data.json read-modify-write operations so concurrent edits
-// (e.g. rapid tag changes via the optimistic UI) can't race or lose updates.
+// Serialize read-modify-write operations to avoid lost concurrent edits.
 let driveDataLock = Promise.resolve();
 function withDriveDataLock(fn) {
   const result = driveDataLock.then(fn, fn);
@@ -836,27 +762,14 @@ function withDriveDataLock(fn) {
   return result;
 }
 
-// Rename with retries — on Windows EPERM/EBUSY occurs while a reader holds the
-// destination open. A streaming read of a large drive-data.json can hold it
-// for several seconds, so back off exponentially (≈11s total) rather than
-// giving up after a few fixed 40ms beats and failing the write.
-// Merge freshly imported clips into drive-data.json under the write lock.
-// The API imports fetch for minutes; merging against a re-read of the file
-// (rather than the snapshot taken before the fetch) keeps writes made in the
-// meantime — tag edits, drive removals — from being clobbered.
-// onProgress (optional) receives {phase, current, total} so the importer's
-// progress bar keeps moving through the otherwise-silent save — reading the
-// current file, then encoding + writing it back can take several seconds on a
-// large drive-data.json and used to look like a freeze.
-// tagsToMerge (optional): a driveTags map { startTime: [tag…] } to fold into the
-// file's driveTags (union with any existing) — used by the drive-data.json
-// import to bring the imported drives' tags along.
+// Re-read under the lock after long API fetches so intervening edits survive.
+// tagsToMerge unions { startTime: [tag…] } into existing driveTags.
 function saveImportedClips(filePath, clips, onProgress, tagsToMerge) {
   logger.info('import', `saving ${clips.length} imported clip(s) → ${filePath}`);
   return withDriveDataLock(async () => {
     let data;
     if (fs.existsSync(filePath)) {
-      fs.copyFileSync(filePath, filePath + '.bak'); // pre-import restore point
+      fs.copyFileSync(filePath, filePath + '.bak'); // import restore point
       data = await readDriveData(filePath, {
         wantProcessedFiles: true,
         onProgress: onProgress
@@ -895,14 +808,10 @@ function writeDriveDataJSON(filePath, data, options = {}) {
 }
 
 // ─── External drive-data change watcher ──────────────────────────────────────
-// drive-data.json is a shared file: Sentry USB (Rusty) re-exports it and our
-// own processing writes it. Poll the loaded file's mtime+size and tell the
-// renderer when it changes underneath us, so the app auto-refreshes. We POLL
-// rather than fs.watch because this file usually lives on a network share,
-// where fs.watch is unreliable over SMB. Our own writes (imports/tags/removes)
-// call noteOwnWrite so the poll doesn't flag them as external (no reload loop).
+// Poll mtime and size because fs.watch is unreliable on SMB shares. Re-baseline
+// app writes to avoid self-triggered reloads.
 let _watchedPath = null;
-let _watchSig = null;   // last seen { mtimeMs, size }
+let _watchSig = null;   // { mtimeMs, size }
 let _watchTimer = null;
 
 function driveDataSig(p) {
@@ -911,7 +820,6 @@ function driveDataSig(p) {
 }
 
 function noteOwnWrite(filePath) {
-  // Re-baseline after the app writes the file so the next poll sees no change.
   if (filePath && filePath === _watchedPath) _watchSig = driveDataSig(filePath);
 }
 
@@ -922,7 +830,7 @@ ipcMain.handle('watch-drive-data', (_e, filePath) => {
     _watchTimer = setInterval(() => {
       if (!_watchedPath || !mainWindow || mainWindow.isDestroyed()) return;
       const cur = driveDataSig(_watchedPath);
-      if (!cur) return;                 // file briefly missing (mid-rename) — ignore
+      if (!cur) return; // atomic rename in progress
       if (!_watchSig) { _watchSig = cur; return; }
       if (cur.mtimeMs !== _watchSig.mtimeMs || cur.size !== _watchSig.size) {
         _watchSig = cur;
@@ -964,9 +872,7 @@ ipcMain.handle('set-drive-tags', (_e, { filePath, driveKey, tags }) => withDrive
     await writeDriveDataJSON(filePath, { driveTags }, {
       sourceSections: selected.sections,
     });
-    // Keep the loaded index's tag column in step so tag FILTERING reflects
-    // the edit immediately — without this, a drive tagged mid-session
-    // wouldn't appear under that tag's filter until the next load.
+    // Keep tag filtering consistent with the persisted edit.
     try {
       await getDriveLoaderClient().setTags(driveKey, tags);
     } catch (err) {
@@ -1045,8 +951,6 @@ ipcMain.handle('repair-gps', (_e, { filePath, useRouting }) => withDriveDataLock
     let bridgedGaps = 0;
     let routedGaps = 0;
 
-    // geodesicM is imported at module scope from ../shared/drive-calc.cjs.
-
     const FILE_TS_RE = /(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/;
     const parseTs = (file) => {
       const m = FILE_TS_RE.exec(file);
@@ -1055,7 +959,7 @@ ipcMain.handle('repair-gps', (_e, { filePath, useRouting }) => withDriveDataLock
       return isNaN(t.getTime()) ? null : t;
     };
 
-    // --- Phase 0: Remove existing bridge routes so they can be re-bridged ---
+    // Rebuild synthetic bridges from the current routes.
     const beforeCount = routes.length;
     routes = routes.filter((r) => !r.file.includes('-front-bridge.mp4'));
     data.routes = routes;
@@ -1064,16 +968,13 @@ ipcMain.handle('repair-gps', (_e, { filePath, useRouting }) => withDriveDataLock
     }
     const removedBridges = beforeCount - routes.length;
 
-    // --- Bridge gaps ---
-    // Only bridge gaps > 60s (normal clip boundaries are ~60s and don't need bridging)
-    const MIN_BRIDGE_MS = CLIP_DURATION_MS; // clip boundaries (~60s) don't need bridging
-    const MAX_BRIDGE_MS = DRIVE_GAP_MS;     // gaps beyond the drive split aren't one drive
+    const MIN_BRIDGE_MS = CLIP_DURATION_MS;
+    const MAX_BRIDGE_MS = DRIVE_GAP_MS;
     const timedRoutes = routes
       .map((r, idx) => ({ idx, ts: parseTs(r.file), route: r }))
       .filter((r) => r.ts !== null)
       .sort((a, b) => a.ts - b.ts);
 
-    // First pass: quickly identify gaps that need bridging
     sendRepairProgress('Scanning for gaps…', 0, 1);
     const gaps = [];
     for (let i = 0; i < timedRoutes.length - 1; i++) {
@@ -1108,7 +1009,6 @@ ipcMain.handle('repair-gps', (_e, { filePath, useRouting }) => withDriveDataLock
       });
     }
 
-    // Second pass: bridge each gap with progress
     const bridgeRoutes = [];
     const bridgeStartMs = Date.now();
     for (let g = 0; g < gaps.length; g++) {
@@ -1119,7 +1019,6 @@ ipcMain.handle('repair-gps', (_e, { filePath, useRouting }) => withDriveDataLock
 
       let interpPoints;
 
-      // Try OSRM routing if online
       if (useRouting) {
         try {
           const routed = await fetchOSRMRoute(lastPt[0], lastPt[1], firstPt[0], firstPt[1]);
@@ -1128,11 +1027,10 @@ ipcMain.handle('repair-gps', (_e, { filePath, useRouting }) => withDriveDataLock
             routedGaps++;
           }
         } catch {
-          // Fall back to straight line
+          // Straight-line interpolation remains available below.
         }
       }
 
-      // Fallback: straight-line interpolation
       if (!interpPoints) {
         const nSteps = Math.max(2, Math.round(gapMs / 1000));
         interpPoints = [];
@@ -1186,10 +1084,7 @@ ipcMain.handle('repair-gps', (_e, { filePath, useRouting }) => withDriveDataLock
 
 // ─── Check for Summon ────────────────────────────────────────────────────────
 
-// Resolve a route's relative clip path against the clips directory. Route
-// paths come in two shapes — Drive-processed "2026-07-15/x-front.mp4" and
-// Rusty-written "RecentClips/2026-07-15/x-front.mp4" — and the clips dir may
-// or may not itself end in RecentClips. Try the plausible joins; first hit wins.
+// Accept route paths with or without a RecentClips prefix.
 function resolveClipPath(clipsDir, normFile) {
   if (!clipsDir) return null;
   const cands = [path.join(clipsDir, normFile)];
@@ -1204,24 +1099,8 @@ function resolveClipPath(clipsDir, normFile) {
   return null;
 }
 
-// Backfill SEI blinker/brake evidence (flagRuns) so the next grouping can tag
-// summon drives — the cheap alternative to reprocess-all for libraries
-// processed before flags existed (including Rusty-written files).
-//
-// Candidates come from two places:
-//  1. Whole drives inside the summon speed/duration envelope (an isolated
-//     summon that already grouped as its own tiny drive).
-//  2. The LOW-SPEED EDGE CLIPS of every dashcam drive. A summon fused onto a
-//     following drive hides at its head (verified live: Rusty's route for a
-//     summon-end clip missed the trailing Park run, so the park splitter
-//     never separated the summon from the hour of driving after it — the
-//     merged drive fails the envelope and would never be re-read). Summon can
-//     only sit at a drive's edges (it is always bracketed by Park), so edge
-//     clips at parking-lot speed are the complete hiding set.
-//
-// Re-extraction refreshes gearRuns/rawFrameCount/rawParkCount alongside
-// flagRuns: frame-accurate gear evidence is what lets the splitter isolate a
-// fused summon in the first place.
+// Backfill missing frame-level flag and gear evidence. Scan whole slow drives
+// and low-speed edges where a park-bracketed Summon can be fused to a trip.
 ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock(async () => {
   try {
     sendRepairProgress('Reading…', 0, 1);
@@ -1248,10 +1127,7 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
       return true;
     };
 
-    // Unique clips worth re-reading, keyed by normalized path. Evidence is
-    // current only when every run carries per-run speed (maxMps) — earlier
-    // extractions lacked it and their drives can fail the speed gate on
-    // point-slice pollution, so they get one upgrade re-read.
+    // Current evidence includes per-run speed, which avoids point-slice skew.
     const hasCurrentEvidence = (route) =>
       Array.isArray(route.flagRuns) && route.flagRuns.length > 0 &&
       route.flagRuns.every((run) => Number.isFinite(run.maxMps));
@@ -1271,8 +1147,7 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
       const files = d.routeFiles ?? [];
       if (files.length === 0) continue;
 
-      // No lower speed bound: reverse-only summons report NEGATIVE SEI
-      // speeds, which the display stat ignores — such drives show 0 mph.
+      // Reverse-only Summon can have a zero display statistic.
       const wholeDrive =
         (d.maxSpeedMph ?? 0) <= maxMph &&
         (d.durationMs ?? 0) <= SUMMON_MAX_DURATION_MS;
@@ -1282,12 +1157,7 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
         continue;
       }
 
-      // Low-speed head and tail of a faster drive (fused-summon case). The
-      // slow run PLUS ONE boundary clip each way: a summon that ends seconds
-      // before the human drives off shares its final clip with fast driving
-      // (verified live, 2026-07-27 20:04) — that mixed clip holds the end
-      // bookend and the park run that lets the splitter isolate the summon,
-      // so a scan that stops at the first fast clip can never free it.
+      // Include one fast boundary clip because it can contain the park split.
       let took = false;
       for (let i = 0; i < Math.min(files.length, MAX_EDGE_CLIPS); i++) {
         const norm = String(files[i]).replace(/\\/g, '/');
@@ -1328,9 +1198,7 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
         scanned++;
         if (extracted && extracted.flags && extracted.flags.length > 0) {
           route.flagRuns = computeFlagRuns(extracted.flags, extracted.speeds);
-          // Authoritative gear evidence from the same frames. Rusty-written
-          // routes can miss short trailing Park runs; without them the park
-          // splitter can't isolate a summon from the drive that follows.
+          // Refresh gear evidence from the same frames as the flag evidence.
           route.gearRuns = computeGearRuns(extracted.gears);
           route.rawFrameCount = extracted.gears.length;
           let parkCount = 0;
@@ -1364,9 +1232,7 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
 }));
 
 // ─── Tessie Import ───────────────────────────────────────────────────────────
-// Two-phase flow so the UI can preview counts before committing to the full
-// densification run. The renderer calls `tessie-preview` first, then
-// `tessie-import` to actually write.
+// Preview overlap counts before running CSV densification.
 
 let tessieImportCancel = false;
 
@@ -1383,11 +1249,9 @@ ipcMain.handle('tessie-preview', async (_e, { driveDataPath, drivesCsvPath, stat
     const statesText = fs.readFileSync(statesCsvPath, 'utf-8');
     const rawDrives = parseDrivesCSV(drivesText);
     const statesIndex = parseDrivingStatesCSV(statesText);
-    // Apply per-drive TZ calibration up-front so overlap detection matches
-    // what the import phase will actually write.
+    // Calibrate timestamps before overlap checks.
     const tDrives = rawDrives.map((d) => calibrateDriveTime(d, statesIndex));
 
-    // Load existing drive data to check overlaps
     let existingRanges = [];
     const existingSignatures = new Set();
     if (fs.existsSync(driveDataPath)) {
@@ -1442,7 +1306,6 @@ ipcMain.handle('tessie-import', (_e, { driveDataPath, drivesCsvPath, statesCsvPa
     const statesIndex = parseDrivingStatesCSV(statesText);
     const tDrives = rawDrives.map((d) => calibrateDriveTime(d, statesIndex));
 
-    // Load or init drive data
     let data;
     if (fs.existsSync(driveDataPath)) {
       fs.copyFileSync(driveDataPath, driveDataPath + '.bak');
@@ -1453,7 +1316,6 @@ ipcMain.handle('tessie-import', (_e, { driveDataPath, drivesCsvPath, statesCsvPa
     if (!Array.isArray(data.routes)) data.routes = [];
     if (!Array.isArray(data.processedFiles)) data.processedFiles = [];
 
-    // Build overlap index from existing drives
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives: existingDrives } = groupIntoDrives(data.routes);
     const existingRanges = buildExistingDriveRanges(existingDrives);
@@ -1462,7 +1324,6 @@ ipcMain.handle('tessie-import', (_e, { driveDataPath, drivesCsvPath, statesCsvPa
       if (r.externalSignature) existingSignatures.add(r.externalSignature);
     }
 
-    // Filter to candidates that will actually be imported
     const candidates = [];
     for (const d of tDrives) {
       if (existingSignatures.has(buildExternalSignature(d))) continue;
@@ -1518,8 +1379,7 @@ ipcMain.handle('tessie-import', (_e, { driveDataPath, drivesCsvPath, statesCsvPa
 }));
 
 // ─── Tessie API Import ───────────────────────────────────────────────────────
-// Uses api.tessie.com to fetch dense per-drive polylines (with per-point
-// autopilot state). Much better fidelity than the CSV-export path.
+// API imports include dense polylines and per-point Autopilot state.
 
 const TESSIE_TOKEN_FILE = () => path.join(app.getPath('userData'), 'tessie-token.bin');
 
@@ -1573,8 +1433,7 @@ let tessieApiCancel = false;
 
 ipcMain.handle('tessie-api-cancel', () => { tessieApiCancel = true; return { success: true }; });
 
-// Build a normalized drive summary (what buildClipsForApiDrive wants) by
-// merging a /drives entry with the per-drive points array from /path.
+// Normalize /drives metadata with the corresponding /path points.
 function normalizeApiDrive(driveEntry, pointsArr) {
   const pts = Array.isArray(pointsArr) ? pointsArr : [];
   const startedAtSec = driveEntry.started_at || (pts[0]?.timestamp ?? null);
@@ -1596,14 +1455,7 @@ function normalizeApiDrive(driveEntry, pointsArr) {
   };
 }
 
-// Import overlap/dedup index — the existing drives' time-ranges and external
-// signatures. Building it requires a full parse + group of drive-data.json,
-// which the preview and the import would otherwise each do back-to-back on the
-// same unchanged file (two 100+ MB parses per import click). Cache the small,
-// READ-ONLY derived result keyed by path + mtime + size so the import reuses
-// the preview's work; the key self-invalidates the instant the file changes (a
-// tag edit, a removal, the import's own write). Only the tiny derived data is
-// cached — never the mutable parsed object — so callers can't corrupt it.
+// Cache only the derived overlap index, keyed by path, mtime, and size.
 let _overlapIndexCache = null; // { key, ranges, signatures }
 async function getOverlapIndex(driveDataPath) {
   if (!driveDataPath || !fs.existsSync(driveDataPath)) {
@@ -1628,10 +1480,7 @@ async function getOverlapIndex(driveDataPath) {
 }
 
 // ─── Import from another drive-data.json ─────────────────────────────────────
-// Merge the routes from another Sentry Drive drive-data.json into the current
-// one — a backup, or data from a second device. Dedup is by clip file path
-// (normalized like the grouper); the grouper also dedups duplicate file paths
-// at load time, so a stray duplicate can never produce a doubled drive.
+// Merge by normalized clip path; grouping also deduplicates defensively.
 function sendImportProgress(data) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('import-json-progress', data);
 }
@@ -1678,8 +1527,7 @@ ipcMain.handle('import-drive-data-file', async (_e, { driveDataPath, sourcePath 
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives: newDrives } = groupIntoDrives(newRoutes);
     const imported = newDrives.length;
-    // Bring the source's tags along, but only for the drives we're importing
-    // (matched by startTime — the key loadAndGroupDrives looks tags up by).
+    // Import tags only for selected drive start times.
     const newStartTimes = new Set(newDrives.map((d) => d.startTime));
     const tagsToMerge = {};
     let tagged = 0;
@@ -1703,7 +1551,6 @@ ipcMain.handle('tessie-api-preview', async (_e, { token, vin, fromSec, toSec, dr
     logger.info('import', `tessie preview: vehicle …${String(vin).slice(-6)}, window ${fromSec}→${toSec}`);
     const drives = await fetchDrives(token, vin, { from: fromSec, to: toSec });
 
-    // Existing-drive overlap/dedup index (cached by file mtime — see getOverlapIndex).
     const { ranges: existingRanges, signatures: existingSignatures } = await getOverlapIndex(driveDataPath);
 
     let toImport = 0;
@@ -1739,14 +1586,9 @@ ipcMain.handle('tessie-api-import', async (_e, { token, vin, fromSec, toSec, dri
     sendTessieProgress({ phase: 'Fetching drives list…', current: 0, total: 1 });
     const drivesList = await fetchDrives(token, vin, { from: fromSec, to: toSec });
 
-    // Overlap/dedup snapshot only — reuses the preview's parse when the file is
-    // unchanged (getOverlapIndex is mtime-keyed), so one import click doesn't
-    // parse the full drive-data twice. The authoritative merge still re-reads
-    // under the drive-data lock at save time (the fetch loop below can run for
-    // minutes while tags or removals land in between).
+    // The final merge re-reads under the lock after the API fetch.
     const { ranges: existingRanges, signatures: existingSignatures } = await getOverlapIndex(driveDataPath);
 
-    // Filter overlap / duplicates
     const candidates = [];
     for (const d of drivesList) {
       const normalized = {
@@ -1817,8 +1659,7 @@ ipcMain.handle('tessie-api-import', async (_e, { token, vin, fromSec, toSec, dri
 });
 
 // ─── Teslascope API Import ─────────────────────────────────────────────────
-// Mirrors the Tessie API path against teslascope.com. Field mapping lives in
-// teslascope-api.cjs (defensive; set TESLASCOPE_DEBUG=1 to log raw responses).
+// Field mapping and optional diagnostics live in teslascope-api.cjs.
 
 const TESLASCOPE_TOKEN_FILE = () => path.join(app.getPath('userData'), 'teslascope-token.bin');
 
@@ -1884,15 +1725,12 @@ ipcMain.handle('teslascope-api-preview', async (_e, { token, publicId, fromSec, 
     logger.info('import', `teslascope preview: vehicle …${String(publicId).slice(-6)}, window ${fromSec}→${toSec}`);
     const drives = await fetchDrives(token, publicId, { from: fromSec, to: toSec });
 
-    // Existing-drive overlap/dedup index (cached by file mtime — see getOverlapIndex).
     const { ranges: existingRanges, signatures: existingSignatures } = await getOverlapIndex(driveDataPath);
 
     let toImport = 0, overlapSkipped = 0, duplicateSkipped = 0, badTimestamps = 0;
     for (const d of drives) {
       const n = normalizeDrive(d);
-      // Unrecognized timestamp fields ⇒ NaN startedAt. Without this guard the
-      // import "succeeds" but produces unparseable clip filenames the grouper
-      // silently drops — drives vanish without a trace.
+      // Reject timestamps that cannot produce parseable clip filenames.
       if (!Number.isFinite(n.startedAt) || !Number.isFinite(n.endedAt)) {
         if (badTimestamps === 0) {
           logger.warn('import', 'teslascope drive has unrecognized timestamp fields; raw keys:', Object.keys(d || {}).join(', '));
@@ -1923,17 +1761,14 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
     sendTeslascopeProgress({ phase: 'Fetching drives list…', current: 0, total: 1 });
     const drivesList = await fetchDrives(token, publicId, { from: fromSec, to: toSec });
 
-    // Overlap/dedup snapshot only (mtime-cached, reused from preview); the
-    // authoritative merge re-reads under the lock at save time (see the Tessie
-    // API import above).
+    // The final merge re-reads under the lock after the API fetch.
     const { ranges: existingRanges, signatures: existingSignatures } = await getOverlapIndex(driveDataPath);
 
     const candidates = [];
     let badTimestamps = 0;
     for (const d of drivesList) {
       const n = normalizeDrive(d);
-      // See the preview handler: NaN timestamps would otherwise become
-      // unparseable clip filenames that the grouper silently drops.
+      // Invalid timestamps cannot produce groupable clip filenames.
       if (!Number.isFinite(n.startedAt) || !Number.isFinite(n.endedAt)) { badTimestamps++; continue; }
       const key = { startedAt: n.startedAt, endedAt: n.endedAt, startingOdometer: n.startingOdometer };
       if (existingSignatures.has(buildExternalSignature(key, 'teslascope'))) continue;
@@ -1963,7 +1798,7 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
       try {
         detail = await fetchDrivePath(token, publicId, summary.id);
       } catch (err) {
-        // Detail fetch failed — fall back to summary-only (start/end markers).
+        // Summary endpoints are the detail-fetch fallback.
         skipReasons['detail-fetch-error'] = (skipReasons['detail-fetch-error'] || 0) + 1;
       }
       const apiDrive = normalizeDrive(d, detail);
@@ -1988,9 +1823,7 @@ ipcMain.handle('teslascope-api-import', async (_e, { token, publicId, fromSec, t
   }
 });
 
-// Remove only the Tessie clips whose grouped drive is hidden by SEI overlap.
-// Useful for cleaning up legacy imports that landed on the wrong side of an
-// overlap-check edge case before this was tightened.
+// Remove Tessie clips only when their grouped drive overlaps SEI footage.
 ipcMain.handle('tessie-remove-hidden', (_e, { driveDataPath }) => withDriveDataLock(async () => {
   try {
     if (!fs.existsSync(driveDataPath)) return { success: false, error: 'File not found' };
@@ -1999,10 +1832,7 @@ ipcMain.handle('tessie-remove-hidden', (_e, { driveDataPath }) => withDriveDataL
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives } = groupIntoDrives(data.routes ?? []);
 
-    // Build SEI ranges and find Tessie drives that overlap them. Only real
-    // dashcam (SEI) drives count as coverage — excluding just 'tessie' here
-    // used to let Teslascope imports count as "dashcam", deleting Tessie
-    // drives that only overlapped another import.
+    // Only SEI footage counts as coverage; imports must not trigger deletion.
     const seiRanges = [];
     for (const d of drives) {
       if (d.source !== 'sei' || !d.startTime || !d.endTime) continue;
@@ -2054,8 +1884,7 @@ ipcMain.handle('tessie-remove-all', (_e, { driveDataPath }) => withDriveDataLock
     );
     if (tessieFiles.size === 0) return { success: true, removed: 0 };
 
-    // Report what the user sees: grouped drives, not the per-minute
-    // synthetic clips they expand to ("Removed 339 drives" for 25).
+    // Report grouped drives rather than synthetic clips.
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives: grouped } = groupIntoDrives(data.routes ?? []);
     const removed = grouped.filter((d) => d.source === 'tessie').length;
@@ -2132,7 +1961,7 @@ ipcMain.handle('teslascope-remove-all', (_e, { driveDataPath }) => withDriveData
     );
     if (tsFiles.size === 0) return { success: true, removed: 0 };
 
-    // Grouped drive count, not clip count (see tessie-remove-all).
+    // Report grouped drives rather than synthetic clips.
     const { groupIntoDrives } = await import('../processing/grouper.js');
     const { drives: grouped } = groupIntoDrives(data.routes ?? []);
     const removed = grouped.filter((d) => d.source === 'teslascope').length;
