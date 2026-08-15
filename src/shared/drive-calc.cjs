@@ -63,11 +63,17 @@ const FLAG_BLINKER_RIGHT = 2; // blinker_on_right
 const FLAG_BRAKE = 4;         // brake_applied (pedal-only; summon's own braking never sets it)
 const FLAG_ACCEL = 8;         // accelerator_pedal_position > 0 (human-only input)
 
-// Summon evidence requires hazard bookends, no pedal input, and parking-lot
-// speed. The cap leaves margin above Tesla's 8 mph Summon limit.
+// Summon evidence requires no pedal input, parking-lot speed, and one of two
+// driverless signatures: hazard bookends, or Self Driving reported for the
+// maneuver (see detectSummon). The cap leaves margin above Tesla's 8 mph
+// Summon limit.
 const SUMMON_MAX_SPEED_MPS = 4.5;
 const SUMMON_BOOKEND_SECONDS = 10;      // hazards must appear this close to each end
 const SUMMON_MAX_DURATION_MS = 10 * 60 * 1000;
+// Share of a drive's frames that must report autopilot_state = FSD for the
+// Self Driving signature. Below 1.0 because the frames before the maneuver
+// engages and after it parks the car still read Off.
+const SUMMON_MIN_FSD_SHARE = 0.5;
 
 // ─── Pure helpers ────────────────────────────────────────────────────────────
 
@@ -185,6 +191,117 @@ function computeFlagRuns(flags, speeds) {
 }
 
 /**
+ * RLE per-frame autopilot states before GPS deduplication, in the same raw
+ * frame space as gearRuns/flagRuns. Firmware that reports Summon as Self
+ * Driving marks the maneuver here, so this is the second Summon signature;
+ * routes extracted before it was recorded simply lack the field.
+ */
+function computeApRuns(apStates) {
+  if (!apStates || apStates.length === 0) return [];
+  const runs = [];
+  let currentAp = apStates[0];
+  let count = 1;
+  for (let i = 1; i < apStates.length; i++) {
+    if (apStates[i] === currentAp) {
+      count++;
+    } else {
+      runs.push({ ap: currentAp, frames: count });
+      currentAp = apStates[i];
+      count = 1;
+    }
+  }
+  runs.push({ ap: currentAp, frames: count });
+  return runs;
+}
+
+/**
+ * True when an RLE spans exactly `totalFrames` raw frames — the proof that it
+ * is in the same index space as the segment bounds.
+ *
+ * Cross-tool, not merely defensive. Every RLE here must be built before GPS
+ * dedup; one built after it is shorter, indexes point space, and reads the
+ * wrong frame without failing. The live trap is autopilot state: both Sentry
+ * Drive and Sentry USB Rusty keep a per-point `autopilotStates` array that IS
+ * deduped, sitting right next to the raw per-frame one, so the wrong source
+ * costs one character. See docs/RUST-SUMMON-PORT.md. Runs that fail this are
+ * treated as absent — the drive falls back to the hazard signature rather
+ * than being judged on misread frames.
+ */
+function runsSpanFrames(runs, totalFrames) {
+  if (!Array.isArray(runs) || runs.length === 0 || !(totalFrames > 0)) return false;
+  let sum = 0;
+  for (const run of runs) {
+    if (!(run.frames > 0)) return false;
+    sum += run.frames;
+  }
+  return sum === totalFrames;
+}
+
+/**
+ * Gear at a raw frame index — null when gearRuns are absent or end before it.
+ */
+function gearAtFrame(gearRuns, frame) {
+  if (!Array.isArray(gearRuns) || !(frame >= 0)) return null;
+  let end = 0;
+  for (const run of gearRuns) {
+    end += run.frames;
+    // `?? null` so a run missing its gear reads as "unknown", not as a value
+    // distinct from null — callers test against null, and Rust's Option has
+    // no second empty value to reproduce the difference.
+    if (frame < end) return run.gear ?? null;
+  }
+  return null;
+}
+
+/**
+ * True when a segment's own evidence shows the car at rest in Park on the far
+ * side of the given end — the frame before startFrame, or the frame after
+ * endFrame, falling back to the boundary frame itself where the segment runs
+ * to the edge of its clip.
+ *
+ * A Summon maneuver is always park-to-park. A drive is not: groupIntoDrives
+ * also cuts on DRIVE_GAP_MS, so an unfilled hole in RecentClips leaves a
+ * fragment of an ordinary trip that begins and ends mid-motion.
+ */
+function segmentBoundedByPark(c, atEnd) {
+  const gearRuns = c.gearRuns;
+  if (atEnd) {
+    const after = gearAtFrame(gearRuns, c.endFrame);
+    if (after !== null) return after === GEAR_PARK;
+    return gearAtFrame(gearRuns, c.endFrame - 1) === GEAR_PARK;
+  }
+  if (c.startFrame > 0) return gearAtFrame(gearRuns, c.startFrame - 1) === GEAR_PARK;
+  return gearAtFrame(gearRuns, 0) === GEAR_PARK;
+}
+
+/**
+ * Frame counts by autopilot mode over the apRuns overlapping a segment's
+ * [startFrame, endFrame) — null when the clip carries no autopilot run
+ * evidence. `other` counts Autosteer/TACC, which need a driver and therefore
+ * rule Summon out.
+ */
+function segmentApFrames(c) {
+  if (!Array.isArray(c.apRuns) || c.apRuns.length === 0) return null;
+  let frame = 0;
+  let fsd = 0;
+  let other = 0;
+  let total = 0;
+  for (const run of c.apRuns) {
+    const start = frame;
+    const end = frame + run.frames;
+    frame = end;
+    if (end <= c.startFrame) continue;
+    if (start >= c.endFrame) break;
+    const overlap = Math.min(end, c.endFrame) - Math.max(start, c.startFrame);
+    total += overlap;
+    if (run.ap === AUTOPILOT_FSD) fsd += overlap;
+    else if (run.ap !== AUTOPILOT_OFF) other += overlap;
+  }
+  if (total === 0) return null;
+  return { fsd, other, total };
+}
+
+/**
  * Frame-space max |SEI speed| over the flag runs overlapping a segment's
  * [startFrame, endFrame) — null when any overlapping run predates per-run
  * speed evidence (pre-maxMps extraction), so callers can fall back.
@@ -225,17 +342,57 @@ function flagRunsOverlap(flagRuns, fromFrame, toFrame, mask, requireAll) {
 
 /**
  * Detect Summon from raw-frame clip evidence. Each entry supplies flagRuns,
- * startFrame, endFrame, and totalFrames. The signature is hazard bookends,
- * no pedal input, and parking-lot speed.
+ * startFrame, endFrame, totalFrames, and — where the extraction recorded it —
+ * apRuns. Every candidate must be pedal-free at parking-lot speed; on top of
+ * that either driverless signature qualifies:
+ *
+ *   hazard bookends — hazards within the opening and closing seconds of the
+ *     drive. The only signature older firmware gives: it left autopilot_state
+ *     at Off for the whole maneuver. Decisive on its own: no human hazards a
+ *     drive at both ends while never touching a pedal.
+ *   Self Driving — autopilot_state reports FSD for most of the drive with no
+ *     Autosteer/TACC frames, AND the drive is bracketed by Park at both ends.
+ *     Newer firmware reports Summon this way (it still flashes the hazards, so
+ *     this is the fallback for when that evidence is clipped or pruned).
+ *     Autosteer and TACC veto because both require a driver at the wheel.
+ *
+ * The Park bracketing is what the pedal gate cannot supply here. That gate
+ * excludes a human because a driver touches a pedal — but under FSD nobody
+ * touches one, so on this path the only thing separating Summon from an
+ * ordinary supervised FSD crawl is the shape of the drive: park to park,
+ * under the speed cap. A fragment carved out of a longer trip by an unfilled
+ * clip gap begins and ends mid-motion and is rejected here.
+ *
+ * GATE ORDER IS PART OF THE CONTRACT — a second implementation that computes
+ * every gate up front and ANDs them will silently tag fewer drives:
+ *   1. Shared vetoes (duration, evidence shape, speed, pedals) — any fails,
+ *      not Summon.
+ *   2. Hazard bookends — pass, RETURN TRUE HERE. Deliberately reached before
+ *      the Autosteer/TACC veto, the span checks on apRuns/gearRuns, and the
+ *      Park bracketing: none of those existed when the hazard signature was
+ *      verified against real footage, and no drive it already tags may lose
+ *      its tag to evidence a later firmware started reporting.
+ *   3. Self Driving fallback — only when the bookends fail.
+ * Within step 3, apRuns and gearRuns are required on EVERY clip even though
+ * only the first and last clips' gears are read. That is deliberate: a middle
+ * clip whose evidence is missing or in another index space means the drive is
+ * not fully accounted for, and this path has no hazard evidence to fall back
+ * on. Do not narrow that loop to the endpoints.
  */
 function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
   if (!Array.isArray(clipEvidence) || clipEvidence.length === 0) return false;
   if (!(durationMs > 0) || durationMs > SUMMON_MAX_DURATION_MS) return false;
 
-  // Missing flag evidence makes the complete drive unverifiable.
+  // Missing flag evidence makes the complete drive unverifiable. Bounds are
+  // validated here rather than trusted: the hazard bookend windows are sized
+  // from totalFrames but walked over flagRuns offsets, so runs that index a
+  // different space would put the window in the wrong place — and that path
+  // returns true, making it the failure-open direction.
   for (const c of clipEvidence) {
     if (!c || !Array.isArray(c.flagRuns) || c.flagRuns.length === 0 ||
-        !(c.totalFrames > 0) || !(c.endFrame > c.startFrame)) {
+        !(c.totalFrames > 0) || !(c.endFrame > c.startFrame) ||
+        !(c.startFrame >= 0) || !(c.endFrame <= c.totalFrames) ||
+        !runsSpanFrames(c.flagRuns, c.totalFrames)) {
       return false;
     }
   }
@@ -283,7 +440,35 @@ function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
     HAZARD,
     true,
   );
-  return hazardAtStart && hazardAtEnd;
+  if (hazardAtStart && hazardAtEnd) return true;
+
+  // Self Driving signature. Both extra RLEs must span the clip's raw frames:
+  // runs from a producer that indexes a different space would be walked with
+  // the wrong bounds, and a wrong answer is worse than no answer.
+  for (const c of clipEvidence) {
+    if (!runsSpanFrames(c.apRuns, c.totalFrames)) return false;
+    if (!runsSpanFrames(c.gearRuns, c.totalFrames)) return false;
+  }
+
+  // Park-to-park only, so a slow pedal-free fragment of a longer FSD trip
+  // cannot pass as a maneuver. Missing gear evidence reads as not bracketed,
+  // which is the safe direction: hazards already covered those drives before
+  // autopilot state was recorded at all.
+  if (!segmentBoundedByPark(first, false) || !segmentBoundedByPark(last, true)) return false;
+
+  // Needs autopilot evidence on every clip, or the drive's FSD share is
+  // measured over an unknown fraction of it.
+  let fsdFrames = 0;
+  let apFrames = 0;
+  for (const c of clipEvidence) {
+    const ap = segmentApFrames(c);
+    if (ap === null || ap.other > 0) return false;
+    fsdFrames += ap.fsd;
+    apFrames += ap.total;
+  }
+  // Multiply rather than divide: the threshold is a power of two, so both
+  // sides stay exact integers in any IEEE-754 language.
+  return apFrames > 0 && fsdFrames >= apFrames * SUMMON_MIN_FSD_SHARE;
 }
 
 // Keep the object literal assignment visible to cjs-module-lexer; freezing it
@@ -324,6 +509,7 @@ module.exports = {
   SUMMON_MAX_SPEED_MPS,
   SUMMON_BOOKEND_SECONDS,
   SUMMON_MAX_DURATION_MS,
+  SUMMON_MIN_FSD_SHARE,
   WGS84_A,
   WGS84_F,
   geodesicM,
@@ -331,8 +517,13 @@ module.exports = {
   round2,
   computeGearRuns,
   computeFlagRuns,
+  computeApRuns,
   flagRunsOverlap,
   segmentMaxSpeed,
+  segmentApFrames,
+  gearAtFrame,
+  segmentBoundedByPark,
+  runsSpanFrames,
   detectSummon,
 };
 Object.freeze(module.exports);

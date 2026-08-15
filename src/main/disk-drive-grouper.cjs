@@ -92,8 +92,10 @@ async function groupIndexedDrives(index, options = {}) {
       aggregates.totalDistanceMi += drive.distanceMi ?? 0;
       aggregates.totalDurationMs += drive.durationMs ?? 0;
       if (drive.summon) {
-        // Summon contributes to lifetime totals, not FSD analytics; its
-        // autopilot_state is unset and would falsely dilute FSD scores.
+        // Summon contributes to lifetime totals, not FSD analytics; a
+        // driverless crawl would falsely dilute FSD scores — and newer
+        // firmware reports Summon as Self Driving, so it would otherwise
+        // land in them.
         aggregates.summonDriveCount++;
       } else if (drive.source === 'sei') {
         const start = Date.parse(drive.startTime);

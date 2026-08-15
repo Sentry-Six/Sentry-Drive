@@ -578,9 +578,10 @@ function buildDriveStats(clips, idx) {
   const r2 = round2;
   const pct = (part) => totalDistanceM > 0 ? Math.round((part / totalDistanceM) * 1000) / 10 : 0;
 
-  // Summon uses raw-frame flag/speed evidence so GPS dedup and point slicing
-  // cannot shift its bounds. Missing flagRuns are unverifiable; GPS-derived
-  // speeds are excluded at parking-lot scale.
+  // Summon uses raw-frame flag/autopilot/gear/speed evidence so GPS dedup and
+  // point slicing cannot shift its bounds. Missing flagRuns are unverifiable;
+  // apRuns and gearRuns are optional (only the Self Driving signature needs
+  // them); GPS-derived speeds are excluded at parking-lot scale.
   const summonEvidence = clips.map((clip) => {
     const runs = clip.flagRuns;
     let totalFrames = clip.subClipFrames?.totalFrames ?? clip.rawFrameCount ?? 0;
@@ -589,6 +590,8 @@ function buildDriveStats(clips, idx) {
     }
     return {
       flagRuns: runs,
+      apRuns: clip.apRuns,
+      gearRuns: clip.gearRuns,
       startFrame: clip.subClipFrames?.startFrame ?? 0,
       endFrame: clip.subClipFrames?.endFrame ?? totalFrames,
       totalFrames,
@@ -599,6 +602,24 @@ function buildDriveStats(clips, idx) {
     durationMs,
     hasSeiSpeeds: hasSEISpeeds,
   });
+
+  // A Summon drive is driverless, so assistance analytics do not apply to it.
+  // Firmware that reports Summon as Self Driving would otherwise book the
+  // maneuver as FSD engagement and mark a phantom disengagement where the car
+  // parked itself. Zeroing here keeps every consumer honest without checking
+  // the summon flag; per-point fsdStates stay as raw evidence.
+  if (summon) {
+    fsdEngagedMs = 0;
+    fsdDisengagements = 0;
+    fsdAccelPushes = 0;
+    fsdDistanceM = 0;
+    autosteerEngagedMs = 0;
+    autosteerDistanceM = 0;
+    taccEngagedMs = 0;
+    taccDistanceM = 0;
+    assistedDistanceM = 0;
+    fsdEvents.length = 0;
+  }
 
   // Median stationary endpoint clusters improve geocode labels only; they do
   // not affect distance or speed statistics.

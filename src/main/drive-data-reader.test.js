@@ -24,6 +24,10 @@ const FIXTURE = {
       autopilotStates: 'AAAAAQ==',
       speeds: [0, 1.25, 30.000001],
       gearRuns: [{ gear: 0, frames: 2 }, { gear: 1, frames: 58 }],
+      // Summon evidence: shared with the Rust exporter, so both readers must
+      // return the runs verbatim, in raw SEI frame space.
+      flagRuns: [{ flags: 3, frames: 2, maxMps: 0 }, { flags: 0, frames: 58, maxMps: 2.7 }],
+      apRuns: [{ ap: 0, frames: 2 }, { ap: 1, frames: 58 }],
       source: 'sei',
       locationNameStart: '123 Main St',
       locationNameEnd: null,

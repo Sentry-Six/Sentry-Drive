@@ -56,6 +56,19 @@ test('normal extraction stores one canonical path', () => {
   assert.equal(result.route.file, '2026-07-27/2026-07-27_14-01-02-front.mp4');
 });
 
+test('summon evidence survives into the stored route', () => {
+  const flagRuns = [{ flags: 3, frames: 30, maxMps: 0.4 }, { flags: 0, frames: 30, maxMps: 2.1 }];
+  const apRuns = [{ ap: 0, frames: 10 }, { ap: 1, frames: 50 }];
+  const result = buildProcessedRoute(extracted(
+    '2026-07-27/2026-07-27_14-01-02-front.mp4',
+    { flagRuns, apRuns },
+  ));
+
+  // Without these the drive can only be tagged after Check for Summon reruns.
+  assert.deepEqual(result.route.flagRuns, flagRuns);
+  assert.deepEqual(result.route.apRuns, apRuns);
+});
+
 test('errors and clips without GPS are processed without routes', () => {
   assert.deepEqual(
     buildProcessedRoute(extracted('2026-07-27/error-front.mp4', { error: 'bad video' })),

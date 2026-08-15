@@ -9,8 +9,9 @@ const v8 = require('v8');
 const {
   geodesicM, GEAR_PARK, CLIP_DURATION_MS, DRIVE_GAP_MS,
   SUMMON_MAX_SPEED_MPS, SUMMON_MAX_DURATION_MS, MPS_TO_MPH,
-  computeGearRuns, computeFlagRuns,
+  computeGearRuns, computeFlagRuns, computeApRuns,
 } = require('../shared/drive-calc.cjs');
+const { normalizeClipPath } = require('../shared/clip-path.cjs');
 
 let mainWindow;
 let activeChild = null;
@@ -1099,8 +1100,9 @@ function resolveClipPath(clipsDir, normFile) {
   return null;
 }
 
-// Backfill missing frame-level flag and gear evidence. Scan whole slow drives
-// and low-speed edges where a park-bracketed Summon can be fused to a trip.
+// Backfill missing frame-level flag, gear, and autopilot evidence. Scan whole
+// slow drives and low-speed edges where a park-bracketed Summon can be fused
+// to a trip.
 ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock(async () => {
   try {
     sendRepairProgress('Reading…', 0, 1);
@@ -1108,8 +1110,12 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
     const data = await readDriveData(filePath, { wantProcessedFiles: true });
     const routes = await decodeRoutesByteFields(data.routes ?? []);
 
+    // Key on the canonical path: groupIntoDrives normalizes route files (which
+    // strips a leading RecentClips/), so drive.routeFiles are in that space.
+    // Folding backslashes alone misses every route an older exporter wrote
+    // prefixed, and the lookup failure is silent — no clip read, no error.
     const routeByFile = new Map();
-    for (const r of routes) routeByFile.set(String(r.file).replace(/\\/g, '/'), r);
+    for (const r of routes) routeByFile.set(normalizeClipPath(r.file), r);
 
     sendRepairProgress('Scanning drives…', 0, 1);
     const { groupIntoDrives } = await import('../processing/grouper.js');
@@ -1127,13 +1133,15 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
       return true;
     };
 
-    // Current evidence includes per-run speed, which avoids point-slice skew.
+    // Current evidence includes per-run speed, which avoids point-slice skew,
+    // and per-frame autopilot runs for the Self Driving Summon signature.
     const hasCurrentEvidence = (route) =>
       Array.isArray(route.flagRuns) && route.flagRuns.length > 0 &&
-      route.flagRuns.every((run) => Number.isFinite(run.maxMps));
+      route.flagRuns.every((run) => Number.isFinite(run.maxMps)) &&
+      Array.isArray(route.apRuns) && route.apRuns.length > 0;
     const pending = new Map();
     const addClip = (f) => {
-      const norm = String(f).replace(/\\/g, '/');
+      const norm = normalizeClipPath(f);
       if (norm.includes('-front-bridge.mp4')) return; // synthetic — no MP4 on disk
       const route = routeByFile.get(norm);
       if (route && !hasCurrentEvidence(route)) {
@@ -1160,7 +1168,7 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
       // Include one fast boundary clip because it can contain the park split.
       let took = false;
       for (let i = 0; i < Math.min(files.length, MAX_EDGE_CLIPS); i++) {
-        const norm = String(files[i]).replace(/\\/g, '/');
+        const norm = normalizeClipPath(files[i]);
         if (!routeIsSlow(norm)) {
           if (took) addClip(files[i]); // boundary clip after the slow run
           break;
@@ -1170,7 +1178,7 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
       }
       let tookTail = false;
       for (let i = 0; i < Math.min(files.length, MAX_EDGE_CLIPS); i++) {
-        const norm = String(files[files.length - 1 - i]).replace(/\\/g, '/');
+        const norm = normalizeClipPath(files[files.length - 1 - i]);
         if (!routeIsSlow(norm)) {
           if (tookTail) addClip(files[files.length - 1 - i]); // boundary before the slow tail
           break;
@@ -1198,8 +1206,10 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
         scanned++;
         if (extracted && extracted.flags && extracted.flags.length > 0) {
           route.flagRuns = computeFlagRuns(extracted.flags, extracted.speeds);
-          // Refresh gear evidence from the same frames as the flag evidence.
+          // Refresh gear and autopilot evidence from the same frames as the
+          // flag evidence.
           route.gearRuns = computeGearRuns(extracted.gears);
+          route.apRuns = computeApRuns(extracted.apStates);
           route.rawFrameCount = extracted.gears.length;
           let parkCount = 0;
           for (const g of extracted.gears) if (g === GEAR_PARK) parkCount++;
@@ -1217,7 +1227,7 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
       await writeDriveDataJSON(filePath, data);
     }
     logger.info('gps', `check summon: ${candidateDrives} candidate drive(s), ${scanned} clip(s) read, ` +
-      `${updated} route(s) gained flag+gear evidence, ${missing} clip(s) unavailable`);
+      `${updated} route(s) gained flag+gear+autopilot evidence, ${missing} clip(s) unavailable`);
     return {
       success: true,
       candidateDrives,

@@ -2789,7 +2789,7 @@ async function checkSummon() {
         msgs.push(`  • …and ${summonCount - sample.length} more`);
       }
     } else {
-      msgs.push('Evidence was added, but none of the candidates matched the summon signature (hazard bookends, no pedals).');
+      msgs.push('Evidence was added, but none of the candidates matched a summon signature (hazard bookends or Self Driving, with no pedal input).');
     }
     showCheckResult('Check for Summon complete', msgs.join('\n'));
   } catch (err) {
@@ -2954,7 +2954,8 @@ function renderSelectedDriveStats(drive) {
     </div>
   `;
 
-  // Summon has no AP state, so present it as one driverless mode.
+  // Summon is driverless start to finish, so present it as one mode rather
+  // than as whatever the firmware reported in autopilot_state.
   const isSummon = !!drive.summon;
   const slices = [];
   if (isSummon) {
@@ -3771,7 +3772,7 @@ function buildDriveItem(drive) {
       <span class="drive-chip"><span class="material-icons">straighten</span>${distVal(drive.distanceMi)} ${distShort()}</span>
       <span class="drive-chip"><span class="material-icons">schedule</span>${durStr}</span>
       ${fsdChip}
-      ${drive.summon ? '<span class="drive-chip drive-chip--summon" title="Detected Summon: hazard lights bookend the drive, no pedal input, parking-lot speed throughout"><span class="material-icons">settings_remote</span>Summon</span>' : ''}
+      ${drive.summon ? '<span class="drive-chip drive-chip--summon" title="Detected Summon: no pedal input and parking-lot speed throughout, with hazard lights bookending the drive or Self Driving reported for it"><span class="material-icons">settings_remote</span>Summon</span>' : ''}
       ${drive.bridged ? '<span class="drive-chip drive-chip--bridged" title="A GPS gap in this drive was bridged by Check Drives"><span class="material-icons">route</span>Bridged</span>' : ''}
     </div>
     <div class="drive-item-tags">
@@ -4334,7 +4335,8 @@ function drawSelectedDrive(drive) {
   };
 
   if (drive.summon) {
-    // Summon has no AP state, so color the full driverless route uniformly.
+    // The whole route was driverless, so color it uniformly instead of by the
+    // reported AP state.
     pushSeg(0, latLngs.length - 1, 'summon', false, 5);
   } else if (hasFSD) {
     let i = 0;
@@ -4910,7 +4912,8 @@ function updateReplayData(idx) {
     }
   }
 
-  // Summon has no AP state, so name the mode instead of showing Off.
+  // Name the mode for Summon instead of echoing the reported AP state, which
+  // is Off on older firmware and Self Driving on newer.
   const fsdEl = document.getElementById('replay-fsd-val');
   const fsdSpan = document.getElementById('replay-fsd-span');
   if (drive.summon) {

@@ -32,6 +32,11 @@ function buildProcessedRoute(result) {
       rawParkCount: result.rawParkCount,
       rawFrameCount: result.rawFrameCount,
       gearRuns: result.gearRuns,
+      // Raw-frame Summon evidence: hazard/pedal bits and autopilot states.
+      // Without these on the route, a drive can only be tagged after Check
+      // for Summon re-reads its clips.
+      flagRuns: result.flagRuns,
+      apRuns: result.apRuns,
     },
   };
 }

@@ -328,6 +328,220 @@ test('detectSummon: park-split segment bounds gate the bookend windows', () => {
   assert.equal(calc.detectSummon([secondSegment], stats), false);
 });
 
+// Firmware that reports Summon as Self Driving: hazards may be absent, but
+// autopilot_state reads FSD for the maneuver.
+const SD_RUNS = [
+  { flags: 0, frames: 27, maxMps: 0 },
+  { flags: 0, frames: 923, maxMps: 2.7 },
+  { flags: 0, frames: 100, maxMps: 0 },
+];
+const SD_AP_RUNS = [
+  { ap: 0, frames: 27 },   // parked, before the maneuver engages
+  { ap: 1, frames: 923 },  // Self Driving
+  { ap: 0, frames: 100 },  // parked itself
+];
+// Park to park: the shape every Summon has, and the shape a fragment of a
+// longer trip does not.
+const SD_GEAR_RUNS = [
+  { gear: 0, frames: 27 },
+  { gear: 1, frames: 923 },
+  { gear: 0, frames: 100 },
+];
+const SD_CLIP = {
+  flagRuns: SD_RUNS,
+  apRuns: SD_AP_RUNS,
+  gearRuns: SD_GEAR_RUNS,
+  startFrame: 0,
+  endFrame: 1050,
+  totalFrames: 1050,
+};
+const SD_STATS = { maxSpeedMps: 2.7, durationMs: 35000, hasSeiSpeeds: true };
+
+test('detectSummon: Self Driving without hazards is summon', () => {
+  assert.equal(calc.detectSummon([SD_CLIP], SD_STATS), true);
+  // The same drive without autopilot evidence has no signature left.
+  assert.equal(calc.detectSummon([{ ...SD_CLIP, apRuns: undefined }], SD_STATS), false);
+});
+
+test('detectSummon: Self Driving still obeys the pedal, speed, and duration gates', () => {
+  const pedal = {
+    ...SD_CLIP,
+    flagRuns: [
+      { flags: 0, frames: 500, maxMps: 2.7 },
+      { flags: 8, frames: 50, maxMps: 2.0 },
+      { flags: 0, frames: 500, maxMps: 1.0 },
+    ],
+  };
+  assert.equal(calc.detectSummon([pedal], SD_STATS), false);
+  const fast = {
+    ...SD_CLIP,
+    flagRuns: [{ flags: 0, frames: 1050, maxMps: 12.0 }],
+  };
+  assert.equal(calc.detectSummon([fast], SD_STATS), false);
+  assert.equal(calc.detectSummon([SD_CLIP], { ...SD_STATS, durationMs: 601000 }), false);
+});
+
+test('detectSummon: a mostly-Off drive is not Self Driving', () => {
+  // A driver rolling through a lot with FSD engaged only briefly.
+  const brief = {
+    ...SD_CLIP,
+    apRuns: [{ ap: 0, frames: 800 }, { ap: 1, frames: 250 }],
+  };
+  assert.equal(calc.detectSummon([brief], SD_STATS), false);
+});
+
+test('detectSummon: Autosteer or TACC frames rule out the Self Driving signature', () => {
+  // Both need a driver at the wheel, so neither can be a driverless maneuver.
+  for (const ap of [2, 3]) {
+    const assisted = {
+      ...SD_CLIP,
+      apRuns: [{ ap: 1, frames: 900 }, { ap, frames: 150 }],
+    };
+    assert.equal(calc.detectSummon([assisted], SD_STATS), false);
+    // Hazard bookends are decided first and stand on their own, so a firmware
+    // reporting the maneuver as some other assisted mode cannot un-detect it.
+    const hazards = {
+      ...ASS_START_CLIP,
+      apRuns: [{ ap, frames: 1786 }],
+    };
+    assert.equal(calc.detectSummon([hazards, ASS_END_CLIP], ASS_STATS), true);
+  }
+});
+
+test('detectSummon: autopilot evidence is required on every clip', () => {
+  const second = { ...SD_CLIP, apRuns: undefined };
+  assert.equal(calc.detectSummon([SD_CLIP, second], SD_STATS), false);
+});
+
+test('detectSummon: park-split bounds gate the Self Driving share too', () => {
+  // Only the first segment is the maneuver; the rest of the clip is the
+  // manual drive that followed it.
+  const flagRuns = [{ flags: 0, frames: 1800, maxMps: 2.7 }];
+  const apRuns = [{ ap: 1, frames: 600 }, { ap: 0, frames: 1200 }];
+  const gearRuns = [{ gear: 0, frames: 30 }, { gear: 1, frames: 600 }, { gear: 0, frames: 1170 }];
+  const first = { flagRuns, apRuns, gearRuns, startFrame: 0, endFrame: 660, totalFrames: 1800 };
+  const second = { flagRuns, apRuns, gearRuns, startFrame: 660, endFrame: 1800, totalFrames: 1800 };
+  assert.equal(calc.detectSummon([first], SD_STATS), true);
+  assert.equal(calc.detectSummon([second], SD_STATS), false);
+});
+
+test('detectSummon: Self Driving requires the drive to be bracketed by Park', () => {
+  // A fragment of a longer FSD trip: an unfilled clip gap cut it out, so it
+  // begins and ends mid-motion. Pedal-free (the car is driving) and slow (a
+  // parking structure), which is everything else the fallback asks for.
+  const fragment = {
+    ...SD_CLIP,
+    apRuns: [{ ap: 1, frames: 1050 }],
+    gearRuns: [{ gear: 1, frames: 1050 }],
+  };
+  assert.equal(calc.detectSummon([fragment], SD_STATS), false);
+  // Ends in Park but starts mid-motion — still a fragment.
+  assert.equal(calc.detectSummon([{
+    ...fragment,
+    gearRuns: [{ gear: 1, frames: 950 }, { gear: 0, frames: 100 }],
+  }], SD_STATS), false);
+  // Missing gear evidence reads as not bracketed.
+  assert.equal(calc.detectSummon([{ ...SD_CLIP, gearRuns: undefined }], SD_STATS), false);
+  // Hazard bookends never needed gear evidence and still do not: the ASS
+  // fixtures carry none.
+  assert.equal(calc.detectSummon([ASS_START_CLIP, ASS_END_CLIP], ASS_STATS), true);
+});
+
+test('detectSummon: Self Driving rejects runs from another index space', () => {
+  // Sentry USB Rusty builds gear runs from the deduped point list, so its runs
+  // are far shorter than the clip's frame count. Walking them with raw-frame
+  // bounds would read the wrong gear, so evidence that does not span the clip
+  // is treated as absent.
+  const dedupedGears = [{ gear: 0, frames: 3 }, { gear: 1, frames: 40 }, { gear: 0, frames: 5 }];
+  assert.equal(calc.detectSummon([{ ...SD_CLIP, gearRuns: dedupedGears }], SD_STATS), false);
+  assert.equal(calc.detectSummon([{ ...SD_CLIP, apRuns: [{ ap: 1, frames: 48 }] }], SD_STATS), false);
+  // The hazard signature reads flagRuns only and is unaffected.
+  assert.equal(calc.detectSummon(
+    [{ ...ASS_START_CLIP, gearRuns: dedupedGears }, ASS_END_CLIP],
+    ASS_STATS,
+  ), true);
+});
+
+test('detectSummon: evidence bounds and flag-run span are validated', () => {
+  // The hazard path sizes its bookend windows from totalFrames but walks them
+  // over flagRuns, so unvalidated bounds fail open — the direction that tags.
+  const shortFlags = { ...ASS_END_CLIP, flagRuns: [{ flags: 3, frames: 60 }] };
+  assert.equal(calc.detectSummon([ASS_START_CLIP, shortFlags], ASS_STATS), false);
+  const pastEnd = { ...ASS_END_CLIP, endFrame: 900 };
+  assert.equal(calc.detectSummon([ASS_START_CLIP, pastEnd], ASS_STATS), false);
+  const negativeStart = { ...ASS_START_CLIP, startFrame: -1 };
+  assert.equal(calc.detectSummon([negativeStart, ASS_END_CLIP], ASS_STATS), false);
+});
+
+test('gearAtFrame: a run without a gear reads as unknown, not as a value', () => {
+  // Callers compare against null; undefined would skip the documented
+  // fallback, and Rust's Option cannot reproduce a second empty value.
+  assert.equal(calc.gearAtFrame([{ frames: 10 }], 5), null);
+  const c = { gearRuns: [{ gear: 1, frames: 90 }, { frames: 10 }], startFrame: 0, endFrame: 90 };
+  assert.equal(calc.segmentBoundedByPark(c, true), false);
+});
+
+test('runsSpanFrames: exact coverage of the raw frame count', () => {
+  assert.equal(calc.runsSpanFrames([{ frames: 27 }, { frames: 923 }, { frames: 100 }], 1050), true);
+  assert.equal(calc.runsSpanFrames([{ frames: 27 }, { frames: 923 }], 1050), false);
+  assert.equal(calc.runsSpanFrames([{ frames: 1051 }], 1050), false);
+  assert.equal(calc.runsSpanFrames([], 1050), false);
+  assert.equal(calc.runsSpanFrames(undefined, 1050), false);
+  // A zero- or negative-length run means the RLE is not what it claims to be.
+  assert.equal(calc.runsSpanFrames([{ frames: 1050 }, { frames: 0 }], 1050), false);
+});
+
+test('gearAtFrame / segmentBoundedByPark: Park on the far side of each end', () => {
+  const gearRuns = [{ gear: 0, frames: 100 }, { gear: 1, frames: 300 }, { gear: 0, frames: 100 }];
+  assert.equal(calc.gearAtFrame(gearRuns, 0), 0);
+  assert.equal(calc.gearAtFrame(gearRuns, 100), 1);
+  assert.equal(calc.gearAtFrame(gearRuns, 399), 1);
+  assert.equal(calc.gearAtFrame(gearRuns, 400), 0);
+  assert.equal(calc.gearAtFrame(gearRuns, 500), null);  // past the end
+  assert.equal(calc.gearAtFrame(undefined, 0), null);
+
+  // Park-split segment: the frames on either side belong to the park runs.
+  const split = { gearRuns, startFrame: 100, endFrame: 400 };
+  assert.equal(calc.segmentBoundedByPark(split, false), true);
+  assert.equal(calc.segmentBoundedByPark(split, true), true);
+  // Unsplit clip that opens parked and closes parked.
+  const whole = { gearRuns, startFrame: 0, endFrame: 500 };
+  assert.equal(calc.segmentBoundedByPark(whole, false), true);
+  assert.equal(calc.segmentBoundedByPark(whole, true), true);
+  // Mid-motion at both ends.
+  const rolling = { gearRuns: [{ gear: 1, frames: 500 }], startFrame: 0, endFrame: 500 };
+  assert.equal(calc.segmentBoundedByPark(rolling, false), false);
+  assert.equal(calc.segmentBoundedByPark(rolling, true), false);
+});
+
+test('computeApRuns RLEs raw autopilot frames', () => {
+  assert.deepEqual(calc.computeApRuns([]), []);
+  assert.deepEqual(calc.computeApRuns([0, 0, 1, 1, 1, 2, 0]), [
+    { ap: 0, frames: 2 },
+    { ap: 1, frames: 3 },
+    { ap: 2, frames: 1 },
+    { ap: 0, frames: 1 },
+  ]);
+  // Raw-frame segment bounds require exact run totals.
+  const states = [0, 1, 1, 3, 3, 0, 0, 1];
+  const total = calc.computeApRuns(states).reduce((s, r) => s + r.frames, 0);
+  assert.equal(total, states.length);
+});
+
+test('segmentApFrames: mode frame counts over the segment, null without runs', () => {
+  const apRuns = [{ ap: 0, frames: 100 }, { ap: 1, frames: 400 }, { ap: 2, frames: 500 }];
+  assert.deepEqual(
+    calc.segmentApFrames({ apRuns, startFrame: 0, endFrame: 500 }),
+    { fsd: 400, other: 0, total: 500 },
+  );
+  assert.deepEqual(
+    calc.segmentApFrames({ apRuns, startFrame: 300, endFrame: 700 }),
+    { fsd: 200, other: 200, total: 400 },
+  );
+  assert.equal(calc.segmentApFrames({ apRuns: undefined, startFrame: 0, endFrame: 500 }), null);
+  assert.equal(calc.segmentApFrames({ apRuns, startFrame: 1000, endFrame: 1200 }), null);
+});
+
 test('computeFlagRuns RLEs raw frames and round-trips totals', () => {
   assert.deepEqual(calc.computeFlagRuns([]), []);
   assert.deepEqual(calc.computeFlagRuns([0, 0, 3, 3, 3, 1, 0]), [

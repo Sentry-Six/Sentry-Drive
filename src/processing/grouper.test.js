@@ -541,12 +541,21 @@ test('groupIntoDrives: trailing pre-roll chain extends the drive; parked tail ex
 // ─── Summon detection ────────────────────────────────────────────────────────
 // flagRuns and gearRuns share the raw SEI frame sequence.
 
-function summonClip(file, gearRunPairs, flagRuns, { speed = 2.0, n = 100, baseLat = 37.0 } = {}) {
+function summonClip(
+  file,
+  gearRunPairs,
+  flagRuns,
+  { speed = 2.0, n = 100, baseLat = 37.0, apRuns, apState } = {},
+) {
   const clip = clipWithGearRuns(file, gearRunPairs, baseLat);
   clip.points = clip.points.slice(0, n);
   while (clip.points.length < n) clip.points.push([baseLat + clip.points.length * 1e-6, -122.0]);
   clip.speeds = new Array(n).fill(speed);
   clip.flagRuns = flagRuns;
+  // apRuns is the raw-frame autopilot evidence; apState fills the per-point
+  // states the FSD statistics are built from.
+  if (apRuns) clip.apRuns = apRuns;
+  if (apState !== undefined) clip.autopilotStates = new Array(n).fill(apState);
   return clip;
 }
 
@@ -609,6 +618,67 @@ test('summon: missing flagRuns or pedal input never flags', () => {
   const pedalDrives = drivesOf([pedalClip]);
   assert.equal(pedalDrives.length, 1);
   assert.equal(pedalDrives[0].summon, undefined);
+});
+
+test('summon: Self Driving crawl without hazards is flagged and skips FSD stats', () => {
+  // Newer firmware reports Summon as autopilot_state = FSD; the hazards that
+  // older firmware alone identified it by need not be in evidence.
+  const clip = summonClip(
+    '2026-08-14/2026-08-14_09-00-00-front.mp4',
+    [[GEAR_PARK, 90], [GEAR_DRIVE, 300], [GEAR_PARK, 60]],
+    [{ flags: 0, frames: 450 }],
+    {
+      apRuns: [{ ap: 0, frames: 90 }, { ap: 1, frames: 300 }, { ap: 0, frames: 60 }],
+      apState: 1,
+    },
+  );
+  const drives = drivesOf([clip]);
+  assert.equal(drives.length, 1);
+  assert.equal(drives[0].summon, true);
+  // The maneuver is driverless, so it books no FSD engagement and no
+  // disengagement where the car parked itself.
+  assert.equal(drives[0].fsdEngagedMs, 0);
+  assert.equal(drives[0].fsdDistanceKm, 0);
+  assert.equal(drives[0].fsdPercent, 0);
+  assert.equal(drives[0].fsdDisengagements, 0);
+  assert.equal(drives[0].assistedPercent, 0);
+  assert.equal(drives[0].fsdEvents, undefined);
+});
+
+test('summon: a slow pedal-free FSD fragment is not summon and keeps its FSD stats', () => {
+  // An unfilled hole in RecentClips cuts a trip into legs, so this leg begins
+  // mid-motion: no Park run, hence no park split, and under FSD nobody touches
+  // a pedal. Only the park bracketing separates it from a maneuver — without
+  // it, a real FSD drive would be badged Summon and erased from FSD analytics.
+  const clip = summonClip(
+    '2026-08-14/2026-08-14_11-00-00-front.mp4',
+    [[GEAR_DRIVE, 450]],
+    [{ flags: 0, frames: 450 }],
+    { apRuns: [{ ap: 1, frames: 450 }], apState: 1 },
+  );
+  const drives = drivesOf([clip]);
+  assert.equal(drives.length, 1);
+  assert.equal(drives[0].summon, undefined);
+  assert.ok(drives[0].fsdEngagedMs > 0);
+  assert.equal(drives[0].fsdPercent, 100);
+});
+
+test('summon: a pedal-free FSD crawl still needs the speed gate', () => {
+  // Same Self Driving evidence, driven at road speed: an ordinary FSD trip.
+  const clip = summonClip(
+    '2026-08-14/2026-08-14_10-00-00-front.mp4',
+    [[GEAR_PARK, 90], [GEAR_DRIVE, 300], [GEAR_PARK, 60]],
+    [{ flags: 0, frames: 450 }],
+    {
+      speed: 12.0,
+      apRuns: [{ ap: 0, frames: 90 }, { ap: 1, frames: 300 }, { ap: 0, frames: 60 }],
+      apState: 1,
+    },
+  );
+  const drives = drivesOf([clip]);
+  assert.equal(drives.length, 1);
+  assert.equal(drives[0].summon, undefined);
+  assert.ok(drives[0].fsdEngagedMs > 0);
 });
 
 test('summon: reverse-only summon (negative SEI speeds) is flagged', () => {

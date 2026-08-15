@@ -1,7 +1,7 @@
 // Pull-based GPS extraction worker; posting a result requests the next file.
 import { parentPort, workerData } from "node:worker_threads";
 import { extractGPSFromFile } from "./extract.js";
-import { computeGearRuns, computeFlagRuns } from "../shared/drive-calc.cjs";
+import { computeGearRuns, computeFlagRuns, computeApRuns } from "../shared/drive-calc.cjs";
 
 const { workerId } = workerData;
 
@@ -20,6 +20,7 @@ parentPort.on("message", async (msg) => {
     if (data && data.points.length > 0) {
       const gearRuns = computeGearRuns(data.gears);
       const flagRuns = computeFlagRuns(data.flags, data.speeds);
+      const apRuns = computeApRuns(data.apStates);
       const rawFrameCount = data.gears.length;
       let rawParkCount = 0;
       for (const g of data.gears) {
@@ -43,6 +44,7 @@ parentPort.on("message", async (msg) => {
           rawFrameCount,
           gearRuns,
           flagRuns,
+          apRuns,
           hasGPS: true,
         };
       } else {
