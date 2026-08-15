@@ -357,6 +357,96 @@ const SD_CLIP = {
 };
 const SD_STATS = { maxSpeedMps: 2.7, durationMs: 35000, hasSeiSpeeds: true };
 
+// Real Actually Smart Summon on the firmware that reports Self Driving
+// (clip 2026-08-14_21-55-07, 919 raw frames at ~15.3 fps, reverse then
+// forward, 4.5 mph peak). Hazards ARE flashed at both ends — but the closing
+// flash starts 4 frames AFTER the D→P shift at frame 835, so the park
+// splitter's drive segment [0, 835) excludes it. The hazard signature fails
+// on this drive; only the Self Driving signature detects it.
+const SD_REAL_CLIP = {
+  flagRuns: [
+    { flags: 3, frames: 44, maxMps: 0 },    // hazards, frames 0-43
+    { flags: 0, frames: 795, maxMps: 2 },
+    { flags: 3, frames: 70, maxMps: 0 },    // hazards, frames 839-908 — after Park
+    { flags: 0, frames: 10, maxMps: 0 },
+  ],
+  apRuns: [{ ap: 1, frames: 894 }, { ap: 0, frames: 25 }],
+  gearRuns: [
+    { gear: 0, frames: 25 },   // P
+    { gear: 2, frames: 296 },  // R
+    { gear: 1, frames: 514 },  // D
+    { gear: 0, frames: 84 },   // P — splits here, at frame 835
+  ],
+  startFrame: 0,
+  endFrame: 835,
+  totalFrames: 919,
+};
+const SD_REAL_STATS = { maxSpeedMps: 2.0, durationMs: 54500, hasSeiSpeeds: true };
+
+test('detectSummon: real new-firmware summon whose closing hazards fall past the park split', () => {
+  assert.equal(calc.detectSummon([SD_REAL_CLIP], SD_REAL_STATS), true);
+
+  // Why the fallback is load-bearing and not belt-and-braces: the hazard
+  // evidence exists in the clip but not inside the drive's own segment.
+  const HAZARD = calc.FLAG_BLINKER_LEFT | calc.FLAG_BLINKER_RIGHT;
+  const bookend = Math.ceil((919 * calc.SUMMON_BOOKEND_SECONDS * 1000) / calc.CLIP_DURATION_MS);
+  assert.equal(
+    calc.flagRunsOverlap(SD_REAL_CLIP.flagRuns, 0, bookend, HAZARD, true),
+    true,
+    'opening hazards are inside the segment',
+  );
+  assert.equal(
+    calc.flagRunsOverlap(SD_REAL_CLIP.flagRuns, 835 - bookend, 835, HAZARD, true),
+    false,
+    'closing hazards are not — they land in the parked segment',
+  );
+
+  // So without autopilot evidence this real drive goes untagged, which is
+  // what the pre-change detector did with it.
+  assert.equal(calc.detectSummon([{ ...SD_REAL_CLIP, apRuns: undefined }], SD_REAL_STATS), false);
+});
+
+// Real forward-only summon on HW3 (clip 2026-08-15_00-33-27, 1214 raw frames
+// at ~20.2 fps, 4.9 mph peak). HW3 still reports autopilot_state = Off for the
+// whole maneuver, so the Self Driving signature does not exist here — but the
+// hazards bookend properly, the closing flash starting 93 frames BEFORE the
+// D→P shift and spanning it. The two hardware generations need different
+// signatures, which is why either alone must be decisive.
+const HW3_REAL_CLIP = {
+  flagRuns: [
+    { flags: 0, frames: 14, maxMps: 0 },
+    { flags: 3, frames: 144, maxMps: 0.3 },   // hazards, frames 14-157
+    { flags: 0, frames: 15, maxMps: 0.4 },
+    { flags: 1, frames: 566, maxMps: 2.2 },   // a normal left signal mid-summon
+    { flags: 0, frames: 335, maxMps: 2.2 },
+    { flags: 3, frames: 140, maxMps: 1.9 },   // hazards, frames 1074-1213
+  ],
+  apRuns: [{ ap: 0, frames: 1214 }],
+  gearRuns: [
+    { gear: 0, frames: 60 },     // P
+    { gear: 1, frames: 1107 },   // D
+    { gear: 0, frames: 47 },     // P — splits here, at frame 1167
+  ],
+  startFrame: 60,
+  endFrame: 1167,
+  totalFrames: 1214,
+};
+const HW3_REAL_STATS = { maxSpeedMps: 2.2, durationMs: 54700, hasSeiSpeeds: true };
+
+test('detectSummon: real HW3 summon still reports Off and detects on hazards alone', () => {
+  assert.equal(calc.detectSummon([HW3_REAL_CLIP], HW3_REAL_STATS), true);
+
+  // No FSD frames anywhere: the Self Driving signature cannot carry this
+  // drive, so the hazard path must stay decisive on its own.
+  const ap = calc.segmentApFrames(HW3_REAL_CLIP);
+  assert.deepEqual(ap, { fsd: 0, other: 0, total: 1107 });
+  const noHazards = {
+    ...HW3_REAL_CLIP,
+    flagRuns: [{ flags: 0, frames: 648, maxMps: 2.2 }, { flags: 1, frames: 566, maxMps: 2.2 }],
+  };
+  assert.equal(calc.detectSummon([noHazards], HW3_REAL_STATS), false);
+});
+
 test('detectSummon: Self Driving without hazards is summon', () => {
   assert.equal(calc.detectSummon([SD_CLIP], SD_STATS), true);
   // The same drive without autopilot evidence has no signature left.

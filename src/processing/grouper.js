@@ -305,7 +305,16 @@ function splitClipAtParkGaps(clip) {
     if (startIdx >= nPoints) startIdx = nPoints - 1;
     if (endIdx > nPoints) endIdx = nPoints;
     if (startIdx < 0) startIdx = 0;
-    if (endIdx <= startIdx) continue;
+    // A non-empty frame span always keeps at least one point. Both fractions
+    // round to the same index when a segment is short in frames and GPS dedup
+    // left few points, which used to delete the segment outright — along with
+    // the flagRuns/gearRuns evidence Summon detection reads from it. Only the
+    // trailing segment escaped, rescued by the startIdx clamp above; leading
+    // and middle segments vanished, so whether a maneuver was detected
+    // depended on how much the car had moved. Frame bounds below carry the
+    // real duration, so a one-point segment still measures its true length.
+    if (endIdx <= startIdx) endIdx = startIdx + 1;
+    if (endIdx > nPoints) continue; // no points at all — nothing to slice
 
     const segPoints = clip.points.slice(startIdx, endIdx);
     const segGears = clip.gearStates ? clip.gearStates.slice(startIdx, endIdx) : [];

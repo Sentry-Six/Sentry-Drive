@@ -777,3 +777,72 @@ test('summon: point-slice speed pollution does not reject a frame-slow summon', 
   assert.equal(drives[0].summon, true);
   assert.equal(drives[1].summon, undefined);
 });
+
+// ─── Park splitting: short segments survive GPS deduplication ────────────────
+
+test('summon: a tail finishing seconds into the next clip survives GPS dedup', () => {
+  // The maneuver ends a few seconds into clip B, so the closing hazard flash
+  // the bookend signature needs lives in a segment only ~120 raw frames long.
+  // A barely-moving car dedups to a handful of GPS points, and both ends of
+  // that segment used to round onto the same point index — deleting it, its
+  // hazards, and the detection. Point density must not decide this.
+  const clipsFor = (n) => [
+    summonClip(
+      '2026-08-01/2026-08-01_09-00-00-front.mp4',
+      [[GEAR_PARK, 60], [GEAR_DRIVE, 1740]],
+      [
+        { flags: 0, frames: 20, maxMps: 0 },
+        { flags: 3, frames: 130, maxMps: 0.4 },  // hazards through P→D
+        { flags: 0, frames: 1650, maxMps: 2.2 },
+      ],
+      { n: 100 },
+    ),
+    summonClip(
+      '2026-08-01/2026-08-01_09-01-00-front.mp4',
+      [[GEAR_DRIVE, 120], [GEAR_PARK, 120], [GEAR_DRIVE, 1560]],
+      [
+        { flags: 3, frames: 120, maxMps: 1.1 },  // hazards through D→P
+        { flags: 0, frames: 120, maxMps: 0 },
+        { flags: 8, frames: 1560, maxMps: 12.0 },
+      ],
+      { n, speed: 1.0 },
+    ),
+  ];
+
+  // Six points across clip B is the dedup level that used to lose the tail.
+  for (const n of [6, 12, 100]) {
+    const drives = drivesOf(clipsFor(n));
+    assert.equal(drives.length, 2, `n=${n}`);
+    assert.equal(drives[0].summon, true, `n=${n}`);
+    assert.equal(drives[0].routeFiles.length, 2, `n=${n}: tail segment kept`);
+    // Duration comes from the raw frame bounds, so a one-point tail still
+    // measures its true 4 s: 58 s of clip A plus 4 s of clip B.
+    assert.equal(drives[0].durationMs, 62000, `n=${n}`);
+    // The human drive off the same clip keeps its pedal input and is not Summon.
+    assert.equal(drives[1].summon, undefined, `n=${n}`);
+  }
+});
+
+test('park split: leading and middle motion segments survive at any point density', () => {
+  // Four motion runs separated by park gaps. At six points the leading and
+  // middle 30-frame runs both collapse to a single index; only the trailing
+  // one was rescued, by the clamp that pulls startIdx back inside the array.
+  // Every segment with at least one raw frame must produce a drive, and the
+  // frame-derived durations must not move with the point count.
+  const runs = [
+    [GEAR_DRIVE, 30], [GEAR_PARK, 120],
+    [GEAR_DRIVE, 420], [GEAR_PARK, 120],
+    [GEAR_DRIVE, 30], [GEAR_PARK, 120],
+    [GEAR_DRIVE, 960],
+  ];
+  const expected = [1000, 14000, 1000, 32000];
+
+  for (const n of [6, 100, 1800]) {
+    const clip = clipWithGearRuns('2026-08-02/2026-08-02_09-00-00-front.mp4', runs);
+    clip.points = clip.points.slice(0, n);
+    const drives = drivesOf([clip]);
+    assert.equal(drives.length, expected.length, `n=${n}: one drive per motion run`);
+    assert.deepEqual(drives.map((d) => d.durationMs), expected, `n=${n}`);
+    for (const drive of drives) assert.ok(drive.pointCount > 0, `n=${n}: every drive keeps a point`);
+  }
+});
