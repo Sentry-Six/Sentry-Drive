@@ -175,6 +175,8 @@ export function groupIntoDrives(routes) {
     timed.sort((a, b) => a.timestamp - b.timestamp);
   }
 
+  annotateClipSpans(timed);
+
   const timeGroups = [];
   let current = [timed[0]];
 
@@ -210,6 +212,39 @@ export function groupIntoDrives(routes) {
  * Split imported clips by externalSignature. Native SEI clips remain one
  * group; signatures disambiguate back-to-back provider drives.
  */
+/**
+ * A clip's real wall-clock span. Clips are nominally a minute, but a recording
+ * that stops early — the last clip of a session, or one interrupted by an
+ * event — keeps its frames and loses its duration. The next clip's start is
+ * the ground truth for when this one ended; measured across 17 days of real
+ * clips, a full minute carries ~2160 SEI frames and short clips scale with it.
+ * Falls back to the nominal minute for the last clip of a series.
+ */
+function clipSpanOf(clip) {
+  const span = clip?.clipSpanMs;
+  return span > 0 && span <= CLIP_DURATION_MS ? span : CLIP_DURATION_MS;
+}
+
+/**
+ * Annotate each route with the gap to the next one, which is that route's real
+ * span. Done once over the whole sorted series so every consumer — the park
+ * splitter, drive duration, and per-point timestamps — agrees on how long a
+ * clip lasted. Gaps beyond a minute mean the next clip is not contiguous, so
+ * the nominal minute stands.
+ */
+function annotateClipSpans(sortedRoutes) {
+  // Only a native dashcam clip can bound another one. Imported providers
+  // synthesise clips on an exact minute grid and gap-fill invents bridge
+  // routes, so an import interleaved with real footage would otherwise
+  // declare a full minute of dashcam video to have lasted seconds.
+  const native = sortedRoutes.filter((r) =>
+    (r.source ?? 'sei') === 'sei' && !String(r.file ?? '').includes('-front-bridge.mp4'));
+  for (let i = 0; i < native.length - 1; i++) {
+    const gap = native[i + 1].timestamp.getTime() - native[i].timestamp.getTime();
+    if (gap > 0 && gap <= CLIP_DURATION_MS) native[i].clipSpanMs = gap;
+  }
+}
+
 function splitByExternalSignature(group) {
   if (group.length <= 1) return [group];
   const hasAnySignature = group.some((c) => c.externalSignature);
@@ -268,8 +303,18 @@ function splitClipAtParkGaps(clip) {
   for (const run of clip.gearRuns) totalRawFrames += run.frames;
   if (totalRawFrames === 0) return [{ route: clip, parked: false }];
 
-  const secondsPerFrame = 60.0 / totalRawFrames;
+  const clipSpanMs = clipSpanOf(clip);
   const nPoints = clip.points.length;
+  // The park-gap test deliberately keeps the NOMINAL minute rather than the
+  // clip's real span. A Park run touching a clip edge does not end there — it
+  // continues into the neighbouring clip — so measuring only the frames on
+  // this side understates it. Stretching to a minute compensates for that,
+  // and it is load-bearing: switching this to the real span drops a trailing
+  // 1.3 s park run below the threshold, which re-fuses a completed Summon onto
+  // the drive that follows it (measured: 2 of 10 maneuvers lost across 17 days
+  // of real clips). Timing below uses the real span; only the threshold test
+  // uses the nominal one.
+  const secondsPerFrame = 60.0 / totalRawFrames;
 
   const rawSegs = [];
   let frame = 0;
@@ -322,6 +367,14 @@ function splitClipAtParkGaps(clip) {
     const segSpeeds = clip.speeds ? clip.speeds.slice(startIdx, endIdx) : [];
     const segAccel = clip.accelPositions ? clip.accelPositions.slice(startIdx, endIdx) : [];
 
+    // Deliberately the NOMINAL minute, not the clip's real span. This offset
+    // lands in the segment's timestamp, which becomes the drive's startTime —
+    // and startTime is the key user drive tags are stored under, with no
+    // fallback and no migration. Using the real span here moves 17 of 76
+    // drives on the measured library, silently orphaning every tag on them at
+    // the next index rebuild. An imprecise label is worth less than the user's
+    // own data, so the segment keeps its historical position; the point
+    // timestamps and end time below still use the real span.
     const offsetMs = startFrac * CLIP_DURATION_MS;
     result.push({
       route: {
@@ -381,11 +434,13 @@ function buildDriveStats(clips, idx) {
   const firstClip = clips[0];
   const lastClip = clips[clips.length - 1];
   const startTime = firstClip.timestamp;
-  // A park-split drive ends at the segment boundary; unsplit clips span 60 s.
-  let lastSegmentLenMs = CLIP_DURATION_MS;
+  // A park-split drive ends at the segment boundary; an unsplit clip runs to
+  // the end of its own span, which is a minute only when the recording ran
+  // that long.
+  let lastSegmentLenMs = clipSpanOf(lastClip);
   const lf = lastClip.subClipFrames;
   if (lf && lf.totalFrames > 0) {
-    lastSegmentLenMs = Math.round(((lf.endFrame - lf.startFrame) * CLIP_DURATION_MS) / lf.totalFrames);
+    lastSegmentLenMs = Math.round(((lf.endFrame - lf.startFrame) * clipSpanOf(lastClip)) / lf.totalFrames);
   }
   const endTime = new Date(lastClip.timestamp.getTime() + lastSegmentLenMs);
 
@@ -393,7 +448,15 @@ function buildDriveStats(clips, idx) {
   for (const clip of clips) {
     const clipStart = clip.timestamp.getTime();
     const n = clip.points.length;
-    const clipDurationMs = CLIP_DURATION_MS;
+    // Spread this clip's points across the span they actually cover. A
+    // park-split segment covers its own fraction of the clip, not the whole
+    // clip — stamping its points across a full minute pushes them past the
+    // drive's own end and makes the next clip's first point step backwards,
+    // which inflates every duration-weighted statistic built from them.
+    const sf = clip.subClipFrames;
+    const clipDurationMs = sf && sf.totalFrames > 0
+      ? ((sf.endFrame - sf.startFrame) * clipSpanOf(clip)) / sf.totalFrames
+      : clipSpanOf(clip);
     const hasAP = clip.autopilotStates && clip.autopilotStates.length === n;
     const hasGears = clip.gearStates && clip.gearStates.length === n;
     const hasSpeeds = clip.speeds && clip.speeds.length === n;

@@ -386,8 +386,6 @@ const SD_REAL_STATS = { maxSpeedMps: 2.0, durationMs: 54500, hasSeiSpeeds: true 
 test('detectSummon: real new-firmware summon whose closing hazards fall past the park split', () => {
   assert.equal(calc.detectSummon([SD_REAL_CLIP], SD_REAL_STATS), true);
 
-  // Why the fallback is load-bearing and not belt-and-braces: the hazard
-  // evidence exists in the clip but not inside the drive's own segment.
   const HAZARD = calc.FLAG_BLINKER_LEFT | calc.FLAG_BLINKER_RIGHT;
   const bookend = Math.ceil((919 * calc.SUMMON_BOOKEND_SECONDS * 1000) / calc.CLIP_DURATION_MS);
   assert.equal(
@@ -395,15 +393,29 @@ test('detectSummon: real new-firmware summon whose closing hazards fall past the
     true,
     'opening hazards are inside the segment',
   );
+  // The closing flash begins 4 frames after the shift into Park at 835, so it
+  // is outside the drive's own segment — only the window's reach past the
+  // boundary finds it.
   assert.equal(
     calc.flagRunsOverlap(SD_REAL_CLIP.flagRuns, 835 - bookend, 835, HAZARD, true),
     false,
-    'closing hazards are not — they land in the parked segment',
+    'not inside the segment',
+  );
+  assert.equal(
+    calc.flagRunsOverlap(SD_REAL_CLIP.flagRuns, 835 - bookend, Math.min(919, 835 + bookend), HAZARD, true),
+    true,
+    'the widened window reaches it',
   );
 
-  // So without autopilot evidence this real drive goes untagged, which is
-  // what the pre-change detector did with it.
-  assert.equal(calc.detectSummon([{ ...SD_REAL_CLIP, apRuns: undefined }], SD_REAL_STATS), false);
+  // Both signatures carry this clip independently. Strip the hazards and
+  // autopilot state alone still identifies the maneuver...
+  const noHazards = { ...SD_REAL_CLIP, flagRuns: [{ flags: 0, frames: 919, maxMps: 2 }] };
+  assert.equal(calc.detectSummon([noHazards], SD_REAL_STATS), true);
+  // ...and with neither, it is not a Summon.
+  assert.equal(
+    calc.detectSummon([{ ...noHazards, apRuns: [{ ap: 0, frames: 919 }] }], SD_REAL_STATS),
+    false,
+  );
 });
 
 // Real forward-only summon on HW3 (clip 2026-08-15_00-33-27, 1214 raw frames
@@ -445,6 +457,66 @@ test('detectSummon: real HW3 summon still reports Off and detects on hazards alo
     flagRuns: [{ flags: 0, frames: 648, maxMps: 2.2 }, { flags: 1, frames: 566, maxMps: 2.2 }],
   };
   assert.equal(calc.detectSummon([noHazards], HW3_REAL_STATS), false);
+});
+
+// Real HW3 summon whose opening flash falls INSIDE the leading Park run
+// (clips 2026-08-11_00-33-32 and _00-33-51). The splitter starts the drive at
+// the shift out of Park, frame 210, while the hazards ran 22-139 — so the
+// opening bookend has to look back past the segment boundary to see them.
+// The second clip carries the mirror detail: the brake run at 683-750 is the
+// owner returning to the car AFTER the maneuver parked, which is why the
+// pedal veto must stay inside the segment.
+const FN_CLIP_A = {
+  flagRuns: [
+    { flags: 0, frames: 22, maxMps: 0 },
+    { flags: 3, frames: 118, maxMps: 0 },     // hazards, frames 22-139, all in Park
+    { flags: 0, frames: 644, maxMps: 1.8 },
+  ],
+  apRuns: [{ ap: 0, frames: 784 }],
+  gearRuns: [{ gear: 0, frames: 210 }, { gear: 2, frames: 430 }, { gear: 1, frames: 144 }],
+  startFrame: 210,
+  endFrame: 784,
+  totalFrames: 784,
+};
+const FN_CLIP_B = {
+  flagRuns: [
+    { flags: 0, frames: 546, maxMps: 2.8 },
+    { flags: 3, frames: 137, maxMps: 1.7 },   // hazards, 546-682, spanning the shift into Park
+    { flags: 4, frames: 68, maxMps: 0 },      // the owner's brake press, after the maneuver
+    { flags: 0, frames: 8, maxMps: 0 },
+    { flags: 8, frames: 450, maxMps: 4.5 },
+    { flags: 0, frames: 185, maxMps: 1.5 },
+    { flags: 8, frames: 35, maxMps: 0.9 },
+    { flags: 0, frames: 12, maxMps: 1 },
+    { flags: 8, frames: 103, maxMps: 1.7 },
+    { flags: 0, frames: 183, maxMps: 1.7 },
+    { flags: 8, frames: 269, maxMps: 7.2 },
+  ],
+  apRuns: [{ ap: 0, frames: 1996 }],
+  gearRuns: [{ gear: 1, frames: 636 }, { gear: 0, frames: 105 }, { gear: 1, frames: 1255 }],
+  startFrame: 0,
+  endFrame: 636,
+  totalFrames: 1996,
+};
+
+test('detectSummon: hazards in the Park run bracketing the maneuver still count', () => {
+  assert.equal(
+    calc.detectSummon([FN_CLIP_A, FN_CLIP_B], { maxSpeedMps: 2.8, durationMs: 22000, hasSeiSpeeds: true }),
+    true,
+  );
+
+  // The opening flash is entirely outside the drive's own segment, so a window
+  // anchored at the segment boundary cannot see it.
+  const HAZARD = calc.FLAG_BLINKER_LEFT | calc.FLAG_BLINKER_RIGHT;
+  const bookend = Math.ceil((784 * calc.SUMMON_BOOKEND_SECONDS * 1000) / calc.CLIP_DURATION_MS);
+  assert.equal(calc.flagRunsOverlap(FN_CLIP_A.flagRuns, 210, 210 + bookend, HAZARD, true), false);
+  assert.equal(calc.flagRunsOverlap(FN_CLIP_A.flagRuns, 210 - bookend, 210 + bookend, HAZARD, true), true);
+
+  // And the owner's brake press sits in the parked frames after the maneuver,
+  // where the pedal veto must not look.
+  const PEDAL = calc.FLAG_BRAKE | calc.FLAG_ACCEL;
+  assert.equal(calc.flagRunsOverlap(FN_CLIP_B.flagRuns, 0, 636, PEDAL, false), false);
+  assert.equal(calc.flagRunsOverlap(FN_CLIP_B.flagRuns, 0, 969, PEDAL, false), true);
 });
 
 test('detectSummon: Self Driving without hazards is summon', () => {
@@ -542,8 +614,14 @@ test('detectSummon: Self Driving rejects runs from another index space', () => {
   // are far shorter than the clip's frame count. Walking them with raw-frame
   // bounds would read the wrong gear, so evidence that does not span the clip
   // is treated as absent.
+  // Park at both ends, so bracketing would pass if the runs were consulted at
+  // the right scale — only the span guard rejects this.
   const dedupedGears = [{ gear: 0, frames: 3 }, { gear: 1, frames: 40 }, { gear: 0, frames: 5 }];
   assert.equal(calc.detectSummon([{ ...SD_CLIP, gearRuns: dedupedGears }], SD_STATS), false);
+  // Runs longer than the clip are the same class of error in the other
+  // direction, and there the far-side frames DO read as Park.
+  const overlongGears = [{ gear: 0, frames: 30 }, { gear: 1, frames: 990 }, { gear: 0, frames: 2000 }];
+  assert.equal(calc.detectSummon([{ ...SD_CLIP, gearRuns: overlongGears }], SD_STATS), false);
   assert.equal(calc.detectSummon([{ ...SD_CLIP, apRuns: [{ ap: 1, frames: 48 }] }], SD_STATS), false);
   // The hazard signature reads flagRuns only and is unaffected.
   assert.equal(calc.detectSummon(
@@ -555,9 +633,14 @@ test('detectSummon: Self Driving rejects runs from another index space', () => {
 test('detectSummon: evidence bounds and flag-run span are validated', () => {
   // The hazard path sizes its bookend windows from totalFrames but walks them
   // over flagRuns, so unvalidated bounds fail open — the direction that tags.
-  const shortFlags = { ...ASS_END_CLIP, flagRuns: [{ flags: 3, frames: 60 }] };
-  assert.equal(calc.detectSummon([ASS_START_CLIP, shortFlags], ASS_STATS), false);
-  const pastEnd = { ...ASS_END_CLIP, endFrame: 900 };
+  // Each input below is built to satisfy every OTHER gate, so the guard named
+  // is the only thing standing between it and a true.
+  const overlongFlags = {
+    ...ASS_END_CLIP,
+    flagRuns: [{ flags: 3, frames: 553 }, { flags: 0, frames: 1247 }],  // spans 1800, not 553
+  };
+  assert.equal(calc.detectSummon([ASS_START_CLIP, overlongFlags], ASS_STATS), false);
+  const pastEnd = { ...ASS_END_CLIP, endFrame: 600 };  // beyond totalFrames 553
   assert.equal(calc.detectSummon([ASS_START_CLIP, pastEnd], ASS_STATS), false);
   const negativeStart = { ...ASS_START_CLIP, startFrame: -1 };
   assert.equal(calc.detectSummon([negativeStart, ASS_END_CLIP], ASS_STATS), false);
@@ -569,6 +652,68 @@ test('gearAtFrame: a run without a gear reads as unknown, not as a value', () =>
   assert.equal(calc.gearAtFrame([{ frames: 10 }], 5), null);
   const c = { gearRuns: [{ gear: 1, frames: 90 }, { frames: 10 }], startFrame: 0, endFrame: 90 };
   assert.equal(calc.segmentBoundedByPark(c, true), false);
+});
+
+test('detectSummon: unrepresented wall-clock disqualifies', () => {
+  // Every other gate only sees the frames the clips cover, so a drive whose
+  // middle is missing from RecentClips is an ordinary trip wearing a
+  // maneuver's ends: slow, pedal-free and park-bracketed at both visible ends.
+  const slowEnd = (flags) => ({
+    flagRuns: [{ flags, frames: 300, maxMps: 2.0 }, { flags: 0, frames: 600, maxMps: 2.0 }],
+    apRuns: [{ ap: 1, frames: 900 }],
+    gearRuns: [{ gear: 0, frames: 60 }, { gear: 1, frames: 840 }],
+    startFrame: 0, endFrame: 900, totalFrames: 900,
+  });
+  const departure = slowEnd(3);
+  const arrival = {
+    ...slowEnd(0),
+    flagRuns: [{ flags: 0, frames: 600, maxMps: 2.0 }, { flags: 3, frames: 300, maxMps: 2.0 }],
+    gearRuns: [{ gear: 1, frames: 840 }, { gear: 0, frames: 60 }],
+  };
+  // Two minutes of clips accounting for a four-minute drive: rejected.
+  assert.equal(
+    calc.detectSummon([departure, arrival], { maxSpeedMps: 2.0, durationMs: 240000, hasSeiSpeeds: true }),
+    false,
+  );
+  // The same evidence for a drive its own length: accepted.
+  assert.equal(
+    calc.detectSummon([departure, arrival], { maxSpeedMps: 2.0, durationMs: 120000, hasSeiSpeeds: true }),
+    true,
+  );
+  // Both real maneuvers sit well inside the tolerance.
+  assert.equal(calc.detectSummon([SD_REAL_CLIP], SD_REAL_STATS), true);
+  assert.equal(calc.detectSummon([HW3_REAL_CLIP], HW3_REAL_STATS), true);
+});
+
+test('detectSummon: the bookend window is 10 s at each end, not the whole drive', () => {
+  // Hazards in the MIDDLE of a slow pedal-free drive are a human idling with
+  // the flashers on, not a maneuver. Widening the window would tag them.
+  const middleOnly = {
+    flagRuns: [
+      { flags: 0, frames: 350, maxMps: 2.0 },
+      { flags: 3, frames: 100, maxMps: 2.0 },   // hazards only at 350-449
+      { flags: 0, frames: 450, maxMps: 2.0 },
+    ],
+    apRuns: [{ ap: 0, frames: 900 }],
+    gearRuns: [{ gear: 0, frames: 60 }, { gear: 1, frames: 780 }, { gear: 0, frames: 60 }],
+    startFrame: 0, endFrame: 900, totalFrames: 900,
+  };
+  const stats = { maxSpeedMps: 2.0, durationMs: 60000, hasSeiSpeeds: true };
+  assert.equal(calc.detectSummon([middleOnly], stats), false);
+
+  // 900 frames over a 60 s clip puts the window at 150 frames. Hazards ending
+  // one frame inside it qualify; one frame outside it do not.
+  const atEdge = (start, len) => ({
+    ...middleOnly,
+    flagRuns: [
+      { flags: 3, frames: 150, maxMps: 2.0 },              // opening bookend
+      { flags: 0, frames: start - 150, maxMps: 2.0 },
+      { flags: 3, frames: len, maxMps: 2.0 },
+      { flags: 0, frames: 900 - start - len, maxMps: 2.0 },
+    ].filter((r) => r.frames > 0),                          // an empty run is not an RLE
+  });
+  assert.equal(calc.detectSummon([atEdge(750, 150)], stats), true, 'closing hazards inside the window');
+  assert.equal(calc.detectSummon([atEdge(700, 50)], stats), false, 'closing hazards end before it');
 });
 
 test('runsSpanFrames: exact coverage of the raw frame count', () => {

@@ -70,6 +70,10 @@ const FLAG_ACCEL = 8;         // accelerator_pedal_position > 0 (human-only inpu
 const SUMMON_MAX_SPEED_MPS = 4.5;
 const SUMMON_BOOKEND_SECONDS = 10;      // hazards must appear this close to each end
 const SUMMON_MAX_DURATION_MS = 10 * 60 * 1000;
+// How much of a drive's wall-clock may go unrepresented by clip evidence.
+// Half a clip: a single missing minute-clip is caught, ordinary park-split
+// timing skew is not.
+const SUMMON_MAX_UNCOVERED_MS = CLIP_DURATION_MS / 2;
 // Share of a drive's frames that must report autopilot_state = FSD for the
 // Self Driving signature. Below 1.0 because the frames before the maneuver
 // engages and after it parks the car still read Off.
@@ -397,6 +401,20 @@ function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
     }
   }
 
+  // Every veto below is scoped to the frames of the clips actually present, so
+  // wall-clock the evidence does not cover is unconstrained. A hole in
+  // RecentClips shorter than the drive-splitting gap leaves ONE drive whose
+  // visible ends are a slow, pedal-free, park-bracketed departure and arrival
+  // while the fast middle is simply missing — an ordinary trip wearing a
+  // maneuver's ends. Require the segments to account for the drive's own
+  // duration. The tolerance is under one clip so a single missing minute is
+  // caught, and comfortably over the sub-clip timing skew of a park split.
+  let coveredMs = 0;
+  for (const c of clipEvidence) {
+    coveredMs += ((c.endFrame - c.startFrame) * CLIP_DURATION_MS) / c.totalFrames;
+  }
+  if (durationMs - coveredMs > SUMMON_MAX_UNCOVERED_MS) return false;
+
   // Prefer frame-space speed. Legacy evidence falls back to drive stats only
   // when genuine SEI speeds are available.
   let speedMps = 0;
@@ -426,9 +444,19 @@ function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
     Math.max(1, Math.ceil((c.totalFrames * SUMMON_BOOKEND_SECONDS * 1000) / CLIP_DURATION_MS));
   const first = clipEvidence[0];
   const last = clipEvidence[clipEvidence.length - 1];
+  // The windows reach one bookend-length PAST the segment into the same clip,
+  // because the flash brackets the maneuver, not the driving. The car flashes
+  // while still in Park before it pulls away and again after it has parked
+  // itself, and the splitter cuts the drive exactly at those two shifts — so
+  // the evidence routinely lies just outside the segment. Measured on 17 days
+  // of real clips: one further maneuver detected, no other drive affected.
+  //
+  // The pedal veto below deliberately does NOT widen with it. Those same
+  // parked frames hold the owner's own brake press from the drive before or
+  // after, so widening it drops real detections from 9 to 2 on that library.
   const hazardAtStart = flagRunsOverlap(
     first.flagRuns,
-    first.startFrame,
+    Math.max(0, first.startFrame - bookendFrames(first)),
     Math.min(first.endFrame, first.startFrame + bookendFrames(first)),
     HAZARD,
     true,
@@ -436,7 +464,7 @@ function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
   const hazardAtEnd = flagRunsOverlap(
     last.flagRuns,
     Math.max(last.startFrame, last.endFrame - bookendFrames(last)),
-    last.endFrame,
+    Math.min(last.totalFrames, last.endFrame + bookendFrames(last)),
     HAZARD,
     true,
   );
@@ -509,6 +537,7 @@ module.exports = {
   SUMMON_MAX_SPEED_MPS,
   SUMMON_BOOKEND_SECONDS,
   SUMMON_MAX_DURATION_MS,
+  SUMMON_MAX_UNCOVERED_MS,
   SUMMON_MIN_FSD_SHARE,
   WGS84_A,
   WGS84_F,

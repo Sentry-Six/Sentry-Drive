@@ -538,6 +538,39 @@ test('groupIntoDrives: trailing pre-roll chain extends the drive; parked tail ex
   ]);
 });
 
+// ─── Clip span ───────────────────────────────────────────────────────────────
+
+test('a clip that stopped early stamps its points inside the drive, not across a minute', () => {
+  // The next clip starts 20 s later, so clip A's recording covered 20 s — its
+  // 700 frames are not a minute's worth. Spreading them across a nominal
+  // minute pushed points past the drive's own end and made the next clip's
+  // first point step backwards, inflating every duration-weighted statistic.
+  const a = clipWithGearRuns('2026-08-11/2026-08-11_00-33-32-front.mp4', [[GEAR_DRIVE, 700]], 37.0);
+  const b = clipWithGearRuns('2026-08-11/2026-08-11_00-33-52-front.mp4', [[GEAR_DRIVE, 2100]], 37.1);
+
+  const drives = drivesOf([a, b]);
+  assert.equal(drives.length, 1);
+  const pts = drives[0].points;
+  for (let i = 1; i < pts.length; i++) {
+    assert.ok(pts[i][2] >= pts[i - 1][2], `point ${i} steps backwards`);
+  }
+  const span = pts[pts.length - 1][2] - pts[0][2];
+  assert.ok(span <= drives[0].durationMs, `point span ${span} exceeds duration ${drives[0].durationMs}`);
+  // 20 s of clip A, then clip B runs to its own nominal end.
+  assert.equal(drives[0].durationMs, 80000);
+});
+
+test('clip spans do not stretch across a recording gap', () => {
+  // Ten minutes apart is not one clip lasting ten minutes; each keeps the
+  // nominal minute, and the drive splitter separates them anyway.
+  const a = clipWithGearRuns('2026-08-11/2026-08-11_00-33-32-front.mp4', [[GEAR_DRIVE, 2100]], 37.0);
+  const b = clipWithGearRuns('2026-08-11/2026-08-11_00-43-32-front.mp4', [[GEAR_DRIVE, 2100]], 37.1);
+  const drives = drivesOf([a, b]);
+  assert.equal(drives.length, 2);
+  assert.equal(drives[0].durationMs, 60000);
+  assert.equal(drives[1].durationMs, 60000);
+});
+
 // ─── Summon detection ────────────────────────────────────────────────────────
 // flagRuns and gearRuns share the raw SEI frame sequence.
 
