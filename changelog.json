@@ -2,7 +2,7 @@
   "versions": [
     {
       "version": "1.5.0",
-      "date": "2026-07-31",
+      "date": "2026-08-21",
       "title": "Charging History",
       "changes": [
         {
@@ -30,8 +30,16 @@
           "description": "Opening a drive now also shows the telemetry your car recorded for it — battery, climate, tire pressure, and odometer — whenever that data is present."
         },
         {
+          "type": "feature",
+          "description": "Settings > Location Labels lets you pick the reverse-geocoding provider and label language. Labels you correct on a drive card, your Privacy Zone names, and place names your car reported are remembered on this device and take priority over lookups."
+        },
+        {
           "type": "improvement",
           "description": "Large drive histories load reliably: routes are indexed on disk instead of held in memory, and the drive list is paged. Libraries that previously ran the app out of memory now open."
+        },
+        {
+          "type": "improvement",
+          "description": "Check Drives reports now list every drive they touched with its date and time — expand the list to scroll through all of them instead of \"…and N more\"."
         },
         {
           "type": "fix",
@@ -60,6 +68,38 @@
         {
           "type": "fix",
           "description": "App log lines no longer show garbled punctuation in Windows terminals and exported log files."
+        },
+        {
+          "type": "fix",
+          "description": "Removing a drive works on every library, including ones written with older clip paths, and a removed drive no longer reappears when you page through the list."
+        },
+        {
+          "type": "fix",
+          "description": "Your drive file is protected from corruption if another tool (such as Sentry USB) writes to it at the same moment the app saves an edit."
+        },
+        {
+          "type": "fix",
+          "description": "Clips that could not be read during processing are retried on the next run instead of being skipped forever, so a USB hiccup no longer leaves a permanent hole in a drive."
+        },
+        {
+          "type": "fix",
+          "description": "Paging or filtering the drive list while it reloads in the background no longer shows an empty list or the wrong drive."
+        },
+        {
+          "type": "fix",
+          "description": "Privacy Zones > Cull drives sweeps your entire library, not just the drives currently on screen."
+        },
+        {
+          "type": "fix",
+          "description": "Check for Summon no longer overwrites your Revert backup when it finds nothing to change."
+        },
+        {
+          "type": "fix",
+          "description": "Fewer false Summon tags: a drive with a missing minute of footage can no longer pass the Summon check on overlapping clips."
+        },
+        {
+          "type": "fix",
+          "description": "Tessie CSV imports understand many more timezones (JST, NZST, SAST, CET, and others); an unknown timezone now reports an error instead of silently importing drives hours off. The import date range also defaults to today in your local time zone."
         }
       ]
     },
