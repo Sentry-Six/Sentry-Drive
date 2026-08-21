@@ -300,17 +300,52 @@ ipcMain.handle('get-cpu-count', () => require('os').cpus().length);
 
 // Reverse geocoding stays in the main process and lazily initializes its cache.
 let _geocodeInited = false;
-ipcMain.handle('reverse-geocode', async (_e, { lat, lng } = {}) => {
+function geocodeService() {
+  const geocode = require('../processing/geocode.cjs');
+  if (!_geocodeInited) {
+    const userData = app.getPath('userData');
+    geocode.init({
+      cacheFile: path.join(userData, 'geocode-cache.json'),
+      settingsFile: path.join(userData, 'geocode-settings.json'),
+      knownPlacesFile: path.join(userData, 'known-places.json'),
+      locale: app.getLocale(),
+    });
+    _geocodeInited = true;
+  }
+  return geocode;
+}
+
+ipcMain.handle('reverse-geocode', async (_e, { lat, lng, accuracyM, teslaLabel } = {}) => {
   try {
-    const geocode = require('../processing/geocode.cjs');
-    if (!_geocodeInited) {
-      geocode.init(path.join(app.getPath('userData'), 'geocode-cache.json'));
-      _geocodeInited = true;
-    }
-    return { label: await geocode.reverseGeocode(lat, lng) };
+    return await geocodeService().reverseGeocodeDetailed(lat, lng, { accuracyM, teslaLabel });
   } catch {
     return { label: null };
   }
+});
+
+ipcMain.handle('get-geocode-settings', () => {
+  try { return geocodeService().getSettings(); }
+  catch { return null; }
+});
+
+ipcMain.handle('set-geocode-settings', (_e, settings) => {
+  try { return geocodeService().configure(settings); }
+  catch { return null; }
+});
+
+ipcMain.handle('remember-known-place', (_e, place) => {
+  try { return geocodeService().rememberKnownPlace(place); }
+  catch { return null; }
+});
+
+ipcMain.handle('remove-known-place', (_e, place) => {
+  try { return geocodeService().removeKnownPlace(place); }
+  catch { return false; }
+});
+
+ipcMain.handle('sync-known-place-zones', (_e, { zones } = {}) => {
+  try { return geocodeService().syncKnownPlaceZones(zones); }
+  catch { return 0; }
 });
 
 ipcMain.handle('open-external', (_e, url) => shell.openExternal(url));

@@ -359,7 +359,7 @@ test('complete BLE telemetry rollup matches Sentry USB drive summaries', () => {
   });
 });
 
-test('geocode endpoints: stationary-median start, raw terminal fix when rolling', () => {
+test('geocode endpoints: stationary medoid start, raw terminal fix when rolling', () => {
   const pts = [
     [37.000000, -122.0],
     [37.000018, -122.0],
@@ -377,6 +377,61 @@ test('geocode endpoints: stationary-median start, raw terminal fix when rolling'
   assert.equal(d.geocodeStartPoint[1], -122.0);
   assert.equal(d.geocodeEndPoint[0], 37.000900);
   assert.equal(d.geocodeEndPoint[1], -122.0);
+  assert.equal(d.geocodeStartStationary, true);
+  assert.equal(d.geocodeStartSamples, 4);
+  assert.ok(d.geocodeStartAccuracyM >= 5 && d.geocodeStartAccuracyM <= 15);
+  assert.equal(d.geocodeEndStationary, false);
+  assert.equal(d.geocodeEndAccuracyM, 35);
+});
+
+test('geocode endpoint medoid skips a terminal GPS outlier using speed evidence', () => {
+  const pts = [
+    [37.000000, -122.0],
+    [37.000300, -122.0],
+    [37.000600, -122.0],
+    [37.001000, -122.0],
+    [37.001009, -122.0],
+    [37.000991, -122.0],
+    [37.001500, -122.0], // stopped, but a bad terminal GPS fix
+  ];
+  const route = testRoute('RecentClips/2026-05-17_10-00-00-front.mp4', pts);
+  route.gearStates = Array(pts.length).fill(GEAR_DRIVE);
+  route.speeds = [5, 5, 5, 0, 0, 0, 0];
+
+  const [drive] = drivesOf([route]);
+  assert.deepEqual(drive.geocodeStartPoint, pts[0]);
+  assert.deepEqual(drive.geocodeEndPoint, [37.001000, -122.0]);
+});
+
+test('geocode endpoint does not mistake tightly spaced moving samples for parking', () => {
+  const pts = [
+    [37.000000, -122.0],
+    [37.000030, -122.0],
+    [37.000060, -122.0],
+    [37.000090, -122.0],
+  ];
+  const route = testRoute('RecentClips/2026-05-17_10-00-00-front.mp4', pts);
+  route.gearStates = Array(pts.length).fill(GEAR_DRIVE);
+  route.speeds = Array(pts.length).fill(3);
+
+  const [drive] = drivesOf([route]);
+  assert.deepEqual(drive.geocodeStartPoint, pts[0]);
+  assert.deepEqual(drive.geocodeEndPoint, pts[pts.length - 1]);
+});
+
+test('geocode endpoint clustering uses elapsed time rather than sample count', () => {
+  const point = [37.0, -122.0];
+  const oneHz = Array.from({ length: 61 }, () => point);
+  const tenHz = Array.from({ length: 601 }, () => point);
+
+  const [sparse] = drivesOf([testRoute('RecentClips/2026-05-17_10-00-00-front.mp4', oneHz)]);
+  const [dense] = drivesOf([testRoute('RecentClips/2026-05-17_10-00-00-front.mp4', tenHz)]);
+
+  assert.deepEqual(sparse.geocodeStartPoint, dense.geocodeStartPoint);
+  assert.equal(sparse.geocodeStartAccuracyM, 5);
+  assert.equal(dense.geocodeStartAccuracyM, 5);
+  assert.equal(sparse.geocodeStartSamples, 31);
+  assert.equal(dense.geocodeStartSamples, 301);
 });
 
 // ─── Drive end-time convention ───────────────────────────────────────────────

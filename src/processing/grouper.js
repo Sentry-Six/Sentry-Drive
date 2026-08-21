@@ -476,6 +476,7 @@ function buildDriveStats(clips, idx) {
         apState: hasAP ? clip.autopilotStates[i] : 0,
         gear: hasGears ? clip.gearStates[i] : 0,
         seiSpeed: hasSpeeds ? clip.speeds[i] : 0,
+        motionEvidence: (hasGears ? 1 : 0) | (hasSpeeds ? 2 : 0),
         accelPos: hasAccel ? clip.accelPositions[i] : 0,
       });
     }
@@ -693,10 +694,10 @@ function buildDriveStats(clips, idx) {
     fsdEvents.length = 0;
   }
 
-  // Median stationary endpoint clusters improve geocode labels only; they do
+  // Stationary endpoint medoids improve geocode labels only; they do
   // not affect distance or speed statistics.
-  const geocodeStartPoint = snapGeocodeEndpoint(allPoints, false);
-  const geocodeEndPoint = snapGeocodeEndpoint(allPoints, true);
+  const geocodeStart = snapGeocodeEndpoint(allPoints, false);
+  const geocodeEnd = snapGeocodeEndpoint(allPoints, true);
 
   // Release the heavy intermediate before constructing the result.
   const pointCount = allPoints.length;
@@ -750,37 +751,107 @@ function buildDriveStats(clips, idx) {
     ...(firstClip.externalSignature ? { externalSignature: firstClip.externalSignature } : {}),
     ...(firstClip.tessieAutopilotPercent != null ? { tessieAutopilotPercent: firstClip.tessieAutopilotPercent } : {}),
     ...telemetry,
-    ...(geocodeStartPoint ? { geocodeStartPoint } : {}),
-    ...(geocodeEndPoint ? { geocodeEndPoint } : {}),
+    ...(geocodeStart ? {
+      geocodeStartPoint: geocodeStart.point,
+      geocodeStartAccuracyM: geocodeStart.accuracyM,
+      geocodeStartSamples: geocodeStart.sampleCount,
+      geocodeStartStationary: geocodeStart.stationary,
+    } : {}),
+    ...(geocodeEnd ? {
+      geocodeEndPoint: geocodeEnd.point,
+      geocodeEndAccuracyM: geocodeEnd.accuracyM,
+      geocodeEndSamples: geocodeEnd.sampleCount,
+      geocodeEndStationary: geocodeEnd.stationary,
+    } : {}),
+  };
+}
+
+function stationaryEvidence(p) {
+  if ((p.motionEvidence & 1) && p.gear === GEAR_PARK) return true;
+  if (p.motionEvidence & 2) return Math.abs(p.seiSpeed) <= 0.75;
+  return null;
+}
+
+function clusterMedoid(points) {
+  let best = points[0];
+  let bestSum = Infinity;
+  for (const candidate of points) {
+    let sum = 0;
+    for (const p of points) {
+      sum += geodesicM(candidate.lat, candidate.lng, p.lat, p.lng);
+    }
+    if (sum < bestSum) {
+      best = candidate;
+      bestSum = sum;
+    }
+  }
+  const distances = points
+    .map((p) => geodesicM(best.lat, best.lng, p.lat, p.lng))
+    .sort((a, b) => a - b);
+  const p90 = distances[Math.min(distances.length - 1, Math.ceil(distances.length * 0.9) - 1)];
+  return {
+    point: [best.lat, best.lng],
+    accuracyM: Math.round(Math.max(5, p90) * 10) / 10,
+    sampleCount: points.length,
+    stationary: true,
   };
 }
 
 /**
- * Use the median stationary endpoint cluster for geocoding, or the terminal
- * point when fewer than three nearby samples exist. Displacement works with
- * or without SEI speed data.
+ * Find a dense stationary cluster at one temporal edge and return its medoid.
+ * Considering the first few samples as possible seeds lets bad terminal GPS
+ * fixes be skipped without drifting back to a stop elsewhere in the drive.
  */
 function snapGeocodeEndpoint(pts, fromEnd) {
   const n = pts.length;
   if (n === 0) return null;
   const anchor = fromEnd ? pts[n - 1] : pts[0];
-  const MAX_CLUSTER = 30; // ~30 s at the 1 Hz dashcam sample rate
-  const RADIUS_M = 15;    // within GPS noise of the anchor = "still parked"
-  const lats = [];
-  const lngs = [];
-  for (let k = 0; k < Math.min(MAX_CLUSTER, n); k++) {
-    const p = fromEnd ? pts[n - 1 - k] : pts[k];
-    if (geodesicM(anchor.lat, anchor.lng, p.lat, p.lng) > RADIUS_M) break;
-    lats.push(p.lat);
-    lngs.push(p.lng);
+  const WINDOW_MS = 30000;
+  const FALLBACK_SAMPLES = 30;
+  const MAX_WINDOW_SAMPLES = 600;
+  const MAX_SEEDS = 3;         // tolerate up to two terminal GPS outliers
+  const RADIUS_M = 15;
+  const ordered = [];
+  const anchorTime = Number(anchor.timeMs);
+  const hasAnchorTime = Number.isFinite(anchorTime);
+  for (let k = 0; k < Math.min(MAX_WINDOW_SAMPLES, n); k++) {
+    const point = fromEnd ? pts[n - 1 - k] : pts[k];
+    const pointTime = Number(point.timeMs);
+    if (hasAnchorTime && Number.isFinite(pointTime)) {
+      if (Math.abs(pointTime - anchorTime) > WINDOW_MS) break;
+    } else if (k >= FALLBACK_SAMPLES) {
+      break;
+    }
+    ordered.push(point);
   }
-  if (lats.length < 3) return [anchor.lat, anchor.lng];
-  lats.sort((a, b) => a - b);
-  lngs.sort((a, b) => a - b);
-  const med = (arr) => (arr.length % 2
-    ? arr[(arr.length - 1) / 2]
-    : (arr[arr.length / 2 - 1] + arr[arr.length / 2]) / 2);
-  return [med(lats), med(lngs)];
+
+  const hasMotionEvidence = ordered.some((p) => stationaryEvidence(p) != null);
+  const candidates = hasMotionEvidence
+    ? ordered.filter((p) => stationaryEvidence(p) === true)
+    : ordered;
+  const rawEndpoint = {
+    point: [anchor.lat, anchor.lng],
+    accuracyM: 35,
+    sampleCount: 1,
+    stationary: false,
+  };
+  if (candidates.length < 3) return rawEndpoint;
+
+  let bestCluster = null;
+  for (const seed of ordered.slice(0, MAX_SEEDS)) {
+    if (hasMotionEvidence && stationaryEvidence(seed) !== true) continue;
+    const cluster = candidates.filter(
+      (p) => geodesicM(seed.lat, seed.lng, p.lat, p.lng) <= RADIUS_M,
+    );
+    const times = cluster.map((p) => Number(p.timeMs)).filter(Number.isFinite);
+    const enoughTime = times.length !== cluster.length
+      || Math.max(...times) - Math.min(...times) >= 2000;
+    if (cluster.length >= 3 && enoughTime
+        && (!bestCluster || cluster.length > bestCluster.length)) {
+      bestCluster = cluster;
+    }
+  }
+  return bestCluster ? clusterMedoid(bestCluster) : rawEndpoint;
 }
 
 /**

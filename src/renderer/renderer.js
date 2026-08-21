@@ -588,6 +588,44 @@ let updateState = 'idle';
 let updateSkipped = false;
 let pendingRemoveDrive = null;
 
+async function loadGeocodeSettings() {
+  const api = window.electronAPI;
+  if (!api?.getGeocodeSettings) return;
+  try {
+    const current = await api.getGeocodeSettings();
+    if (!current) return;
+    document.getElementById('inp-geocoder-endpoint').value = current.endpoint || current.defaultEndpoint || '';
+    document.getElementById('inp-geocoder-language').value = current.language || '';
+    document.getElementById('geocoder-settings-status').textContent = '';
+  } catch { /* Keep settings usable when the provider service is unavailable. */ }
+}
+
+async function saveGeocodeSettings() {
+  const api = window.electronAPI;
+  const status = document.getElementById('geocoder-settings-status');
+  if (!api?.setGeocodeSettings) return;
+  status.textContent = 'Saving…';
+  try {
+    const saved = await api.setGeocodeSettings({
+      endpoint: document.getElementById('inp-geocoder-endpoint').value,
+      language: document.getElementById('inp-geocoder-language').value,
+    });
+    if (!saved) throw new Error('Settings could not be saved');
+    document.getElementById('inp-geocoder-endpoint').value = saved.endpoint;
+    document.getElementById('inp-geocoder-language').value = saved.language || '';
+    status.textContent = 'Saved';
+    for (const drive of drives) {
+      delete drive._startName;
+      delete drive._startNameMeta;
+      delete drive._endName;
+      delete drive._endNameMeta;
+    }
+    if (drives.length) renderDriveList(drives);
+  } catch {
+    status.textContent = 'Could not save';
+  }
+}
+
 function initFooter() {
   document.getElementById('link-github').addEventListener('click', (e) => {
     e.preventDefault();
@@ -600,6 +638,7 @@ function initFooter() {
   document.getElementById('btn-settings').addEventListener('click', () => {
     document.getElementById('settings-overlay').classList.remove('hidden');
     refreshTessieStatus();
+    loadGeocodeSettings();
     renderPrivacyZones();
     setPrivacyZonesVisible(document.querySelector('.settings-tab-btn.active')?.dataset.stab === 'privacy');
   });
@@ -632,6 +671,14 @@ function initFooter() {
     renderPrivacyZones();
   });
   renderPrivacyZones();
+  syncKnownPlaceZones();
+
+  document.getElementById('btn-save-geocoder').addEventListener('click', saveGeocodeSettings);
+  document.getElementById('btn-reset-geocoder').addEventListener('click', async () => {
+    const current = await window.electronAPI?.getGeocodeSettings?.();
+    document.getElementById('inp-geocoder-endpoint').value = current?.defaultEndpoint || 'https://nominatim.openstreetmap.org';
+    await saveGeocodeSettings();
+  });
 
   // Build one shared zone-icon picker.
   const zoneIconGrid = document.querySelector('#zone-icon-popup .zone-icon-grid');
@@ -3309,6 +3356,14 @@ function loadPrivacyZones() {
 
 function savePrivacyZones() {
   localStorage.setItem('privacyZones', JSON.stringify(privacyZones));
+  syncKnownPlaceZones();
+}
+
+function syncKnownPlaceZones() {
+  const zones = privacyZones
+    .filter((z) => Number.isFinite(z.lat) && Number.isFinite(z.lng) && z.name)
+    .map((z) => ({ id: z.id, label: z.name, lat: z.lat, lng: z.lng, radiusM: z.radiusM }));
+  Promise.resolve(window.electronAPI?.syncKnownPlaceZones?.({ zones })).catch(() => {});
 }
 
 function openBulkRemoveModal(targets, msg) {
@@ -3763,8 +3818,14 @@ function buildDriveItem(drive) {
         <span class="jt-label">Arrived${battEnd}</span>
       </div>
       <div class="journey-locs">
-        <span class="ep-place ep-place--start" data-ep="origin">${startPlace}</span>
-        <span class="ep-place ep-place--end" data-ep="dest">${endPlace}</span>
+        <span class="ep-place-group">
+          <span class="ep-place ep-place--start" data-ep="origin">${startPlace}</span>
+          <button class="ep-place-edit" data-ep-edit="origin" type="button" title="Save or correct this location name"><span class="material-icons">edit</span></button>
+        </span>
+        <span class="ep-place-group ep-place-group--end">
+          <button class="ep-place-edit" data-ep-edit="dest" type="button" title="Save or correct this location name"><span class="material-icons">edit</span></button>
+          <span class="ep-place ep-place--end" data-ep="dest">${endPlace}</span>
+        </span>
       </div>
     </div>
     ${disengageHtml}
@@ -3793,6 +3854,13 @@ function buildDriveItem(drive) {
     document.getElementById('remove-drive-modal-msg').textContent =
       `Remove the drive on ${dateStr} (${startTime} — ${endTime})? This cannot be undone.`;
     document.getElementById('remove-drive-overlay').classList.remove('hidden');
+  });
+
+  item.querySelectorAll('.ep-place-edit').forEach((button) => {
+    button.addEventListener('click', (e) => {
+      e.stopPropagation();
+      editEndpointLocation(item, drive, button.dataset.epEdit);
+    });
   });
 
   item.querySelectorAll('.tag-remove').forEach((btn) => {
@@ -3850,17 +3918,18 @@ function buildDriveItem(drive) {
 }
 
 function endpointCoord(drive, which) {
-  // Prefer full-resolution stationary-median endpoints over single GPS fixes.
+  // Prefer full-resolution stationary endpoint medoids over single GPS fixes.
   const snapped = which === 'origin' ? drive.geocodeStartPoint : drive.geocodeEndPoint;
   if (Array.isArray(snapped) && typeof snapped[0] === 'number' && typeof snapped[1] === 'number') {
-    return { lat: snapped[0], lng: snapped[1] };
+    const accuracyM = which === 'origin' ? drive.geocodeStartAccuracyM : drive.geocodeEndAccuracyM;
+    return { lat: snapped[0], lng: snapped[1], accuracyM: Number(accuracyM) || 35 };
   }
   // Downsampled overview data preserves exact endpoints.
   const pts = Array.isArray(drive.points) && drive.points.length ? drive.points : drive.overviewPoints;
   if (!Array.isArray(pts) || pts.length === 0) return null;
   const p = which === 'origin' ? pts[0] : pts[pts.length - 1];
   if (!p || typeof p[0] !== 'number' || typeof p[1] !== 'number') return null;
-  return { lat: p[0], lng: p[1] };
+  return { lat: p[0], lng: p[1], accuracyM: 35 };
 }
 
 // Coordinate placeholder shown until reverse geocoding resolves a name.
@@ -3869,34 +3938,73 @@ function gpsLabel(drive, role) {
   return c ? `${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}` : '';
 }
 
-function setEndpointLabel(item, role, name) {
+function setEndpointLabel(item, role, name, match = null) {
   const place = item.querySelector(`.ep-place[data-ep="${role}"]`);
-  if (place) place.textContent = name;
+  if (place) {
+    place.textContent = name;
+    place.title = match?.confidence
+      ? `${match.confidence[0].toUpperCase()}${match.confidence.slice(1)} confidence · ${Math.round(match.queryAccuracyM || 0)} m endpoint uncertainty`
+      : name;
+  }
+}
+
+async function resolveDriveLocation(item, drive, role, force = false) {
+  const api = window.electronAPI;
+  const cacheKey = role === 'origin' ? '_startName' : '_endName';
+  if (!force && drive[cacheKey]) {
+    setEndpointLabel(item, role, drive[cacheKey], drive[`${cacheKey}Meta`]);
+    return;
+  }
+  const teslaLabel = role === 'origin' ? drive.locationNameStart : drive.locationNameEnd;
+  if (teslaLabel) setEndpointLabel(item, role, teslaLabel);
+  const c = endpointCoord(drive, role);
+  if (!c || !api?.reverseGeocode) {
+    if (teslaLabel) drive[cacheKey] = teslaLabel;
+    return;
+  }
+  try {
+    const result = await api.reverseGeocode({ ...c, teslaLabel: teslaLabel || null });
+    const name = result?.label || teslaLabel;
+    if (!name) return;
+    drive[cacheKey] = name;
+    drive[`${cacheKey}Meta`] = result || null;
+    if (item.isConnected) setEndpointLabel(item, role, name, result);
+  } catch {
+    if (teslaLabel) drive[cacheKey] = teslaLabel;
+  }
 }
 
 function applyDriveLocations(item, drive) {
+  resolveDriveLocation(item, drive, 'origin');
+  resolveDriveLocation(item, drive, 'dest');
+}
+
+async function editEndpointLocation(item, drive, role) {
+  const c = endpointCoord(drive, role);
   const api = window.electronAPI;
-  const resolve = (role) => {
-    const cacheKey = role === 'origin' ? '_startName' : '_endName';
-    if (drive[cacheKey]) { setEndpointLabel(item, role, drive[cacheKey]); return; }
-    // Prefer the car's BLE place label; use Nominatim when unavailable.
-    const bleName = role === 'origin' ? drive.locationNameStart : drive.locationNameEnd;
-    if (bleName) {
-      drive[cacheKey] = bleName;
-      setEndpointLabel(item, role, bleName);
-      return;
+  if (!c || !api?.rememberKnownPlace) return;
+  const cacheKey = role === 'origin' ? '_startName' : '_endName';
+  const proposed = window.prompt(
+    'Name this location. Leave it blank to remove a saved manual correction.',
+    drive[cacheKey] || '',
+  );
+  if (proposed == null) return;
+  const label = proposed.trim();
+  try {
+    if (label) {
+      const saved = await api.rememberKnownPlace({ ...c, label, source: 'manual', radiusM: 40 });
+      if (!saved) return;
+      drive[cacheKey] = saved.label;
+      drive[`${cacheKey}Meta`] = { ...saved, featureType: 'known-place', confidence: 'high', queryAccuracyM: c.accuracyM };
+      setEndpointLabel(item, role, saved.label, drive[`${cacheKey}Meta`]);
+    } else {
+      await api.removeKnownPlace({ ...c, source: 'manual', maxDistanceM: 100 });
+      delete drive[cacheKey];
+      delete drive[`${cacheKey}Meta`];
+      setEndpointLabel(item, role, gpsLabel(drive, role));
+      await resolveDriveLocation(item, drive, role, true);
     }
-    const c = endpointCoord(drive, role);
-    if (!c || !api || !api.reverseGeocode) return;
-    api.reverseGeocode(c).then((res) => {
-      const name = res && res.label;
-      if (!name) return;
-      drive[cacheKey] = name;
-      if (item.isConnected) setEndpointLabel(item, role, name);
-    }).catch(() => {});
-  };
-  resolve('origin');
-  resolve('dest');
+  } catch { /* A failed local save leaves the current label untouched. */ }
 }
 
 function showListTagSuggestions(drive, item, query) {

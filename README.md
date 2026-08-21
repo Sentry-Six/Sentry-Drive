@@ -23,10 +23,12 @@ Sentry Drive is one of four free tools for Tesla owners from the [Sentry Six](ht
 Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam files! By reading that data, we extract and process that data so that your drives are overlayed on top of a map. The data shares information such as GPS data, self-driving state, speed, pedal presses, and more. Your drive data is processed and stored locally on your computer and is never uploaded to us. A few optional, clearly-labeled features do contact third-party services when you use them — see [Privacy & Data](#privacy--data) below.
 
 ## Features
-- **Visualize your Recent Drives**
+- **Visualize your Recent Drives and**
 <br> With TeslaUSB, Sentry USB, and Tesla's 2025 Holiday Update (2025.44.25 or newer), you can save and visualize your drives. Every single one.
-- **Fix Broken Drives (ALPHA)**
-<br> Attempts to bridge missing data points in a drive by generating the missing data using Open Street Map's route API.
+- **[NEW] Visualize your Charging Stops**
+<br> Using Sentry USB's BLE telemetry feature, you can track and see every charging stop you make - whether at home or at a Supercharger.
+- **Check your drives (ALPHA)**
+<br> Using Open Street Map's route API, attempt to fix drives that may be broken. You can also check for previous Summon driving.
 <br> **Note:** _Feature is currently in ALPHA and may not work as expected. Bridged gaps will appear as manual._
 - **Full Self Driving Analytics**
 <br> Track your FSD usage - even with Hardware 3.

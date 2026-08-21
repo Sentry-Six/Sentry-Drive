@@ -746,9 +746,16 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .jt-batt--red .material-icons { color: var(--danger); }
 
 .journey-locs { display: flex; justify-content: space-between; gap: 12px; }
-.journey-locs .ep-place {
-  flex: 0 1 auto;
+.ep-place-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
   max-width: 62%;
+}
+.ep-place-group--end { justify-content: flex-end; }
+.journey-locs .ep-place {
+  min-width: 0;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text);
@@ -758,6 +765,21 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   text-overflow: ellipsis;
 }
 .journey-locs .ep-place--end { text-align: right; }
+.ep-place-edit {
+  flex: 0 0 auto;
+  display: inline-flex;
+  padding: 1px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.15s, color 0.15s;
+}
+.ep-place-edit .material-icons { font-size: 13px; }
+.ep-place-group:hover .ep-place-edit,
+.ep-place-edit:focus-visible { opacity: 1; }
+.ep-place-edit:hover { color: var(--blue); }
 
 /* Disengagements — its own line between the locations and the drive-info chips. */
 .drive-diseng {
@@ -2106,6 +2128,36 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   line-height: 1.45;
   color: var(--danger);
 }
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.settings-text-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--input-bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 8px 10px;
+}
+.settings-text-input:focus { outline: none; border-color: var(--blue); }
+.settings-location-hint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.settings-geocoder-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+#geocoder-settings-status { font-size: 11px; color: var(--success); }
 
 .beta-warning {
   font-size: 11px;

@@ -215,6 +215,28 @@
             </div>
             <div class="settings-section">
               <div class="settings-section-header">
+                <span class="settings-section-icon halo-accent"><span class="material-icons">location_on</span></span>
+                <span class="settings-section-title">Location Labels</span>
+              </div>
+              <div class="settings-section-body">
+                <label class="settings-field">
+                  <span class="settings-row-label">Reverse-geocoding provider</span>
+                  <input id="inp-geocoder-endpoint" class="settings-text-input" type="url" spellcheck="false" placeholder="https://nominatim.openstreetmap.org" />
+                </label>
+                <label class="settings-field">
+                  <span class="settings-row-label">Label language</span>
+                  <input id="inp-geocoder-language" class="settings-text-input" type="text" spellcheck="false" placeholder="System language (for example, en-US)" />
+                </label>
+                <div class="settings-location-hint">Coordinates and accuracy are sent to the selected provider. Learned Tesla labels, manual corrections, and Privacy Zone names remain on this device.</div>
+                <div class="settings-geocoder-actions">
+                  <button id="btn-save-geocoder" class="btn-primary" type="button">Save location settings</button>
+                  <button id="btn-reset-geocoder" class="update-skip-btn" type="button">Use default provider</button>
+                  <span id="geocoder-settings-status" aria-live="polite"></span>
+                </div>
+              </div>
+            </div>
+            <div class="settings-section">
+              <div class="settings-section-header">
                 <span class="settings-section-icon halo-slate"><span class="material-icons">update</span></span>
                 <span class="settings-section-title">Version</span>
               </div>
