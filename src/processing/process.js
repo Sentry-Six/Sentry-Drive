@@ -205,16 +205,22 @@ async function main() {
     totalDone++;
 
     const processed = buildProcessedRoute(result);
-    processedFiles.push(processed.processedPath);
 
     if (result.error) {
+      // A failed extraction (USB hiccup, unreadable share) must NOT be marked
+      // processed: processedFiles is permanent, so recording it here would
+      // silently drop that clip's GPS from every future run. Leaving it out
+      // lets the next run rediscover and retry the clip.
       errors++;
-    } else if (processed.parkedEventSkipped) {
-      parkedEventSkipped++;
-    } else if (processed.route) {
-      filesWithGPS++;
-      totalPoints += processed.route.points.length;
-      routeMap.set(processed.processedPath, processed.route);
+    } else {
+      processedFiles.push(processed.processedPath);
+      if (processed.parkedEventSkipped) {
+        parkedEventSkipped++;
+      } else if (processed.route) {
+        filesWithGPS++;
+        totalPoints += processed.route.points.length;
+        routeMap.set(processed.processedPath, processed.route);
+      }
     }
 
     const pct = Math.round((totalDone / newFiles.length) * 100);

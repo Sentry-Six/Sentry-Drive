@@ -11,7 +11,13 @@ function createDrivePageModel({ pageSize = 250, fetchPage }) {
     const requestSequence = ++sequence;
     const result = await fetchPage({ ...filters, offset, limit: size });
     if (requestSequence !== sequence) return state;
-    if (!result?.success) throw new Error(result?.error ?? 'Failed to load drive page');
+    if (!result?.success) {
+      const error = new Error(result?.error ?? 'Failed to load drive page');
+      // Preserve the IPC error code (e.g. STALE_DRIVE_DATA) so callers can
+      // recover instead of alerting.
+      if (result?.code) error.code = result.code;
+      throw error;
+    }
     state = {
       offset: result.offset ?? offset,
       limit: result.limit ?? size,

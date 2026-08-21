@@ -685,6 +685,43 @@ test('detectSummon: unrepresented wall-clock disqualifies', () => {
   assert.equal(calc.detectSummon([HW3_REAL_CLIP], HW3_REAL_STATS), true);
 });
 
+test('detectSummon: overlapping evidence spans cannot mask an uncovered minute', () => {
+  // Summed per-clip coverage counts an overlap twice — a SavedClips twin of a
+  // RecentClips minute, or two clips cut less than a minute apart — and the
+  // surplus absorbs a genuinely missing minute elsewhere, failing open. With
+  // wall-clock spans on the evidence, coverage is the interval union.
+  const slowEnd = (flags) => ({
+    flagRuns: [{ flags, frames: 300, maxMps: 2.0 }, { flags: 0, frames: 600, maxMps: 2.0 }],
+    apRuns: [{ ap: 1, frames: 900 }],
+    gearRuns: [{ gear: 0, frames: 60 }, { gear: 1, frames: 840 }],
+    startFrame: 0, endFrame: 900, totalFrames: 900,
+  });
+  const t0 = 1_700_000_000_000;
+  const at = (clip, startMs, endMs) => ({ ...clip, startMs, endMs });
+  const departure = at(slowEnd(3), t0, t0 + 60000);
+  const departureTwin = at(slowEnd(0), t0, t0 + 60000); // same minute, event-folder copy
+  const mid = at(slowEnd(0), t0 + 60000, t0 + 120000);
+  const arrival = at({
+    ...slowEnd(0),
+    flagRuns: [{ flags: 0, frames: 600, maxMps: 2.0 }, { flags: 3, frames: 300, maxMps: 2.0 }],
+    gearRuns: [{ gear: 1, frames: 840 }, { gear: 0, frames: 60 }],
+  }, t0 + 180000, t0 + 240000);
+  const stats = { maxSpeedMps: 2.0, durationMs: 240000, hasSeiSpeeds: true };
+
+  // Four minute-clips summing to the drive's length, but minute three is
+  // uncovered — the union sees the 60 s hole and vetoes.
+  assert.equal(calc.detectSummon([departure, departureTwin, mid, arrival], stats), false);
+
+  // The same drive with the hole actually covered passes.
+  const midTwo = at(slowEnd(0), t0 + 120000, t0 + 180000);
+  assert.equal(calc.detectSummon([departure, mid, midTwo, arrival], stats), true);
+
+  // Evidence missing any span falls back to the legacy per-clip sum.
+  const untimed = { ...departureTwin };
+  delete untimed.startMs;
+  assert.equal(calc.detectSummon([departure, untimed, mid, arrival], stats), true);
+});
+
 test('detectSummon: the bookend window is 10 s at each end, not the whole drive', () => {
   // Hazards in the MIDDLE of a slow pedal-free drive are a human idling with
   // the flashers on, not a maneuver. Widening the window would tag them.

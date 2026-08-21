@@ -109,6 +109,10 @@ class LoaderService {
         if (!this.index) return { updated: false };
         this.index.setDriveTags(payload.startTime, payload.tags);
         return { updated: true };
+      case 'deleteDrives':
+        // The removal is already persisted when no index is loaded.
+        if (!this.index) return { deleted: 0 };
+        return { deleted: this.index.deleteDrivesByStartTimes(payload.startTimes) };
       case 'cancel':
         this.abortController?.abort();
         return { canceled: true };

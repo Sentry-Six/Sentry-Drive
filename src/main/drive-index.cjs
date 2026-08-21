@@ -208,6 +208,29 @@ class DriveIndex {
   }
 
   /**
+   * Drop drives after their routes are removed from the source file, keeping
+   * paged listings consistent without a full index rebuild. Mirrors
+   * setDriveTags: the drives table and the driveTags meta stay in step with
+   * the persisted edit; aggregates refresh at the next full load.
+   */
+  deleteDrivesByStartTimes(startTimes) {
+    const stmt = this.db.prepare('DELETE FROM drives WHERE start_time = ?');
+    let deleted = 0;
+    const tags = this.getDriveTags();
+    let tagsChanged = false;
+    for (const startTime of startTimes ?? []) {
+      const key = String(startTime);
+      deleted += Number(stmt.run(key).changes);
+      if (key in tags) {
+        delete tags[key];
+        tagsChanged = true;
+      }
+    }
+    if (tagsChanged) this.setMeta('driveTags', tags);
+    return deleted;
+  }
+
+  /**
    * Keep filter tags current after an in-session edit. The renderer owns the
    * updated display copy until the next index rebuild.
    */

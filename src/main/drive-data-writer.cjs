@@ -12,7 +12,13 @@ function isWhitespace(byte) {
   return byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d;
 }
 
-async function scanTopLevelSections(filePath) {
+// Byte offsets are only meaningful against the exact bytes that were scanned.
+// Callers that later read or copy by offset must do so from the SAME open file
+// handle the scan streamed from: an external writer can atomically replace the
+// path at any time (the app explicitly supports that — the mtime watcher exists
+// for it), and re-opening by path after such a replace would apply stale
+// offsets to different bytes, silently splicing garbage.
+async function scanTopLevelSectionsFromStream(stream) {
   const sections = [];
   let phase = 'root';
   let position = 0;
@@ -31,7 +37,7 @@ async function scanTopLevelSections(filePath) {
     phase = 'after-value';
   };
 
-  for await (const chunk of fs.createReadStream(filePath)) {
+  for await (const chunk of stream) {
     for (let offset = 0; offset < chunk.length; offset++, position++) {
       const byte = chunk[offset];
 
@@ -156,6 +162,10 @@ async function scanTopLevelSections(filePath) {
   return sections;
 }
 
+async function scanTopLevelSections(filePath) {
+  return scanTopLevelSectionsFromStream(fs.createReadStream(filePath));
+}
+
 function writeChunk(stream, chunk) {
   if (stream.errored) return Promise.reject(stream.errored);
   if (stream.destroyed) return Promise.reject(new Error('drive-data output stream closed early'));
@@ -178,10 +188,11 @@ function writeChunk(stream, chunk) {
   });
 }
 
-async function copyRange(sourcePath, section, output) {
-  const stream = fs.createReadStream(sourcePath, {
+async function copyRange(sourceHandle, section, output) {
+  const stream = sourceHandle.createReadStream({
     start: section.start,
     end: section.end - 1,
+    autoClose: false,
   });
   for await (const chunk of stream) await writeChunk(output, chunk);
 }
@@ -189,10 +200,14 @@ async function copyRange(sourcePath, section, output) {
 async function readTopLevelValues(filePath, keys, options = {}) {
   const wanted = new Set(keys);
   const maxBytes = options.maxBytes ?? MAX_SELECTED_SECTION_BYTES;
-  const sections = await scanTopLevelSections(filePath);
-  const values = {};
+  // Scan and read from one handle so the offsets cannot go stale against an
+  // external atomic replace of the path.
   const file = await fs.promises.open(filePath, 'r');
   try {
+    const sections = await scanTopLevelSectionsFromStream(
+      file.createReadStream({ autoClose: false }),
+    );
+    const values = {};
     for (const section of sections) {
       if (!wanted.has(section.key)) continue;
       const length = section.end - section.start;
@@ -213,10 +228,10 @@ async function readTopLevelValues(filePath, keys, options = {}) {
       }
       values[section.key] = JSON.parse(buffer.toString('utf8'));
     }
+    return { sections, values };
   } finally {
     await file.close();
   }
-  return { sections, values };
 }
 
 async function renameWithRetry(from, to, attempts = 12) {
@@ -238,10 +253,40 @@ async function renameWithRetry(from, to, attempts = 12) {
 
 async function writeDriveDataJSON(filePath, data, options = {}) {
   const preserveFrom = options.preserveFrom ?? filePath;
-  const sourceExists = fs.existsSync(preserveFrom);
-  const sourceSections = sourceExists
-    ? (options.sourceSections ?? await scanTopLevelSections(preserveFrom))
-    : [];
+  // Hold ONE handle across the section scan and every preserved-range copy.
+  // The handle pins the scanned bytes: if an external writer atomically
+  // replaces the path mid-write, our reads keep seeing the file we scanned,
+  // so the offsets stay valid and the output stays internally consistent
+  // (last-writer-wins, never spliced corruption). Offsets computed against an
+  // earlier open (e.g. a prior readTopLevelValues) are NOT accepted for the
+  // same reason.
+  let source = null;
+  try {
+    source = await fs.promises.open(preserveFrom, 'r');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  // Closed as soon as the temp write completes: Windows refuses to rename
+  // over a file that still has an open handle, so holding it through the
+  // rename would fail the write it exists to protect.
+  const closeSource = async () => {
+    const handle = source;
+    source = null;
+    if (handle) await handle.close();
+  };
+
+  const sourceExists = source !== null;
+  let sourceSections = [];
+  try {
+    if (sourceExists) {
+      sourceSections = await scanTopLevelSectionsFromStream(
+        source.createReadStream({ autoClose: false }),
+      );
+    }
+  } catch (error) {
+    await closeSource().catch(() => {});
+    throw error;
+  }
   const replacementKeys = new Set(
     [...MUTABLE_SECTIONS].filter((key) => Object.prototype.hasOwnProperty.call(data, key)),
   );
@@ -289,7 +334,7 @@ async function writeDriveDataJSON(filePath, data, options = {}) {
           await writeReplacement(section.key);
         } else {
           await writePrefix(section.key);
-          await copyRange(preserveFrom, section, output);
+          await copyRange(source, section, output);
         }
       }
       for (const key of replacementKeys) {
@@ -299,6 +344,9 @@ async function writeDriveDataJSON(filePath, data, options = {}) {
     await writeChunk(output, '\n}\n');
     output.end();
     await outputDone;
+    // Every preserved range has been copied; release the source handle so the
+    // rename below can replace the file on Windows.
+    await closeSource();
 
     try {
       await fsyncFile(tempPath);
@@ -314,6 +362,7 @@ async function writeDriveDataJSON(filePath, data, options = {}) {
     options.onRenamed?.(filePath);
   } catch (error) {
     output.destroy();
+    await closeSource().catch(() => {});
     await fs.promises.unlink(tempPath).catch(() => {});
     throw error;
   }

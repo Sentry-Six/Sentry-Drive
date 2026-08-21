@@ -117,10 +117,10 @@ test('tag-only writes raw-copy unchanged mutable sections without loading routes
   );
 
   assert.deepEqual(selected.values, { driveTags: { old: ['Favorite'] } });
+  // The writer scans offsets from its own held handle; precomputed offsets
+  // are not accepted because they can go stale against an external replace.
   await writeDriveDataJSON(filePath, {
     driveTags: { next: ['Road trip'] },
-  }, {
-    sourceSections: selected.sections,
   });
 
   const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));

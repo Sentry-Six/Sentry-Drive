@@ -90,17 +90,34 @@ const TZ_OFFSET_HOURS = {
   MDT: -6, MST: -7,
   PDT: -7, PST: -8,
   AKDT: -8, AKST: -9,
-  HST: -10,
-  BST: 1, CET: 1, CEST: 2,
-  AEST: 10, AEDT: 11,
+  HDT: -9, HST: -10,
+  // Atlantic Canada / Newfoundland.
+  ADT: -3, AST: -4, NDT: -2.5, NST: -3.5,
+  // Europe / Africa. BST is British Summer Time here.
+  BST: 1, WET: 0, WEST: 1, CET: 1, CEST: 2, EET: 2, EEST: 3,
+  MSK: 3, SAST: 2, WAT: 1, CAT: 2, EAT: 3,
+  // Asia / Oceania.
+  GST: 4, PKT: 5, ICT: 7, WIB: 7, SGT: 8, HKT: 8, PHT: 8, KST: 9, JST: 9,
+  AWST: 8, ACST: 9.5, ACDT: 10.5, AEST: 10, AEDT: 11, NZST: 12, NZDT: 13,
 };
 
 function extractTzOffsetMs(header) {
   const m = /\(([A-Z]{2,5})\)/.exec(header || '');
+  // Legacy exports without a zone marker predate the label; keep the historical
+  // US-Eastern assumption for them rather than rejecting old files.
   if (!m) return -4 * 3600000;
   const tz = m[1].toUpperCase();
   if (tz in TZ_OFFSET_HOURS) return TZ_OFFSET_HOURS[tz] * 3600000;
-  return -4 * 3600000;
+  // Guessing an offset here silently mis-dates every imported drive by hours
+  // (calibration only searches ±6 h, so large errors never self-correct) and
+  // breaks overlap detection against real footage. Some abbreviations (IST,
+  // and others) are genuinely ambiguous across regions — fail loudly instead.
+  const err = new Error(
+    `Unrecognized timezone "${tz}" in the CSV header — cannot convert drive times. ` +
+    'Re-export with a supported timezone or a UTC/GMT-labeled export.',
+  );
+  err.code = 'UNKNOWN_CSV_TIMEZONE';
+  throw err;
 }
 
 // "2024-09-08 19:19" or "2024-09-08 19:19:30" → epoch ms, applying offset

@@ -1586,6 +1586,9 @@ async function changeDrivePage(direction) {
       : await drivePageModel.next();
     await applyDrivePageState(state);
   } catch (error) {
+    // A stale generation means the data was (or is being) reloaded — the
+    // reload repaints the list, so recover silently instead of alerting.
+    if (error.code === 'STALE_DRIVE_DATA') { reloadDrivesAfterWrite(); return; }
     alert(`Couldn't load that drive page: ${error.message}`);
   } finally {
     pager?.classList.remove('is-loading');
@@ -1602,6 +1605,7 @@ async function applyDriveFilters() {
     await applyDrivePageState(state);
     logAction(`drive filter — tag=${driveFilters.tag || '(none)'} range=${driveFilters.startDate || '…'}→${driveFilters.endDate || '…'} → ${state.total} drive(s)`);
   } catch (error) {
+    if (error.code === 'STALE_DRIVE_DATA') { reloadDrivesAfterWrite(); return; }
     alert(`Couldn't apply the drive filter: ${error.message}`);
   } finally {
     pager?.classList.remove('is-loading');
@@ -2122,7 +2126,10 @@ function initTessieImport() {
 
   const today = new Date();
   const ninetyAgo = new Date(today.getTime() - 90 * 24 * 3600 * 1000);
-  const fmtDate = (d) => d.toISOString().slice(0, 10);
+  // Local calendar date, not toISOString (UTC): east of Greenwich the UTC date
+  // is still yesterday for part of the day, which silently excluded same-day
+  // drives from the default import range.
+  const fmtDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   fromInput.value = fmtDate(ninetyAgo);
   toInput.value = fmtDate(today);
 
@@ -3623,8 +3630,36 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && zonePlacement) endZonePlacement(false);
 });
 
+// Every drive in the library, not just the loaded page. A privacy purge must
+// scan pages the pager hasn't shown and drives the active tag/date filter
+// hides — the in-memory `drives` array holds only one filtered ≤250-drive
+// page, and culling from it silently left matching drives in the file.
+async function fetchAllDriveSummaries(extraQuery = {}) {
+  const all = [];
+  const limit = 250;
+  let total = Infinity;
+  while (all.length < total) {
+    const result = await window.electronAPI.listDriveSummaries({
+      ...extraQuery,
+      offset: all.length,
+      limit,
+      gen: driveCacheGen,
+    });
+    if (!result.success) {
+      const error = new Error(result.error ?? 'Failed to list drives');
+      if (result.code) error.code = result.code;
+      throw error;
+    }
+    total = result.total ?? 0;
+    const page = result.drives ?? [];
+    if (page.length === 0) break;
+    all.push(...page);
+  }
+  return all;
+}
+
 // Queue drives whose snapped endpoint falls inside the WGS-84 zone.
-function cullZoneDrives(zone) {
+async function cullZoneDrives(zone) {
   if (zone.lat == null || zone.lng == null) return;
   if (!loadedFilePath || !drives.length) {
     alert('Load a drive data file first.');
@@ -3632,7 +3667,17 @@ function cullZoneDrives(zone) {
   }
   const gm = window.driveCalc?.geodesicM;
   if (!gm) { alert('Distance helper unavailable.'); return; }
-  const matches = drives.filter((d) => ['origin', 'dest'].some((role) => {
+  let allDrives;
+  showLoading('Scanning all drives…');
+  try {
+    allDrives = await fetchAllDriveSummaries();
+  } catch (error) {
+    alert(`Couldn't scan drives for the cull: ${error.message}`);
+    return;
+  } finally {
+    hideLoading();
+  }
+  const matches = allDrives.filter((d) => ['origin', 'dest'].some((role) => {
     const c = endpointCoord(d, role);
     return c && gm(zone.lat, zone.lng, c.lat, c.lng) <= zone.radiusM;
   }));

@@ -661,6 +661,13 @@ function buildDriveStats(clips, idx) {
     if (!(totalFrames > 0) && Array.isArray(runs)) {
       totalFrames = runs.reduce((sum, r) => sum + (r.frames ?? 0), 0);
     }
+    // Wall-clock span of this segment, matching the duration math above, so
+    // the coverage veto can union overlapping spans instead of summing them.
+    const sf = clip.subClipFrames;
+    const segLenMs = sf && sf.totalFrames > 0
+      ? ((sf.endFrame - sf.startFrame) * clipSpanOf(clip)) / sf.totalFrames
+      : clipSpanOf(clip);
+    const startMs = clip.timestamp.getTime();
     return {
       flagRuns: runs,
       apRuns: clip.apRuns,
@@ -668,6 +675,8 @@ function buildDriveStats(clips, idx) {
       startFrame: clip.subClipFrames?.startFrame ?? 0,
       endFrame: clip.subClipFrames?.endFrame ?? totalFrames,
       totalFrames,
+      startMs,
+      endMs: startMs + segLenMs,
     };
   });
   const summon = detectSummon(summonEvidence, {

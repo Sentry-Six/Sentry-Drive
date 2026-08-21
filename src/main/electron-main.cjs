@@ -364,13 +364,24 @@ ipcMain.handle('remove-drive', (_e, { filePath, driveStartTime }) => withDriveDa
     const target = drives.find((d) => d.startTime === driveStartTime);
     if (!target) return { success: false, error: 'Drive not found' };
 
-    const removeSet = new Set(target.routeFiles.map((f) => f.replace(/\\/g, '/')));
-    data.routes = (data.routes ?? []).filter((r) => !removeSet.has(r.file.replace(/\\/g, '/')));
-    data.processedFiles = (data.processedFiles ?? []).filter((f) => !removeSet.has(f.replace(/\\/g, '/')));
+    // routeFiles come out of the grouper normalized (RecentClips/ stripped),
+    // so the on-disk routes must be normalized the same way before matching —
+    // backslash folding alone misses every prefixed route an older exporter
+    // wrote (same trap the check-summon lookup documents below).
+    const removeSet = new Set(target.routeFiles.map((f) => normalizeClipPath(f)));
+    const keptRoutes = (data.routes ?? []).filter((r) => !removeSet.has(normalizeClipPath(r.file)));
+    const removedCount = (data.routes?.length ?? 0) - keptRoutes.length;
+    if (removedCount === 0) {
+      // Writing here would delete the drive's tags while removing nothing.
+      return { success: false, error: 'No stored routes matched this drive' };
+    }
+    data.routes = keptRoutes;
+    data.processedFiles = (data.processedFiles ?? []).filter((f) => !removeSet.has(normalizeClipPath(f)));
     if (data.driveTags) delete data.driveTags[driveStartTime];
 
     data.routes = await routesToWireFormat(data.routes);
     await writeDriveDataJSON(filePath, data);
+    await dropDrivesFromLoaderIndex([driveStartTime]);
     logger.info('main', `removed drive at ${driveStartTime} (${target.routeFiles.length} clip(s))`);
     return { success: true };
   } catch (err) {
@@ -378,6 +389,20 @@ ipcMain.handle('remove-drive', (_e, { filePath, driveStartTime }) => withDriveDa
     return { success: false, error: err.message };
   }
 }));
+
+// The loader worker serves pages from its SQLite index; after a removal is
+// persisted the index must drop those drives too, or paging away and back
+// resurrects them (the write re-baselines the watcher, so no reload fires).
+// On failure, invalidating the generation forces the renderer's next fetch to
+// fail stale and trigger a full reload instead of serving ghosts.
+async function dropDrivesFromLoaderIndex(startTimes) {
+  try {
+    await getDriveLoaderClient().deleteDrives(startTimes);
+  } catch (err) {
+    driveDetailGen++;
+    logger.warn('main', `loader index not updated after remove: ${err?.message ?? err}`);
+  }
+}
 
 // Batch removals use one read and one atomic write.
 ipcMain.handle('remove-drives', (_e, { filePath, driveStartTimes }) => withDriveDataLock(async () => {
@@ -390,13 +415,20 @@ ipcMain.handle('remove-drives', (_e, { filePath, driveStartTimes }) => withDrive
     const targets = drives.filter((d) => wanted.has(d.startTime));
     if (targets.length === 0) return { success: false, error: 'Drives not found' };
 
-    const removeSet = new Set(targets.flatMap((t) => t.routeFiles.map((f) => f.replace(/\\/g, '/'))));
-    data.routes = (data.routes ?? []).filter((r) => !removeSet.has(r.file.replace(/\\/g, '/')));
-    data.processedFiles = (data.processedFiles ?? []).filter((f) => !removeSet.has(f.replace(/\\/g, '/')));
+    // Same normalization contract as remove-drive above.
+    const removeSet = new Set(targets.flatMap((t) => t.routeFiles.map((f) => normalizeClipPath(f))));
+    const keptRoutes = (data.routes ?? []).filter((r) => !removeSet.has(normalizeClipPath(r.file)));
+    const removedCount = (data.routes?.length ?? 0) - keptRoutes.length;
+    if (removedCount === 0) {
+      return { success: false, error: 'No stored routes matched the selected drives' };
+    }
+    data.routes = keptRoutes;
+    data.processedFiles = (data.processedFiles ?? []).filter((f) => !removeSet.has(normalizeClipPath(f)));
     if (data.driveTags) for (const t of targets) delete data.driveTags[t.startTime];
 
     data.routes = await routesToWireFormat(data.routes);
     await writeDriveDataJSON(filePath, data);
+    await dropDrivesFromLoaderIndex(targets.map((t) => t.startTime));
     logger.info('main', `removed ${targets.length} drive(s) (${removeSet.size} clip(s)) via multi-select`);
     return { success: true, removed: targets.length };
   } catch (err) {
@@ -474,12 +506,18 @@ let driveDetailGen = 0;
 
 ipcMain.handle('load-and-group-drives', (_e, filePath) => withDriveLoadLock(async () => {
   try {
+    // Invalidate BEFORE the load: the worker tears down its old index at load
+    // start, so a list/detail request carrying the previous generation must
+    // fail stale rather than read the empty/rebuilding index (whose drive ids
+    // restart at 0 and can answer with a different drive entirely). Loads are
+    // serialized by withDriveLoadLock, so the generation captured here is
+    // still current when this load finishes.
+    const cacheGen = ++driveDetailGen;
     const loaderResult = await getDriveLoaderClient().load(filePath, (progress) => {
       mainWindow?.webContents.send('load-progress', progress);
     });
-    driveDetailGen++;
     logger.info('main', `loaded ${loaderResult.totalDriveCount} drive(s) from ${loaderResult.totalRoutes} clips — ${filePath}`);
-    return { ...loaderResult, cacheGen: driveDetailGen };
+    return { ...loaderResult, cacheGen };
 
     /* Unreachable compatibility implementation. */
     const sendProgress = (phase, current, total) => {
@@ -905,9 +943,9 @@ ipcMain.handle('set-drive-tags', (_e, { filePath, driveKey, tags }) => withDrive
       driveTags[driveKey] = tags;
     }
 
-    await writeDriveDataJSON(filePath, { driveTags }, {
-      sourceSections: selected.sections,
-    });
+    // The writer re-scans section offsets from its own held handle; offsets
+    // from the readTopLevelValues call above could be stale by write time.
+    await writeDriveDataJSON(filePath, { driveTags });
     // Keep tag filtering consistent with the persisted edit.
     try {
       await getDriveLoaderClient().setTags(driveKey, tags);
@@ -1141,7 +1179,6 @@ function resolveClipPath(clipsDir, normFile) {
 ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock(async () => {
   try {
     sendRepairProgress('Reading…', 0, 1);
-    fs.copyFileSync(filePath, filePath + '.bak');
     const data = await readDriveData(filePath, { wantProcessedFiles: true });
     const routes = await decodeRoutesByteFields(data.routes ?? []);
 
@@ -1258,6 +1295,10 @@ ipcMain.handle('check-summon', (_e, { filePath, clipsDir }) => withDriveDataLock
 
     if (updated > 0) {
       sendRepairProgress('Saving…', 1, 1);
+      // Take the restore point only when a write actually follows. A scan
+      // that changes nothing must not clobber the previous .bak — that may be
+      // the pre-import state revert-gps exists to restore.
+      fs.copyFileSync(filePath, filePath + '.bak');
       data.routes = await routesToWireFormat(routes);
       await writeDriveDataJSON(filePath, data);
     }

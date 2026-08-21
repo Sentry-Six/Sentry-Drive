@@ -98,6 +98,10 @@ class DriveLoaderClient {
     return this.request('setTags', { startTime, tags });
   }
 
+  deleteDrives(startTimes) {
+    return this.request('deleteDrives', { startTimes });
+  }
+
   cancel() {
     return this.request('cancel');
   }

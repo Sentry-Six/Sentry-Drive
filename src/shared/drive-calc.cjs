@@ -347,8 +347,10 @@ function flagRunsOverlap(flagRuns, fromFrame, toFrame, mask, requireAll) {
 /**
  * Detect Summon from raw-frame clip evidence. Each entry supplies flagRuns,
  * startFrame, endFrame, totalFrames, and — where the extraction recorded it —
- * apRuns. Every candidate must be pedal-free at parking-lot speed; on top of
- * that either driverless signature qualifies:
+ * apRuns, plus optionally the segment's wall-clock span as startMs/endMs
+ * (epoch ms; lets the coverage veto union overlapping spans instead of
+ * summing them). Every candidate must be pedal-free at parking-lot speed; on
+ * top of that either driverless signature qualifies:
  *
  *   hazard bookends — hazards within the opening and closing seconds of the
  *     drive. The only signature older firmware gives: it left autopilot_state
@@ -409,9 +411,37 @@ function detectSummon(clipEvidence, { maxSpeedMps, durationMs, hasSeiSpeeds }) {
   // maneuver's ends. Require the segments to account for the drive's own
   // duration. The tolerance is under one clip so a single missing minute is
   // caught, and comfortably over the sub-clip timing skew of a park split.
+  //
+  // When every entry carries its wall-clock span (startMs/endMs), coverage is
+  // the length of the interval UNION: overlapping evidence — a SavedClips twin
+  // of a RecentClips minute, or two clips cut less than a minute apart — must
+  // not be double-counted, because summed overlap absorbs a genuinely missing
+  // minute elsewhere and this veto fails open. Evidence without timestamps
+  // (older persisted routes) keeps the legacy per-clip sum.
   let coveredMs = 0;
-  for (const c of clipEvidence) {
-    coveredMs += ((c.endFrame - c.startFrame) * CLIP_DURATION_MS) / c.totalFrames;
+  const timed = clipEvidence.every(
+    (c) => Number.isFinite(c.startMs) && Number.isFinite(c.endMs) && c.endMs > c.startMs,
+  );
+  if (timed) {
+    const spans = clipEvidence
+      .map((c) => [c.startMs, c.endMs])
+      .sort((a, b) => a[0] - b[0]);
+    let [runStart, runEnd] = spans[0];
+    for (let i = 1; i < spans.length; i++) {
+      const [s, e] = spans[i];
+      if (s > runEnd) {
+        coveredMs += runEnd - runStart;
+        runStart = s;
+        runEnd = e;
+      } else if (e > runEnd) {
+        runEnd = e;
+      }
+    }
+    coveredMs += runEnd - runStart;
+  } else {
+    for (const c of clipEvidence) {
+      coveredMs += ((c.endFrame - c.startFrame) * CLIP_DURATION_MS) / c.totalFrames;
+    }
   }
   if (durationMs - coveredMs > SUMMON_MAX_UNCOVERED_MS) return false;
 
