@@ -2649,10 +2649,48 @@ async function revertGPS() {
   alert('Reverted to backup successfully.');
 }
 
-// Display Check Drives completion reports in-app.
-function showCheckResult(title, message) {
+// Display Check Drives completion reports in-app. `listItems` (optional) is an
+// array of preformatted drive lines shown as a list below the message —
+// collapsed to the first few with a "Show all" expander when it is long, and
+// scrolling inside its own box once expanded.
+const CHECK_RESULT_COLLAPSED_ITEMS = 6;
+
+const fmtCheckDriveTime = (startTime) => new Date(startTime).toLocaleString([], {
+  year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+});
+
+function showCheckResult(title, message, listItems) {
   document.getElementById('check-result-title').textContent = title;
   document.getElementById('check-result-msg').textContent = message;
+  const list = document.getElementById('check-result-list');
+  const expand = document.getElementById('btn-check-result-expand');
+  list.innerHTML = '';
+  list.classList.add('hidden');
+  list.classList.remove('expanded');
+  expand.classList.add('hidden');
+  const items = Array.isArray(listItems) ? listItems : [];
+  if (items.length > 0) {
+    for (const text of items) {
+      const row = document.createElement('div');
+      row.className = 'check-result-item';
+      row.textContent = text;
+      list.appendChild(row);
+    }
+    list.classList.remove('hidden');
+    if (items.length > CHECK_RESULT_COLLAPSED_ITEMS) {
+      const applyExpanded = (expanded) => {
+        list.classList.toggle('expanded', expanded);
+        [...list.children].forEach((row, index) => {
+          row.classList.toggle('hidden', !expanded && index >= CHECK_RESULT_COLLAPSED_ITEMS);
+        });
+        expand.textContent = expanded ? 'Show fewer' : `Show all ${items.length} drives`;
+        expand.dataset.expanded = expanded ? '1' : '';
+      };
+      applyExpanded(false);
+      expand.classList.remove('hidden');
+      expand.onclick = () => applyExpanded(!expand.dataset.expanded);
+    }
+  }
   document.getElementById('check-result-overlay').classList.remove('hidden');
 }
 
@@ -2730,19 +2768,21 @@ async function repairGPS() {
     }
     hideLoading();
 
-    const bridgedDrives = drives.filter((d) => d.bridged);
+    // Scan the whole library — `bridged` is a summary field, so filter all
+    // pages client-side; the in-memory page misses bridged drives elsewhere.
+    let bridgedDrives = drives.filter((d) => d.bridged);
+    if (result.bridgedGaps > 0) {
+      try {
+        bridgedDrives = (await fetchAllDriveSummaries()).filter((d) => d.bridged);
+      } catch { /* fall back to the loaded page */ }
+    }
+    let listItems;
     if (result.bridgedGaps > 0 && bridgedDrives.length > 0) {
       msgs.push('');
       msgs.push(`${bridgedDrives.length} drive(s) contain bridges — marked with a "Bridged" chip in the list:`);
-      const sample = bridgedDrives.slice(0, 8);
-      for (const d of sample) {
-        msgs.push(`  • ${new Date(d.startTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`);
-      }
-      if (bridgedDrives.length > sample.length) {
-        msgs.push(`  • …and ${bridgedDrives.length - sample.length} more`);
-      }
+      listItems = bridgedDrives.map((d) => fmtCheckDriveTime(d.startTime));
     }
-    showCheckResult('Bridge Gaps complete', msgs.length > 0 ? msgs.join('\n') : 'No issues found.');
+    showCheckResult('Bridge Gaps complete', msgs.length > 0 ? msgs.join('\n') : 'No issues found.', listItems);
   } finally {
     if (removeProgressListener) removeProgressListener();
     btn.textContent = 'Check Drives';
@@ -2811,7 +2851,10 @@ async function checkSummon() {
       return;
     }
 
-    const summonBefore = drives.filter((d) => d.summon).length;
+    // Full-library before-count: the in-memory page holds one filtered
+    // ≤250-drive page, so counting it would misreport the "new" delta.
+    const summonBefore = lastDrivesMeta?.aggregates?.summonDriveCount
+      ?? drives.filter((d) => d.summon).length;
     let summonTotal = null;
     if (result.updatedRoutes > 0) {
       showLoading();
@@ -2828,24 +2871,27 @@ async function checkSummon() {
     if (result.missingClips > 0) {
       msgs.push(`${result.missingClips} clip(s) were missing from the clips directory (moved or deleted) and were skipped.`);
     }
-    const summonDrives = drives.filter((d) => d.summon);
-    const summonCount = summonTotal ?? summonDrives.length;
+    let summonDrives = drives.filter((d) => d.summon);
+    let summonCount = summonTotal ?? summonDrives.length;
+    let listItems;
     if (result.updatedRoutes === 0) {
       msgs.push('No drives needed new evidence — anything detectable was already tagged.');
     } else if (summonCount > 0) {
+      // List every tagged drive via the index's synthetic "summon" filter tag;
+      // the loaded page can hold none of them (a summon on page 2 used to
+      // render as a bare "…and 1 more" with nothing above it).
+      try {
+        summonDrives = await fetchAllDriveSummaries({ tag: 'summon' });
+        summonCount = summonDrives.length;
+      } catch { /* fall back to the loaded page */ }
+      const newCount = Math.max(0, summonCount - summonBefore);
       msgs.push('');
-      msgs.push(`${summonCount} drive(s) carry the Summon tag${summonCount > summonBefore ? ` (${summonCount - summonBefore} new)` : ''}:`);
-      const sample = summonDrives.slice(0, 8);
-      for (const d of sample) {
-        msgs.push(`  • ${new Date(d.startTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`);
-      }
-      if (summonCount > sample.length) {
-        msgs.push(`  • …and ${summonCount - sample.length} more`);
-      }
+      msgs.push(`${summonCount} drive(s) carry the Summon tag${newCount > 0 ? ` (${newCount} new)` : ''}:`);
+      listItems = summonDrives.map((d) => fmtCheckDriveTime(d.startTime));
     } else {
       msgs.push('Evidence was added, but none of the candidates matched a summon signature (hazard bookends or Self Driving, with no pedal input).');
     }
-    showCheckResult('Check for Summon complete', msgs.join('\n'));
+    showCheckResult('Check for Summon complete', msgs.join('\n'), listItems);
   } catch (err) {
     // Surface failures that would otherwise appear as a no-op.
     showCheckResult('Check for Summon failed', String(err?.message ?? err));

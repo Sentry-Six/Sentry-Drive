@@ -2216,6 +2216,42 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   color: var(--text-muted);
 }
 
+/* Drive list under the result message — collapsed to a few rows until the
+   expander reveals the full list, which scrolls inside its own box. */
+.check-result-list {
+  width: 100%;
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px 0;
+}
+.check-result-list.expanded {
+  max-height: 32vh;
+  overflow-y: auto;
+}
+.check-result-item {
+  padding: 3px 12px;
+}
+.check-result-item + .check-result-item {
+  border-top: 1px solid var(--border);
+}
+.check-result-expand {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+.check-result-expand:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
 /* Check Drives menu options — stacked full-width cards inside the modal. */
 .check-drives-options {
   display: flex;
