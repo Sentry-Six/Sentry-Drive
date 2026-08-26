@@ -155,8 +155,13 @@ test('disk grouping hides imported drives overlapping SEI while preserving stabl
   assert.equal(result.groupedDriveCount, 4);
   assert.equal(result.totalDriveCount, 3);
   assert.equal(result.hiddenTessieCount, 1);
-  assert.equal(result.aggregates.totalDriveCount, 4);
+  assert.equal(result.aggregates.totalDriveCount, 3);
+  assert.equal(result.aggregates.importedDriveCount, 2);
   assert.equal(listed.total, 3);
+  assert.equal(
+    result.aggregates.totalDistanceMi,
+    listed.drives.reduce((sum, drive) => sum + (drive.distanceMi ?? 0), 0),
+  );
   assert.deepEqual(
     listed.drives.map((drive) => drive.id).sort((a, b) => a - b),
     [0, 2, 3],
@@ -215,6 +220,10 @@ test('summon drives count in totals but are excluded from FSD aggregates', async
   };
   const routes = [
     summonRoute,
+    route('Imported/2026-07-28_12-00-00-front.mp4', 39.2, {
+      source: 'tessie',
+      externalSignature: 'tessie:summon-overlap',
+    }),
     route('RecentClips/2026-07-28_13-00-00-front.mp4', 39.4),
   ];
   const fixture = makeIndex(routes);
@@ -226,6 +235,8 @@ test('summon drives count in totals but are excluded from FSD aggregates', async
   const result = await groupIndexedDrives(fixture.index);
 
   const listed = fixture.index.listDriveSummaries({ offset: 0, limit: 10 });
+  assert.equal(result.hiddenTessieCount, 1);
+  assert.equal(listed.total, 2);
   const summonDrive = listed.drives.find((d) => d.summon === true);
   const normalDrive = listed.drives.find((d) => !d.summon);
   assert.ok(summonDrive, 'summon drive must exist and be tagged');

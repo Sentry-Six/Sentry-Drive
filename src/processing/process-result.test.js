@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import processResult from './process-result.cjs';
 
-const { buildProcessedRoute } = processResult;
+const { buildProcessedRoute, snapshotProcessingState } = processResult;
 
 function extracted(relativePath, extra = {}) {
   return {
@@ -86,4 +86,16 @@ test('errors and clips without GPS are processed without routes', () => {
       parkedEventSkipped: false,
     },
   );
+});
+
+test('checkpoint snapshots cannot be changed by later worker results', () => {
+  const processedFiles = ['one.mp4'];
+  const routeMap = new Map([['one.mp4', { file: 'one.mp4' }]]);
+  const checkpoint = snapshotProcessingState(processedFiles, routeMap);
+
+  processedFiles.push('two.mp4');
+  routeMap.set('two.mp4', { file: 'two.mp4' });
+
+  assert.deepEqual(checkpoint.processedFiles, ['one.mp4']);
+  assert.deepEqual(checkpoint.routes, [{ file: 'one.mp4' }]);
 });
