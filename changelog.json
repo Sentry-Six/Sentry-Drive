@@ -7,6 +7,10 @@
       "changes": [
         {
           "type": "feature",
+          "description": "Drive replay can now smoothly keep the map centered on the moving marker and automatically zoom to street level. Turn Follow on from the replay bar; dragging the map releases the camera immediately."
+        },
+        {
+          "type": "feature",
           "description": "A new Charging tab turns the charging data already in your drive file into a location history. Each site is a map pill showing how many times you've charged there, lightning bolts for the site's speed, and a house for home charging — red for Tesla Superchargers, green for everything else."
         },
         {

@@ -48,7 +48,14 @@ let replayPlaying = false;
 let replayIdx = 0;
 let replayDrive = null;
 let replaySpeed = 1;
+let replayFollowing = false;
+let replayFollowFrame = null;
+let replayFollowTarget = null;
+let replayRenderedLngLat = null;
+let replayFollowZoomFrame = null;
 const REPLAY_BASE_MS = 100;
+const REPLAY_FOLLOW_MIN_ZOOM = 17;
+const REPLAY_FOLLOW_ZOOM_MS = 450;
 
 // Shared calculation constants keep display and processing conversions aligned.
 const { MI_TO_KM, M_PER_MILE, MPS_TO_MPH, geodesicM } = window.driveCalc;
@@ -458,6 +465,14 @@ function initMap() {
     if (el) el.style.transition = 'none';
   });
   map.on('moveend', () => { mapInteracting = false; });
+  map.on('zoomstart', (e) => {
+    // A wheel/pinch gesture overrides only the automatic zoom, not following.
+    if (e.originalEvent && replayFollowZoomFrame !== null) cancelReplayFollowZoom();
+  });
+  // A deliberate pan hands camera control back to the user.
+  map.on('dragstart', () => {
+    if (replayFollowing) setReplayFollowing(false, false);
+  });
 
   // Zone ring drags resize; other drags keep normal map panning.
   map.on('mousemove', (e) => {
@@ -1914,18 +1929,14 @@ function initViewDrivesTab() {
     showLoading('Removing drive…');
     try {
       const result = await window.electronAPI.removeDrive({ filePath: loadedFilePath, driveStartTime: drive.startTime });
-      if (!result.success) return;
-      const wasSelected = selectedDriveId === drive.id;
-      drives = drives.filter((d) => d.startTime !== drive.startTime);
-      if (wasSelected) deselectDrive();
-      // Paint the overlay before the synchronous re-render.
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      renderDriveList(drives);
-      // Rebuild map layers to remove the deleted route.
-      renderOverviewOnMap();
-      // Retain aggregate metadata across the local removal.
-      renderDriveStats(drives, lastDrivesMeta ?? { totalRoutes: 0, processedFileCount: 0 });
-      updateTessieButtonStates();
+      if (!result.success) {
+        alert(`Failed to remove drive:\n${result.error}`);
+        return;
+      }
+      logAction(`removed drive ${drive.startTime}`);
+      // A deletion changes aggregates, tag inventory, and page boundaries.
+      // Rebuild the index so every derived view moves to the same generation.
+      await reloadDrivesAfterWrite();
     } finally {
       hideLoading();
     }
@@ -1968,16 +1979,8 @@ function initViewDrivesTab() {
         driveStartTimes: targets.map((d) => d.startTime),
       });
       if (!result.success) { alert(`Failed to remove drives:\n${result.error}`); return; }
-      if (targets.some((d) => d.id === selectedDriveId)) deselectDrive();
-      const removed = new Set(targets.map((d) => d.startTime));
-      drives = drives.filter((d) => !removed.has(d.startTime));
       logAction(`removed ${targets.length} drive(s) via bulk remove`);
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      renderDriveList(drives);
-      renderOverviewOnMap();
-      // Retain aggregate metadata across the local removal.
-      renderDriveStats(drives, lastDrivesMeta ?? { totalRoutes: 0, processedFileCount: 0 });
-      updateTessieButtonStates();
+      await reloadDrivesAfterWrite();
     } finally {
       hideLoading();
     }
@@ -2607,7 +2610,7 @@ const SOURCE_LABELS = { tessie: 'Tessie', teslascope: 'Teslascope' };
 
 function updateTessieButtonStates() {
   const hasFile = !!loadedFilePath;
-  const hasImported = drives.some((d) => isImportedSource(d.source));
+  const hasImported = window.DrivePageModel.libraryHasImportedDrives(drives, lastDrivesMeta);
   document.getElementById('btn-import-tessie').disabled = !hasFile;
   document.getElementById('btn-remove-tessie').disabled = !hasFile || !hasImported;
 }
@@ -4607,6 +4610,7 @@ function drawSelectedDrive(drive) {
   replayMarker = new maplibregl.Marker({ element: wrap, anchor: 'center' })
     .setLngLat([latLngs[0][1], latLngs[0][0]])
     .addTo(map);
+  replayRenderedLngLat = [latLngs[0][1], latLngs[0][0]];
   selectedMarkers.push(replayMarker);
 
   initReplay(drive);
@@ -4624,6 +4628,7 @@ function initReplay(drive) {
   replayIdx = 0;
   replaySpeed = 1;
   replayPlaying = false;
+  setReplayFollowing(false, false);
   // Match the marker's confident initial heading.
   replayCurrentBearing = computeInitBearing(drive.points, drive.gearStates);
 
@@ -4652,6 +4657,10 @@ function initReplay(drive) {
   };
 
   document.getElementById('btn-replay-play').onclick = toggleReplay;
+  document.getElementById('btn-replay-follow').onclick = () => {
+    setReplayFollowing(!replayFollowing);
+    logAction(`replay marker follow ${replayFollowing ? 'enabled' : 'disabled'}`);
+  };
   document.getElementById('btn-replay-speed').onclick = (e) => { e.stopPropagation(); toggleSpeedMenu(); };
   document.querySelectorAll('.replay-speed-item').forEach((item) => {
     item.onclick = (e) => { e.stopPropagation(); setReplaySpeed(Number(item.dataset.speed)); closeSpeedMenu(); };
@@ -4698,6 +4707,7 @@ function startReplay() {
 }
 
 function stopReplay() {
+  cancelReplayFollowAnimation(true);
   replayPlaying = false;
   if (replayInterval) { clearInterval(replayInterval); replayInterval = null; }
   document.getElementById('replay-play-icon').textContent = 'play_arrow';
@@ -4739,6 +4749,130 @@ function closeSpeedMenu() {
   }
 }
 
+// Interpolate longitude across the dateline by taking the shorter direction.
+function interpolateReplayLngLat(from, to, progress) {
+  const t = Math.max(0, Math.min(1, progress));
+  let lngDelta = to[0] - from[0];
+  if (lngDelta > 180) lngDelta -= 360;
+  else if (lngDelta < -180) lngDelta += 360;
+  let lng = from[0] + lngDelta * t;
+  if (lng > 180) lng -= 360;
+  else if (lng < -180) lng += 360;
+  return [lng, from[1] + (to[1] - from[1]) * t];
+}
+
+function replayPointLngLat(point) {
+  if (!Array.isArray(point)) return null;
+  const lat = Number(point[0]);
+  const lng = Number(point[1]);
+  return Number.isFinite(lat) && Number.isFinite(lng) ? [lng, lat] : null;
+}
+
+function interpolateReplayZoom(from, to, progress) {
+  const t = Math.max(0, Math.min(1, progress));
+  const eased = 1 - Math.pow(1 - t, 3);
+  return from + (to - from) * eased;
+}
+
+function cancelReplayFollowZoom() {
+  if (replayFollowZoomFrame !== null) cancelAnimationFrame(replayFollowZoomFrame);
+  replayFollowZoomFrame = null;
+}
+
+function startReplayFollowZoom() {
+  cancelReplayFollowZoom();
+  if (!mapReady || !map) return;
+  const from = map.getZoom();
+  const to = Math.max(from, REPLAY_FOLLOW_MIN_ZOOM);
+  if (to - from < 0.001) return;
+  const startedAt = performance.now();
+
+  const frame = (now) => {
+    if (!replayFollowing) { replayFollowZoomFrame = null; return; }
+    const progress = (now - startedAt) / REPLAY_FOLLOW_ZOOM_MS;
+    const center = replayRenderedLngLat ?? map.getCenter();
+    map.jumpTo({ center, zoom: interpolateReplayZoom(from, to, progress) });
+    if (progress < 1) replayFollowZoomFrame = requestAnimationFrame(frame);
+    else replayFollowZoomFrame = null;
+  };
+  replayFollowZoomFrame = requestAnimationFrame(frame);
+}
+
+function followReplayPoint(point) {
+  const lngLat = replayPointLngLat(point);
+  if (!replayFollowing || !mapReady || !map || !lngLat) return;
+  map.setCenter(lngLat);
+}
+
+function cancelReplayFollowAnimation(finish = false) {
+  if (replayFollowFrame !== null) cancelAnimationFrame(replayFollowFrame);
+  replayFollowFrame = null;
+  const target = replayFollowTarget;
+  replayFollowTarget = null;
+  if (finish && target) {
+    replayRenderedLngLat = target;
+    replayMarker?.setLngLat(target);
+    if (replayFollowing && mapReady && map) map.setCenter(target);
+  }
+  return target;
+}
+
+function animateReplayFollow(point) {
+  const target = replayPointLngLat(point);
+  if (!target || !replayMarker) return false;
+
+  cancelReplayFollowAnimation(false);
+  const current = replayMarker.getLngLat?.();
+  const from = replayRenderedLngLat ?? (current ? [current.lng, current.lat] : target);
+  const duration = Math.max(1, REPLAY_BASE_MS / replaySpeed);
+  const startedAt = performance.now();
+  replayFollowTarget = target;
+
+  const frame = (now) => {
+    const position = interpolateReplayLngLat(from, target, (now - startedAt) / duration);
+    replayRenderedLngLat = position;
+    replayMarker?.setLngLat(position);
+    if (replayFollowing && mapReady && map) map.setCenter(position);
+
+    if (now - startedAt < duration && replayFollowing && replayPlaying) {
+      replayFollowFrame = requestAnimationFrame(frame);
+    } else {
+      replayFollowFrame = null;
+      replayFollowTarget = null;
+    }
+  };
+  replayFollowFrame = requestAnimationFrame(frame);
+  return true;
+}
+
+function setReplayFollowing(enabled, centerNow = true) {
+  const next = Boolean(enabled);
+  const wasFollowing = replayFollowing;
+  const pendingTarget = next ? null : cancelReplayFollowAnimation(false);
+  if (!next) cancelReplayFollowZoom();
+  replayFollowing = next;
+  // When follow is released mid-segment, leave the marker at the replay's
+  // logical position while the camera stays wherever the user moved it.
+  if (pendingTarget && replayMarker) {
+    replayRenderedLngLat = pendingTarget;
+    replayMarker.setLngLat(pendingTarget);
+  }
+  const button = document.getElementById('btn-replay-follow');
+  if (button) {
+    const title = replayFollowing ? 'Stop following replay marker' : 'Follow replay marker';
+    button.classList.toggle('active', replayFollowing);
+    button.setAttribute('aria-pressed', String(replayFollowing));
+    button.setAttribute('aria-label', title);
+    button.title = title;
+    const icon = button.querySelector('.material-icons');
+    if (icon) icon.textContent = replayFollowing ? 'location_on' : 'my_location';
+  }
+  if (centerNow && replayFollowing && replayDrive) {
+    followReplayPoint(replayDrive.points?.[replayIdx]);
+  }
+  if (centerNow && replayFollowing && !wasFollowing) startReplayFollowZoom();
+}
+
 function updateReplayPosition(idx, snap = false) {
   if (!replayDrive) return;
   const pts = replayDrive.points;
@@ -4747,12 +4881,19 @@ function updateReplayPosition(idx, snap = false) {
   // Ease marker transforms only while MapLibre is not moving the map.
   if (replayMarker) {
     const el = replayMarker.getElement();
-    if (el && replayPlaying && !mapInteracting) {
+    if (el && replayPlaying && !mapInteracting && !replayFollowing) {
       el.style.transition = `transform ${REPLAY_BASE_MS / replaySpeed}ms linear`;
     } else if (el) {
       el.style.transition = 'none';
     }
-    replayMarker.setLngLat([pt[1], pt[0]]);
+    if (!(replayFollowing && replayPlaying && !snap && animateReplayFollow(pt))) {
+      cancelReplayFollowAnimation(false);
+      replayRenderedLngLat = [pt[1], pt[0]];
+      replayMarker.setLngLat(replayRenderedLngLat);
+      followReplayPoint(pt);
+    }
+  } else {
+    followReplayPoint(pt);
   }
 
   updateReplayTrail(idx);
@@ -5131,9 +5272,11 @@ function updateReplayData(idx) {
 
 function cleanupReplay() {
   stopReplay();
+  setReplayFollowing(false, false);
   closeSpeedMenu();
   replayDrive = null;
   replayMarker = null;
+  replayRenderedLngLat = null;
   replayTrailCtx = null;
   whenMapReady(() => map.getSource('selected-traveled').setData(EMPTY_FC));
   document.getElementById('replay-bar').classList.add('hidden');
@@ -5180,14 +5323,9 @@ function renderTagFilter() {
   });
 }
 
-function rebuildAllTagsFromDrives() {
-  const set = new Set();
-  for (const d of drives) for (const t of (d.tags ?? [])) set.add(t);
-  allTags = [...set].sort();
-}
-
 async function addTag(drive, tagName) {
   if (!loadedFilePath) return;
+  const previousAllTags = [...allTags];
   const tags = [...(drive.tags ?? [])];
   if (tags.includes(tagName)) return;
   tags.push(tagName);
@@ -5207,11 +5345,14 @@ async function addTag(drive, tagName) {
   const res = await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags });
   if (res && res.success === false) {
     drive.tags = (drive.tags ?? []).filter((t) => t !== tagName);
-    rebuildAllTagsFromDrives();
+    allTags = previousAllTags;
     renderTagFilter();
     renderDriveList(drives);
     if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
     alert(`Couldn't save tag: ${res.error || 'write failed'}`);
+  } else if (Array.isArray(res?.allTags)) {
+    allTags = res.allTags;
+    renderTagFilter();
   }
 }
 
@@ -5221,26 +5362,27 @@ async function removeTag(drive, tagName) {
   drive.tags = prev.filter((t) => t !== tagName);
   logAction(`tag removed: "${tagName}"`);
 
-  // Drop an active loader-side filter when its last matching tag is removed.
-  rebuildAllTagsFromDrives();
-  if (driveFilters.tag === tagName && !allTags.includes(tagName)) {
-    driveFilters.tag = '';
-    renderTagFilter();
-    applyDriveFilters();
-  } else {
-    renderTagFilter();
-    renderDriveList(drives);
-  }
+  // Keep the library-wide filter inventory until persistence returns the
+  // authoritative list; another page may still use this tag.
+  renderDriveList(drives);
   if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
 
   const res = await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags: drive.tags });
   if (res && res.success === false) {
     drive.tags = prev;
-    rebuildAllTagsFromDrives();
     renderTagFilter();
     renderDriveList(drives);
     if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
     alert(`Couldn't remove tag: ${res.error || 'write failed'}`);
+  } else if (Array.isArray(res?.allTags)) {
+    allTags = res.allTags;
+    if (driveFilters.tag === tagName) {
+      if (!allTags.includes(tagName)) driveFilters.tag = '';
+      renderTagFilter();
+      await applyDriveFilters();
+    } else {
+      renderTagFilter();
+    }
   }
 }
 

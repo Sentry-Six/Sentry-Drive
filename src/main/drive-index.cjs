@@ -238,12 +238,16 @@ class DriveIndex {
     // Preserve the synthetic Summon filter entry across user tag edits.
     const row = this.db.prepare('SELECT summary FROM drives WHERE start_time = ?')
       .get(String(startTime));
-    const isSummon = row ? Boolean(v8.deserialize(row.summary)?.summon) : false;
-    const filterTags = isSummon ? [...(tags ?? []), 'summon'] : tags;
-    this.db.prepare('UPDATE drives SET tags = ? WHERE start_time = ?')
-      .run(encodeTagSet(filterTags), String(startTime));
+    const nextTags = Array.isArray(tags) ? tags : [];
+    if (row) {
+      const summary = v8.deserialize(row.summary);
+      summary.tags = nextTags;
+      const filterTags = summary.summon ? [...nextTags, 'summon'] : nextTags;
+      this.db.prepare('UPDATE drives SET tags = ?, summary = ? WHERE start_time = ?')
+        .run(encodeTagSet(filterTags), v8.serialize(summary), String(startTime));
+    }
     const all = this.getDriveTags();
-    if (Array.isArray(tags) && tags.length > 0) all[startTime] = tags;
+    if (nextTags.length > 0) all[startTime] = nextTags;
     else delete all[startTime];
     this.setMeta('driveTags', all);
   }

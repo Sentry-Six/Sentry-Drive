@@ -193,10 +193,12 @@ test('setDriveTags keeps tag filtering truthful after an in-session edit', async
 
   index.setDriveTags('2026-07-15T09:30:00', ['Errand']);
   assert.equal(index.listDriveSummaries({ tag: 'errand' }).total, 1);
+  assert.deepEqual(index.listDriveSummaries({}).drives[0].tags, ['Errand']);
   assert.deepEqual(index.getDriveTags(), { '2026-07-15T09:30:00': ['Errand'] });
 
   index.setDriveTags('2026-07-15T09:30:00', []);
   assert.equal(index.listDriveSummaries({ tag: 'errand' }).total, 0);
+  assert.deepEqual(index.listDriveSummaries({}).drives[0].tags, []);
   assert.deepEqual(index.getDriveTags(), {});
 });
 
@@ -228,6 +230,7 @@ test('summon drives filter via the synthetic tag and survive tag edits', async (
   index.setDriveTags('2026-07-15T20:49:56', ['Errand']);
   assert.equal(index.listDriveSummaries({ tag: 'summon' }).total, 1);
   assert.equal(index.listDriveSummaries({ tag: 'Errand' }).total, 1);
+  assert.deepEqual(index.listDriveSummaries({ tag: 'summon' }).drives[0].tags, ['Errand']);
 
   index.setDriveTags('2026-07-15T21:00:00', []);
   assert.equal(index.listDriveSummaries({ tag: 'summon' }).total, 1);

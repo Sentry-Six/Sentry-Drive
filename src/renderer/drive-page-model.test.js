@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import pageModelModule from './drive-page-model.cjs';
 
-const { createDrivePageModel } = pageModelModule;
+const { createDrivePageModel, libraryHasImportedDrives } = pageModelModule;
 
 test('page model retains one bounded page and navigates with fixed offsets', async () => {
   const calls = [];
@@ -48,4 +48,15 @@ test('page model ignores a stale response superseded by a newer load', async () 
   await first;
 
   assert.deepEqual(model.current().drives, [{ id: 'new' }]);
+});
+
+test('library import state uses aggregates when the current page has only SEI drives', () => {
+  const currentPage = [{ id: 1, source: 'sei' }];
+  assert.equal(libraryHasImportedDrives(currentPage, {
+    aggregates: { importedDriveCount: 2 },
+  }), true);
+  assert.equal(libraryHasImportedDrives(currentPage, {
+    aggregates: { importedDriveCount: 0 },
+  }), false);
+  assert.equal(libraryHasImportedDrives([{ id: 2, source: 'tessie' }], null), true);
 });
