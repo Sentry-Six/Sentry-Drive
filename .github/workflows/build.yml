@@ -73,18 +73,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.exe dist/latest.yml --clobber
+        run: bash scripts/upload-release-assets.sh "$GITHUB_REF_NAME" dist/*.exe dist/latest.yml
 
       - name: Upload assets (macOS)
         if: github.event_name == 'release' && runner.os == 'macOS'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.dmg dist/latest-mac.yml --clobber
+        run: bash scripts/upload-release-assets.sh "$GITHUB_REF_NAME" dist/*.dmg dist/latest-mac.yml
 
       - name: Upload assets (Linux)
         if: github.event_name == 'release' && runner.os == 'Linux'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.AppImage dist/*.deb dist/latest-linux.yml --clobber
+        run: bash scripts/upload-release-assets.sh "$GITHUB_REF_NAME" dist/*.AppImage dist/*.deb dist/latest-linux.yml
