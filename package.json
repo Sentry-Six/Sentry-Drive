@@ -79,7 +79,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
-    "stream-chain": "^4.2.5",
-    "stream-json": "^3.5.0"
+    "stream-chain": "^4.2.6",
+    "stream-json": "^3.7.0"
   }
 }
