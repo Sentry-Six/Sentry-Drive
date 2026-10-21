@@ -1,6 +1,17 @@
 {
   "versions": [
     {
+      "version": "1.5.1",
+      "date": "2026-10-21",
+      "title": "Certificate Security Update",
+      "changes": [
+        {
+          "type": "fix",
+          "description": "Updated the desktop runtime to reject the compromised eMudhra certificate chains when connecting to online services."
+        }
+      ]
+    },
+    {
       "version": "1.5.0",
       "date": "2026-08-21",
       "title": "Charging History",

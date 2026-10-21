@@ -1,6 +1,7 @@
 name: Build and Release
 
 on:
+  workflow_dispatch:
   release:
     # published fires for both direct publishes and draft-then-publish;
     # created never fires when a saved draft is later published.
@@ -28,6 +29,7 @@ jobs:
           cache: npm
 
       - name: Sync package.json to tag (runner only)
+        if: github.event_name == 'release'
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -52,22 +54,36 @@ jobs:
         if: runner.os == 'Linux'
         run: npx electron-builder --linux --publish never
 
+      - name: Retain release candidates
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ runner.os }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.blockmap
+            dist/latest*.yml
+
       - name: Upload assets (Windows)
-        if: runner.os == 'Windows'
+        if: github.event_name == 'release' && runner.os == 'Windows'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: gh release upload "${{ github.event.release.tag_name }}" dist/*.exe dist/latest.yml --clobber
 
       - name: Upload assets (macOS)
-        if: runner.os == 'macOS'
+        if: github.event_name == 'release' && runner.os == 'macOS'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: gh release upload "${{ github.event.release.tag_name }}" dist/*.dmg dist/latest-mac.yml --clobber
 
       - name: Upload assets (Linux)
-        if: runner.os == 'Linux'
+        if: github.event_name == 'release' && runner.os == 'Linux'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
