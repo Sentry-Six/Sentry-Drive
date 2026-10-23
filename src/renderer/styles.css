@@ -1503,6 +1503,34 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .replay-play-btn .material-icons { font-size: 20px; }
 .replay-play-btn:hover { background: rgba(52, 211, 153, 0.3); }
 
+.replay-follow-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.replay-follow-btn .material-icons { font-size: 17px; }
+.replay-follow-btn:hover,
+.replay-follow-btn:focus-visible {
+  background: rgba(52, 211, 153, 0.1);
+  color: var(--blue-light);
+}
+.replay-follow-btn.active {
+  border-color: rgba(52, 211, 153, 0.55);
+  background: rgba(52, 211, 153, 0.2);
+  color: var(--blue-light);
+}
+
 .replay-time {
   font-size: 10px;
   font-family: var(--font-mono);

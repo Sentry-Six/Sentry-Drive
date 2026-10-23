@@ -41,4 +41,14 @@ function buildProcessedRoute(result) {
   };
 }
 
-module.exports = Object.freeze({ buildProcessedRoute });
+// Checkpoints are written while workers continue producing results. Snapshot
+// both collections together so a later processedFiles push cannot get ahead of
+// the fixed route list and permanently mark an unwritten route as processed.
+function snapshotProcessingState(processedFiles, routeMap) {
+  return {
+    processedFiles: [...processedFiles],
+    routes: Array.from(routeMap.values()),
+  };
+}
+
+module.exports = Object.freeze({ buildProcessedRoute, snapshotProcessingState });
