@@ -17,6 +17,8 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      HAS_MAC_SIGNING: ${{ secrets.MAC_CERTIFICATE_P12 != '' && secrets.APPLE_API_KEY != '' }}
 
     steps:
       - name: Checkout code
@@ -46,9 +48,58 @@ jobs:
         if: runner.os == 'Windows'
         run: npx electron-builder --win --publish never
 
+      - name: Set up macOS signing and notarization
+        if: runner.os == 'macOS' && env.HAS_MAC_SIGNING == 'true'
+        env:
+          MAC_CERTIFICATE_P12: ${{ secrets.MAC_CERTIFICATE_P12 }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_B64: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        shell: bash
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$MAC_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN_PATH" -P "$MAC_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productsign
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          mkdir -p "$HOME/private_keys"
+          echo "$APPLE_API_KEY_B64" | base64 --decode > "$HOME/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8"
+          echo "APPLE_API_KEY=$HOME/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8" >> "$GITHUB_ENV"
+          echo "MAC_SIGNING=1" >> "$GITHUB_ENV"
+
+      # Signed and notarized when the signing secrets exist; otherwise an
+      # unsigned build, so forks and secret-less runs still produce a DMG.
       - name: Build (macOS)
         if: runner.os == 'macOS'
-        run: npx electron-builder --mac --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          if [ "${MAC_SIGNING:-}" = 1 ]; then
+            npx electron-builder --mac --publish never
+          else
+            echo "::warning::macOS signing secrets are not set; building an unsigned app."
+            npx electron-builder --mac --publish never -c.mac.identity=null -c.mac.notarize=false
+          fi
+
+      - name: Verify macOS signature and notarization
+        if: runner.os == 'macOS' && env.MAC_SIGNING == '1'
+        shell: bash
+        run: |
+          for app in dist/mac*/*.app; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute --verbose "$app"
+            xcrun stapler validate "$app"
+          done
 
       - name: Build (Linux)
         if: runner.os == 'Linux'
@@ -63,6 +114,7 @@ jobs:
           path: |
             dist/*.exe
             dist/*.dmg
+            dist/*.zip
             dist/*.AppImage
             dist/*.deb
             dist/*.blockmap
@@ -80,7 +132,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
-        run: bash scripts/upload-release-assets.sh "$GITHUB_REF_NAME" dist/*.dmg dist/latest-mac.yml
+        run: bash scripts/upload-release-assets.sh "$GITHUB_REF_NAME" dist/*.dmg dist/*.zip dist/*.zip.blockmap dist/latest-mac.yml
 
       - name: Upload assets (Linux)
         if: github.event_name == 'release' && runner.os == 'Linux'
