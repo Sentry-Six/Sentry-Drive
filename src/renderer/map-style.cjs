@@ -1,25 +1,28 @@
 'use strict';
 
-// Basemap styles come from the public VersaTiles server (OpenStreetMap vector
-// tiles). This module only composes style
-// JSON so the renderer can keep its own route layers between the basemap and
-// the labels; it does no network work and is unit tested under Node.
+// Basemap styles come from the SentryUSB VersaTiles server (OpenStreetMap
+// vector tiles). This module only composes style JSON so the renderer can
+// keep its own route layers between the basemap and the labels; it does no
+// network work and is unit tested under Node.
 (function exposeMapStyle(root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.MapStyle = api;
 }(typeof window !== 'undefined' ? window : globalThis, () => {
-  const VERSATILES_ORIGIN = 'https://tiles.versatiles.org';
+  // Single origin for styles, tiles, glyphs and sprites. The CSP in
+  // index.html names the same origin.
+  const TILE_ORIGIN = 'https://tiles.sentryusb.com';
   const STYLE_URLS = {
-    Light: `${VERSATILES_ORIGIN}/assets/styles/colorful/style.json`,
-    Dark: `${VERSATILES_ORIGIN}/assets/styles/colorful-dark/style.json`,
+    Light: `${TILE_ORIGIN}/assets/styles/colorful/style.json`,
+    Dark: `${TILE_ORIGIN}/assets/styles/colorful-dark/style.json`,
   };
   const LAYER_NAMES = ['Light', 'Dark'];
   const DEFAULT_LAYER = 'Light';
-  // Saved names from older releases. Satellite was Google imagery; the free
-  // VersaTiles imagery is global only to about z12, too coarse for drives.
+  // Saved layer names from older releases map onto current layers.
   const LAYER_RENAMES = { 'Google Maps': 'Light', 'Google Dark': 'Dark', Satellite: 'Light' };
   const VERSATILES_ATTRIBUTION = '<a href="https://versatiles.org/">VersaTiles</a>';
+  // Credit for the OpenStreetMap tileset, applied to every style source.
+  const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
   // Painted when the style cannot be fetched (offline) so routes still draw.
   const FALLBACK_BACKGROUND = { Light: '#f8f4f0', Dark: '#282725' };
 
@@ -76,7 +79,8 @@
         version: 8,
         ...(baseStyle.glyphs ? { glyphs: baseStyle.glyphs } : {}),
         ...(baseStyle.sprite ? { sprite: baseStyle.sprite } : {}),
-        sources: { ...baseStyle.sources },
+        sources: Object.fromEntries(Object.entries(baseStyle.sources || {})
+          .map(([id, source]) => [id, { ...source, attribution: OSM_ATTRIBUTION }])),
         layers: [...baseLayers, ...labelLayers],
       },
       labelLayerIds: labelLayers.map((l) => l.id),
@@ -112,9 +116,10 @@
   return {
     DEFAULT_LAYER,
     LAYER_NAMES,
+    OSM_ATTRIBUTION,
     STYLE_URLS,
+    TILE_ORIGIN,
     VERSATILES_ATTRIBUTION,
-    VERSATILES_ORIGIN,
     composeBasemap,
     fallbackStyle,
     labelGroup,

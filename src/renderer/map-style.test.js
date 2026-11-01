@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import mapStyle from './map-style.cjs';
 
 const {
+  OSM_ATTRIBUTION,
   STYLE_URLS,
+  TILE_ORIGIN,
   composeBasemap,
   fallbackStyle,
   labelGroup,
@@ -13,9 +16,9 @@ const {
 
 const vectorStyle = (bg) => ({
   version: 8,
-  glyphs: 'https://tiles.versatiles.org/assets/glyphs/{fontstack}/{range}.pbf',
-  sprite: [{ id: 'base', url: 'https://tiles.versatiles.org/assets/sprites/base' }],
-  sources: { 'versatiles-shortbread': { type: 'vector', tiles: ['https://tiles.versatiles.org/tiles/osm/{z}/{x}/{y}'] } },
+  glyphs: 'https://tiles.sentryusb.com/assets/glyphs/{fontstack}/{range}.pbf',
+  sprite: [{ id: 'base', url: 'https://tiles.sentryusb.com/assets/sprites/base' }],
+  sources: { 'versatiles-shortbread': { type: 'vector', tiles: ['https://tiles.sentryusb.com/tiles/osm/{z}/{x}/{y}'], attribution: 'OSM · ESA WorldCover' } },
   layers: [
     { id: 'background', type: 'background', paint: { 'background-color': bg } },
     { id: 'street-primary', type: 'line', source: 'versatiles-shortbread' },
@@ -26,10 +29,11 @@ const vectorStyle = (bg) => ({
   ],
 });
 
-test('only VersaTiles styles are used and Google-era names migrate', () => {
+test('styles come from the SentryUSB map server and old layer names migrate', () => {
+  assert.equal(TILE_ORIGIN, 'https://tiles.sentryusb.com');
   assert.deepEqual(Object.keys(STYLE_URLS), ['Light', 'Dark']);
   for (const url of Object.values(STYLE_URLS)) {
-    assert.equal(new URL(url).origin, 'https://tiles.versatiles.org');
+    assert.equal(new URL(url).origin, TILE_ORIGIN);
   }
   assert.equal(normalizeLayerName('Google Maps'), 'Light');
   assert.equal(normalizeLayerName('Google Dark'), 'Dark');
@@ -62,6 +66,16 @@ test('composed basemap moves labels after base layers and applies visibility', (
   assert.deepEqual(vis, { 'poi-shop': 'none', 'label-street-primary': 'none', 'label-place-city': 'visible' });
   assert.equal(style.layers.at(-1).layout['text-field'], '{name}');
   assert.ok(style.glyphs);
+  assert.equal(style.sources['versatiles-shortbread'].attribution, OSM_ATTRIBUTION);
+});
+
+test('the renderer CSP allows exactly the tile origin for map requests', () => {
+  const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+  const csp = html.match(/Content-Security-Policy" content="([^"]+)"/)[1];
+  const directive = (name) => csp.match(new RegExp(`${name} ([^;]+);`))[1].trim().split(/\s+/);
+  assert.deepEqual(directive('connect-src'), ["'self'", TILE_ORIGIN]);
+  assert.ok(directive('img-src').includes(TILE_ORIGIN));
+  assert.doesNotMatch(csp, /google|openstreetmap|cartocdn/);
 });
 
 test('offline fallback keeps a plain background without remote resources', () => {

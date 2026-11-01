@@ -3,17 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- CSP permits VersaTiles basemap styles, tiles, glyphs and sprites, and
-       MapLibre's blob worker; other scripts, styles, and fonts are bundled
-       locally. -->
+  <!-- CSP permits basemap styles, tiles, glyphs and sprites from the Sentry
+       Six map server (MapStyle.TILE_ORIGIN) and MapLibre's blob worker;
+       other scripts, styles, and fonts are bundled locally. -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     script-src 'self';
     style-src 'self' 'unsafe-inline';
     font-src 'self';
-    img-src 'self' data: blob: https://tiles.versatiles.org;
+    img-src 'self' data: blob: https://tiles.sentryusb.com;
     worker-src blob:;
-    connect-src 'self' https://tiles.versatiles.org;
+    connect-src 'self' https://tiles.sentryusb.com;
   " />
   <title>Sentry Drive</title>
   <link rel="stylesheet" href="../../assets/vendor/fonts/fonts.css" />
