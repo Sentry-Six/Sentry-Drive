@@ -75,11 +75,11 @@
   },
   "devDependencies": {
     "electron": "43.8.1",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.18.0"
   },
   "dependencies": {
-    "electron-updater": "^6.8.9",
-    "stream-chain": "^4.2.5",
-    "stream-json": "^3.7.0"
+    "electron-updater": "^6.8.11",
+    "stream-chain": "^4.4.1",
+    "stream-json": "^3.8.0"
   }
 }
