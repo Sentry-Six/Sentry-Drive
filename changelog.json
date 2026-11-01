@@ -1,6 +1,21 @@
 {
   "versions": [
     {
+      "version": "1.6.0",
+      "date": "2026-11-01",
+      "title": "New Maps",
+      "changes": [
+        {
+          "type": "feature",
+          "description": "New maps: drives now show on maps from our own server, with clean light and dark styles. They replace Google Maps, so satellite view is gone."
+        },
+        {
+          "type": "improvement",
+          "description": "The Mac version is now signed and notarized by Apple, so it opens without security warnings and can update itself."
+        }
+      ]
+    },
+    {
       "version": "1.5.1",
       "date": "2026-10-21",
       "title": "Certificate Security Update",
