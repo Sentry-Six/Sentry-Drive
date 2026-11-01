@@ -19,7 +19,7 @@ function initChargingTab() {
     window.electronAPI.openExternal('https://www.openstreetmap.org/copyright');
   });
   // Cluster pill IDs are available only after clustering.
-  map.on('styleimagemissing', (event) => addChargingPillImage(event.id));
+  map.setMissingStyleImageResolver((id) => addChargingPillImage(id));
   // Load both faces before the first Home pill can cache a fallback.
   document.fonts?.load?.(`24px ${ICON_FONT}`).catch(() => {});
   ensureFilledIconFont();

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- CSP permits basemap styles, tiles, glyphs and sprites from the Sentry
-       Six map server (MapStyle.TILE_ORIGIN) and MapLibre's blob worker;
+  <!-- CSP permits basemap styles, tiles, glyphs and sprites from the
+       SentryUSB map server (MapStyle.TILE_ORIGIN); MapLibre's worker and all
        other scripts, styles, and fonts are bundled locally. -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
@@ -12,7 +12,7 @@
     style-src 'self' 'unsafe-inline';
     font-src 'self';
     img-src 'self' data: blob: https://tiles.sentryusb.com;
-    worker-src blob:;
+    worker-src 'self';
     connect-src 'self' https://tiles.sentryusb.com;
   " />
   <title>Sentry Drive</title>
@@ -806,7 +806,7 @@
     </div>
   </div>
 
-  <script src="../../assets/vendor/maplibre/maplibre-gl.js"></script>
+  <script type="module" src="maplibre-global.mjs"></script>
   <script src="../../assets/vendor/iro.min.js"></script>
   <script src="drive-page-model.cjs"></script>
   <script src="charging-view.cjs"></script>
