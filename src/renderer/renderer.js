@@ -228,7 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ─── Map ──────────────────────────────────────────────────────────────────────
-// MapLibre renders Google raster tiles and GPU-backed GeoJSON routes.
+// MapLibre renders VersaTiles basemaps and GPU-backed GeoJSON routes.
 const EMPTY_FC = { type: 'FeatureCollection', features: [] };
 
 // Piecewise stops implement max(2, base * zoom / 10).
@@ -245,104 +245,82 @@ function whenMapReady(fn) {
 }
 
 function initMap() {
-  // Base tiles omit labels; an overlay restores selected label classes.
+  // Basemap labels sit above the routes; settings toggle label classes.
   showMapLabels = localStorage.getItem('showMapLabels') !== 'false';
   // Unset road-label preferences inherit the city-label preference.
   const savedRoadLabels = localStorage.getItem('showRoadLabels');
   showRoadLabels = savedRoadLabels != null ? savedRoadLabels !== 'false' : showMapLabels;
-  // Night rules explicitly set highway fill because high zoom ignores generic geometry.
-  const GMAPS_NIGHT_RULES = 's.e%3Ag%7Cp.c%3A%23242f3e,s.e%3Al.t.f%7Cp.c%3A%23ffffff,s.e%3Al.t.s%7Cp.c%3A%23242f3e,s.t%3A37%7Cs.e%3Ag%7Cp.c%3A%23263c3f,s.t%3A81%7Cs.e%3Ag%7Cp.c%3A%232b3645,s.t%3A6%7Cs.e%3Ag%7Cp.c%3A%2317263c,s.t%3A3%7Cs.e%3Ag%7Cp.c%3A%2338414e,s.t%3A3%7Cs.e%3Ag.s%7Cp.c%3A%23212a37,s.t%3A49%7Cs.e%3Ag%7Cp.c%3A%235f6b7c,s.t%3A49%7Cs.e%3Ag.f%7Cp.c%3A%235f6b7c,s.t%3A49%7Cs.e%3Ag.s%7Cp.c%3A%232a3340,s.t%3A4%7Cs.e%3Ag%7Cp.c%3A%232f3948';
-  // Restore administrative and road labels independently.
-  const gmapsLabelRules = () => {
-    const rules = ['s.e%3Al%7Cp.v%3Aoff'];
-    if (showMapLabels) rules.push('s.t%3A1%7Cs.e%3Al%7Cp.v%3Aon');
-    if (showRoadLabels) rules.push('s.t%3A3%7Cs.e%3Al%7Cp.v%3Aon', 's.t%3A49%7Cs.e%3Al%7Cp.v%3Aon');
-    return rules.join(',');
-  };
-  // The transparent label overlay stays above dense route lines.
-  const ALL_LABELS_OFF = 's.e%3Al%7Cp.v%3Aoff';
-  const gmapsUrls = () => ({
-    'Dark': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${GMAPS_NIGHT_RULES},${ALL_LABELS_OFF}`,
-    'Light': `https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&apistyle=${ALL_LABELS_OFF}`,
-    'Satellite': `https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}`,
-  });
-  // Dark mode uses white overlay labels with a dark halo.
-  const NIGHT_LABEL_TEXT = 's.e%3Al.t.f%7Cp.c%3A%23ffffff,s.e%3Al.t.s%7Cp.c%3A%23242f3e';
-  const gmapsLabelOverlayUrl = () => {
-    const rules = [];
-    if (currentBaseLayer === 'Dark') rules.push(NIGHT_LABEL_TEXT);
-    rules.push('s.e%3Ag%7Cp.v%3Aoff', gmapsLabelRules());
-    return `https://mt1.google.com/vt/lyrs=h&x={x}&y={y}&z={z}&apistyle=${rules.join(',')}`;
-  };
+  const MapStyle = window.MapStyle;
+  const LAYER_NAMES = MapStyle.LAYER_NAMES;
   // Preserve layer choices saved under legacy names.
-  const LAYER_RENAMES = { 'Google Maps': 'Light', 'Google Dark': 'Dark' };
-  let savedLayer = localStorage.getItem('mapLayer');
-  if (LAYER_RENAMES[savedLayer]) {
-    savedLayer = LAYER_RENAMES[savedLayer];
-    localStorage.setItem('mapLayer', savedLayer);
-  }
-  const LAYER_NAMES = ['Light', 'Dark', 'Satellite'];
-  let currentBaseLayer = LAYER_NAMES.includes(savedLayer) ? savedLayer : 'Light';
+  const savedLayer = localStorage.getItem('mapLayer');
+  let currentBaseLayer = MapStyle.normalizeLayerName(savedLayer);
+  if (savedLayer != null && savedLayer !== currentBaseLayer) localStorage.setItem('mapLayer', currentBaseLayer);
 
   map = new maplibregl.Map({
     container: 'map',
     center: [10.0, 50.0], // [longitude, latitude]
     zoom: 4,
     maxZoom: 20,
-    attributionControl: { compact: false },
+    attributionControl: { compact: false, customAttribution: MapStyle.VERSATILES_ATTRIBUTION },
     // Keep the route view flat.
     dragRotate: false,
     pitchWithRotate: false,
     touchPitch: false,
-    style: {
-      version: 8,
-      sources: {
-        basemap: {
-          type: 'raster',
-          tiles: [gmapsUrls()[currentBaseLayer]],
-          tileSize: 256,
-          maxzoom: 20,
-          attribution: '&copy; Google',
-        },
-        'labels-overlay': {
-          type: 'raster',
-          tiles: [gmapsLabelOverlayUrl()],
-          tileSize: 256,
-          maxzoom: 20,
-        },
-      },
-      // The label layer is inserted after route layers load.
-      layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }],
-    },
+    // A plain background until the VersaTiles style arrives (or while
+    // offline), so route layers can load immediately.
+    style: MapStyle.fallbackStyle(currentBaseLayer),
   });
   map.touchZoomRotate.disableRotation();
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
 
-  // Swap tiles in place when supported.
-  const setRasterTiles = (sourceId, url, beforeLayerId) => whenMapReady(() => {
-    const src = map.getSource(sourceId);
-    if (src && typeof src.setTiles === 'function') {
-      src.setTiles([url]);
-      return;
+  // Style JSON is fetched once per URL; failures are retried on next use.
+  const styleRequests = new Map();
+  const fetchStyle = (url) => {
+    if (!styleRequests.has(url)) {
+      const request = fetch(url, { signal: AbortSignal.timeout(15000) })
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .catch((err) => { styleRequests.delete(url); throw err; });
+      styleRequests.set(url, request);
     }
-    // Older MapLibre builds require rebuilding the raster source.
-    if (map.getLayer(sourceId)) map.removeLayer(sourceId);
-    if (src) map.removeSource(sourceId);
-    map.addSource(sourceId, {
-      type: 'raster', tiles: [url], tileSize: 256, maxzoom: 20,
-      ...(sourceId === 'basemap' ? { attribution: '&copy; Google' } : {}),
-    });
-    // Use the anchor only when it exists.
-    const before = beforeLayerId && map.getLayer(beforeLayerId) ? beforeLayerId : undefined;
-    map.addLayer({ id: sourceId, type: 'raster', source: sourceId }, before);
-  });
-  // Preserve basemap → routes → zones → labels → charging paint order.
-  const applyMapTiles = () => {
-    setRasterTiles('basemap', gmapsUrls()[currentBaseLayer], 'overview-dim');
-    setRasterTiles('labels-overlay', gmapsLabelOverlayUrl(), 'charging-site-pills');
+    return styleRequests.get(url);
   };
+  let currentBasemap = null;
+  let basemapOffline = false;
+  let basemapRequest = 0;
+  const APP_SOURCE_IDS = ['overview', 'selected-route', 'selected-traveled', 'privacy-zones', 'charging-sites'];
+  // Swap the basemap under the app's own sources and layers.
+  const applyBasemap = async () => {
+    const request = ++basemapRequest;
+    const name = currentBaseLayer;
+    let basemap;
+    try {
+      const base = await fetchStyle(MapStyle.STYLE_URLS[name]);
+      basemap = MapStyle.composeBasemap(name, base, { showMapLabels, showRoadLabels });
+      basemapOffline = false;
+    } catch (err) {
+      console.warn('Basemap unavailable; showing routes without map tiles:', err.message);
+      basemap = MapStyle.composeBasemap(name, null);
+      basemapOffline = true;
+    }
+    whenMapReady(() => {
+      if (request !== basemapRequest) return;
+      currentBasemap = basemap;
+      map.setStyle(MapStyle.mergeAppLayers(basemap, map.getStyle(), APP_SOURCE_IDS, CHARGING_MAP_LAYER_IDS));
+    });
+  };
+  window.addEventListener('online', () => { if (basemapOffline) applyBasemap(); });
 
-  applyMapLabelsSetting = applyMapTiles;
+  applyMapLabelsSetting = () => whenMapReady(() => {
+    for (const id of currentBasemap?.labelLayerIds || []) {
+      const group = MapStyle.labelGroup(id);
+      const visible = group === 'place' ? showMapLabels : group === 'road' ? showRoadLabels : false;
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+    }
+  });
 
   // CSS-driven base-layer switcher.
   const layersCtrl = document.createElement('div');
@@ -362,7 +340,7 @@ function initMap() {
       if (!input.checked) return;
       currentBaseLayer = name;
       localStorage.setItem('mapLayer', name);
-      applyMapTiles();
+      applyBasemap();
     });
     const span = document.createElement('span');
     span.textContent = name;
@@ -431,14 +409,13 @@ function initMap() {
       id: 'privacy-zones-line', type: 'line', source: 'privacy-zones',
       paint: { 'line-color': '#f59e0b', 'line-width': 2, 'line-dasharray': [2, 1.5], 'line-opacity': 0.8 },
     });
-    // Transparent city/street labels above route lines.
-    map.addLayer({ id: 'labels-overlay', type: 'raster', source: 'labels-overlay' });
-    // Interactive charging pills must paint above label tiles.
+    // Interactive charging pills paint above basemap labels.
     for (const layer of window.ChargingView.buildChargingSiteLayers()) map.addLayer(layer);
     for (const layer of window.ChargingView.buildChargingClusterLayers()) map.addLayer(layer);
     mapReady = true;
     for (const fn of pendingMapTasks.splice(0)) fn();
   });
+  applyBasemap();
 
   const mapStatsEl = document.getElementById('map-stats');
   if (mapStatsEl) {

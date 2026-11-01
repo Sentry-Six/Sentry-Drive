@@ -3,16 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <!-- CSP permits Google's raster tiles and MapLibre's blob worker; other
-       scripts, styles, and fonts are bundled locally. -->
+  <!-- CSP permits VersaTiles basemap styles, tiles, glyphs and sprites, and
+       MapLibre's blob worker; other scripts, styles, and fonts are bundled
+       locally. -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     script-src 'self';
     style-src 'self' 'unsafe-inline';
     font-src 'self';
-    img-src 'self' data: blob: https://*.google.com;
+    img-src 'self' data: blob: https://tiles.versatiles.org;
     worker-src blob:;
-    connect-src 'self' https://*.google.com;
+    connect-src 'self' https://tiles.versatiles.org;
   " />
   <title>Sentry Drive</title>
   <link rel="stylesheet" href="../../assets/vendor/fonts/fonts.css" />
@@ -809,6 +810,7 @@
   <script src="../../assets/vendor/iro.min.js"></script>
   <script src="drive-page-model.cjs"></script>
   <script src="charging-view.cjs"></script>
+  <script src="map-style.cjs"></script>
   <script src="charging-ui.js"></script>
   <script src="renderer.js"></script>
 </body>
