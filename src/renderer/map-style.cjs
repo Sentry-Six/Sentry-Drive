@@ -14,7 +14,7 @@
   const TILE_ORIGIN = 'https://tiles.sentryusb.com';
   const STYLE_URLS = {
     Light: `${TILE_ORIGIN}/assets/styles/colorful/style.json`,
-    Dark: `${TILE_ORIGIN}/assets/styles/colorful-dark/style.json`,
+    Dark: `${TILE_ORIGIN}/assets/styles/sentry-dark/style.json`,
   };
   const LAYER_NAMES = ['Light', 'Dark'];
   const DEFAULT_LAYER = 'Light';
@@ -24,7 +24,7 @@
   // Credit for the OpenStreetMap tileset, applied to every style source.
   const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
   // Painted when the style cannot be fetched (offline) so routes still draw.
-  const FALLBACK_BACKGROUND = { Light: '#f8f4f0', Dark: '#282725' };
+  const FALLBACK_BACKGROUND = { Light: '#f8f4f0', Dark: '#141c21' };
 
   function normalizeLayerName(saved) {
     const name = LAYER_RENAMES[saved] || saved;
