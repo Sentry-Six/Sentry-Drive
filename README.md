@@ -28,7 +28,7 @@ Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam file
 - **Visualize your Charging Stops**
 <br> Using Sentry USB's BLE telemetry feature, you can track and see every charging stop you make - whether at home or at a Supercharger.
 - **Check your drives (ALPHA)**
-<br> Using Open Street Map's route API, attempt to fix drives that may be broken. You can also check for previous Summon driving.
+<br> Using the public OSRM routing service (router.project-osrm.org), attempt to fix drives that may be broken. You can also check for previous Summon driving.
 <br> **Note:** _Feature is currently in ALPHA and may not work as expected. Bridged gaps will appear as manual._
 - **Full Self Driving Analytics**
 <br> Track your FSD usage - even with Hardware 3.
