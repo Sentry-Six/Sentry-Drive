@@ -46,6 +46,11 @@ function createDrivePageModel({ pageSize = 250, fetchPage }) {
   };
 }
 
-const api = { createDrivePageModel };
+function libraryHasImportedDrives(drives, meta) {
+  if ((meta?.aggregates?.importedDriveCount ?? 0) > 0) return true;
+  return (drives ?? []).some((drive) => drive?.source && drive.source !== 'sei');
+}
+
+const api = { createDrivePageModel, libraryHasImportedDrives };
 if (typeof module !== 'undefined' && module.exports) module.exports = api;
 if (typeof window !== 'undefined') window.DrivePageModel = api;

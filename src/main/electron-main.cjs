@@ -950,9 +950,13 @@ ipcMain.handle('set-drive-tags', (_e, { filePath, driveKey, tags }) => withDrive
     try {
       await getDriveLoaderClient().setTags(driveKey, tags);
     } catch (err) {
+      driveDetailGen++;
       logger.warn('main', `tag filter index not updated for ${driveKey}: ${err?.message ?? err}`);
     }
-    return { success: true };
+    const allTags = [...new Set(
+      Object.values(driveTags).flatMap((value) => Array.isArray(value) ? value : []),
+    )].sort((left, right) => String(left).localeCompare(String(right)));
+    return { success: true, allTags };
   } catch (err) {
     return { success: false, error: err.message };
   }

@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const { buildProcessedRoute } = processResult;
+const { buildProcessedRoute, snapshotProcessingState } = processResult;
 const { normalizeClipPath } = clipPath;
 const { writeDriveDataJSON } = createRequire(import.meta.url)("../main/drive-data-writer.cjs");
 
@@ -230,9 +230,15 @@ async function main() {
 
     if (!checkpointBusy && Date.now() - lastCheckpointMs >= CHECKPOINT_MS) {
       checkpointBusy = true;
-      const routes = Array.from(routeMap.values());
+      const checkpoint = snapshotProcessingState(processedFiles, routeMap);
       const doneAt = totalDone;
-      pendingCheckpoint = streamWriteJSON(OUTPUT_PATH, processedFiles, routes, driveTags, extraSections)
+      pendingCheckpoint = streamWriteJSON(
+        OUTPUT_PATH,
+        checkpoint.processedFiles,
+        checkpoint.routes,
+        driveTags,
+        extraSections,
+      )
         .then(() => console.log(`\n  Checkpoint saved (${doneAt} files)`))
         .catch(() => {})
         .finally(() => {
