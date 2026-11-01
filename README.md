@@ -15,12 +15,12 @@
 
 Sentry Drive by Sentry Six is a desktop app for visualizing and analyzing your drive history. Meant to be used in conjunction with Sentry USB or TeslaUSB, you can track your self-driving stats, distance driven, drives made, etc. all on your computer! Simply point it to your TeslaCam folder and start processing. See every drive - where you used Full Self Driving, every disengagement, duration, average and max speed, and more!
 
-Sentry Drive is one of four free tools for Tesla owners from the [Sentry Six](https://sentry-six.com) project, alongside [Sentry Studio](https://github.com/Sentry-Six/Sentry-Six) (desktop TeslaCam viewer), [Sentry USB](https://github.com/Sentry-Six/Sentry-USB-Rusty) (Raspberry Pi smart dashcam drive), and [Sentry Connect](https://sentry-six.com/sentry-connect/) (iPhone companion app for Sentry USB). Not affiliated with Tesla, Inc. Unrelated to the Sentry (sentry.io) error-monitoring service.
+Sentry Drive is one of the free tools from the [Sentry Six](https://sentry-six.com) project, alongside [Sentry Studio](https://github.com/Sentry-Six/Sentry-Six) (desktop TeslaCam viewer), [Sentry USB](https://github.com/Sentry-Six/Sentry-USB-Rusty) (Raspberry Pi smart dashcam drive), [Dash USB](https://github.com/Sentry-Six/Dash-USB) (Raspberry Pi USB drive for GM vehicles), and [Sentry Connect](https://sentry-six.com/sentry-connect/) (iPhone companion app for Sentry USB). Not affiliated with Tesla, Inc. Unrelated to the Sentry (sentry.io) error-monitoring service.
 
 <img width="2560" height="1369" alt="electron_HWfDb2Px9G" src="https://github.com/user-attachments/assets/ed8af61f-33b4-4b83-82c3-413977013d15" />
 
 ## How It Works
-Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam files! By reading that data, we extract and process that data so that your drives are overlayed on top of a map. The data shares information such as GPS data, self-driving state, speed, pedal presses, and more. Your drive data is processed and stored locally on your computer and is never uploaded to us. A few optional, clearly-labeled features do contact third-party services when you use them — see [Privacy & Data](#privacy--data) below.
+Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam files! By reading that data, we extract and process that data so that your drives are overlaid on top of a map. The data shares information such as GPS data, self-driving state, speed, pedal presses, and more. Your drive data is processed and stored locally on your computer and is never uploaded to us. A few optional, clearly-labeled features do contact third-party services when you use them — see [Privacy & Data](#privacy--data) below.
 
 ## Features
 - **Visualize your Recent Drives**
@@ -46,8 +46,7 @@ Running Sentry USB? You can import your drive data! Simply locate your drive-dat
 ## Platforms
 This application is available for Windows, macOS, and Linux (AppImage and .deb). [Check the releases tab](https://github.com/Sentry-Six/Sentry-Drive/releases) for the latest version.
 
-Because this program is unsigned, you will need to follow this step after you run the .dmg for the first time:
-<br> System Settings -> Privacy & Security -> Open Anyway
+The Mac version is signed and notarized by Apple, so it opens normally.
 
 ## Privacy & Data
 Sentry Drive is local-first: your TeslaCam footage, SEI telemetry, GPS data, tags, and analytics live only on your computer and are never uploaded to us. The following features do communicate with third parties, and only as described:
@@ -57,7 +56,7 @@ Sentry Drive is local-first: your TeslaCam footage, SEI telemetry, GPS data, tag
 - **Fix Broken Drives (OSRM)** — When you use this feature, drive coordinates are sent to the public [OSRM](https://project-osrm.org/) (Open Source Routing Machine) routing service to reconstruct missing route segments.
 - **3rd Party Import** — When you import from Tessie or Teslascope, the app connects to the respective service using an API token you provide to fetch your drive history. That data is governed by your relationship with [Tessie](https://tessie.com/privacy) and [Teslascope](https://teslascope.com/legalese/privacy).
 - **Supercharger Catalog Refresh** — Superchargers are identified from a bundled OpenStreetMap snapshot. If you choose to refresh the catalog in Settings, the app downloads updated charger locations from the public OpenStreetMap Overpass API.
-- **Updates** — The app checks GitHub Releases (and the changelog on GitHub) for new versions. It does **not** send any hashed device identifier or telemetry on update checks.
+- **Updates** — The app checks GitHub Releases (and the changelog on GitHub) for new versions. Update checks contact only GitHub.
 
 This is a summary; the full Sentry-Six Privacy Policy is at [sentry-six.com/privacy](https://sentry-six.com/privacy).
 
