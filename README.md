@@ -46,7 +46,7 @@ Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam file
 Running Sentry USB? You can import your drive data! Simply locate your drive-data.json and load it! If it's in your TeslaCam folder, it'll automatically locate and load it for you. Any telemetry included in your drive-data.json is also loaded, such as location and state of charge!
 
 ## Platforms
-This application is available for Windows 10 or later, macOS 12 or later, and Linux on x64 (AppImage and .deb). [Check the releases tab](https://github.com/Sentry-Six/Sentry-Drive/releases) for the latest version:
+This application is available for Windows 10 or later, macOS 13 or later, and Linux on x64 (AppImage and .deb). [Check the releases tab](https://github.com/Sentry-Six/Sentry-Drive/releases) for the latest version:
 
 - Windows: `Sentry-Drive-Setup-<version>.exe`
 - macOS: `Sentry-Drive-<version>-universal.dmg`
