@@ -1,6 +1,17 @@
 {
   "versions": [
     {
+      "version": "1.6.1",
+      "date": "2026-11-01",
+      "title": "Time Zone Update",
+      "changes": [
+        {
+          "type": "fix",
+          "description": "Updated time zone data for the Nov 1 time zone change in Manitoba, so drive times there show correctly."
+        }
+      ]
+    },
+    {
       "version": "1.6.0",
       "date": "2026-11-01",
       "title": "New Maps",
