@@ -21,8 +21,17 @@
   // Saved layer names from older releases map onto current layers.
   const LAYER_RENAMES = { 'Google Maps': 'Light', 'Google Dark': 'Dark', Satellite: 'Light' };
   const VERSATILES_ATTRIBUTION = '<a href="https://versatiles.org/">VersaTiles</a>';
-  // Credit for the OpenStreetMap tileset, applied to every style source.
   const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+  // Credits per style source, in place of the style's own. The OpenStreetMap
+  // tiles carry ESA WorldCover land cover at low zoom; the other two sources
+  // are ocean depth and terrain shading.
+  const SOURCE_ATTRIBUTION = {
+    'versatiles-shortbread': OSM_ATTRIBUTION
+      + ' · &copy; <a href="https://esa-worldcover.org/en/data-access">ESA WorldCover</a>'
+      + ' (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>)',
+    bathymetry: '<a href="https://www.gebco.net/">GEBCO</a>',
+    hillshade: '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md">Mapzen</a>',
+  };
   // Painted when the style cannot be fetched (offline) so routes still draw.
   const FALLBACK_BACKGROUND = { Light: '#f8f4f0', Dark: '#141c21' };
 
@@ -80,7 +89,7 @@
         ...(baseStyle.glyphs ? { glyphs: baseStyle.glyphs } : {}),
         ...(baseStyle.sprite ? { sprite: baseStyle.sprite } : {}),
         sources: Object.fromEntries(Object.entries(baseStyle.sources || {})
-          .map(([id, source]) => [id, { ...source, attribution: OSM_ATTRIBUTION }])),
+          .map(([id, source]) => [id, { ...source, attribution: SOURCE_ATTRIBUTION[id] || OSM_ATTRIBUTION }])),
         layers: [...baseLayers, ...labelLayers],
       },
       labelLayerIds: labelLayers.map((l) => l.id),
@@ -117,6 +126,7 @@
     DEFAULT_LAYER,
     LAYER_NAMES,
     OSM_ATTRIBUTION,
+    SOURCE_ATTRIBUTION,
     STYLE_URLS,
     TILE_ORIGIN,
     VERSATILES_ATTRIBUTION,

@@ -5,6 +5,7 @@ import mapStyle from './map-style.cjs';
 
 const {
   OSM_ATTRIBUTION,
+  SOURCE_ATTRIBUTION,
   STYLE_URLS,
   TILE_ORIGIN,
   composeBasemap,
@@ -66,7 +67,22 @@ test('composed basemap moves labels after base layers and applies visibility', (
   assert.deepEqual(vis, { 'poi-shop': 'none', 'label-street-primary': 'none', 'label-place-city': 'visible' });
   assert.equal(style.layers.at(-1).layout['text-field'], '{name}');
   assert.ok(style.glyphs);
-  assert.equal(style.sources['versatiles-shortbread'].attribution, OSM_ATTRIBUTION);
+  assert.equal(style.sources['versatiles-shortbread'].attribution, SOURCE_ATTRIBUTION['versatiles-shortbread']);
+});
+
+test('every basemap source is credited, the relief sources with their own datasets', () => {
+  const base = vectorStyle('#fff');
+  base.sources = {
+    ...base.sources,
+    bathymetry: { type: 'vector', tiles: ['https://tiles.sentryusb.com/tiles/bathymetry/{z}/{x}/{y}'], attribution: 'GEBCO 2021' },
+    hillshade: { type: 'vector', tiles: ['https://tiles.sentryusb.com/tiles/hillshade/{z}/{x}/{y}'] },
+    other: { type: 'vector', tiles: ['https://tiles.sentryusb.com/tiles/other/{z}/{x}/{y}'] },
+  };
+  const { sources } = composeBasemap('Dark', base).style;
+  assert.match(sources['versatiles-shortbread'].attribution, /OpenStreetMap<\/a> contributors.*ESA WorldCover<\/a>.*CC BY 4\.0/);
+  assert.match(sources.bathymetry.attribution, /GEBCO/);
+  assert.match(sources.hillshade.attribution, /Mapzen/);
+  assert.equal(sources.other.attribution, OSM_ATTRIBUTION);
 });
 
 test('the renderer CSP allows exactly the tile origin for map requests', () => {
