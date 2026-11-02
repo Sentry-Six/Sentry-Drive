@@ -301,6 +301,9 @@ function initMap() {
       const base = await fetchStyle(MapStyle.STYLE_URLS[name]);
       basemap = MapStyle.composeBasemap(name, base, { showMapLabels, showRoadLabels });
       basemapOffline = false;
+      // Fetch the other layers' styles now so switching needs no round trip;
+      // the styles differ only in paint values, so the switch is a diff.
+      for (const other of LAYER_NAMES) fetchStyle(MapStyle.STYLE_URLS[other]).catch(() => {});
     } catch (err) {
       console.warn('Basemap unavailable; showing routes without map tiles:', err.message);
       basemap = MapStyle.composeBasemap(name, null);
