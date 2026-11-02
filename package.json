@@ -5,6 +5,7 @@
   "description": "Standalone Tesla dashcam drives processor - replicates Sentry USB drives processing",
   "author": "Sentry-Six",
   "main": "src/main/electron-main.cjs",
+  "desktopName": "sentry-drive.desktop",
   "scripts": {
     "start": "electron .",
     "process": "node src/processing/process.js",
@@ -68,6 +69,12 @@
       ],
       "maintainer": "JeffFromTheIRS <155955500+JeffFromTheIRS@users.noreply.github.com>",
       "category": "Utility",
+      "syncDesktopName": true,
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "Sentry Drive"
+        }
+      },
       "artifactName": "Sentry-Drive-${version}.${ext}",
       "icon": "assets/app-icon/sentrydrive.png"
     },
