@@ -167,7 +167,7 @@ async function selectChargingSite(siteId, options = {}) {
   document.querySelector(`.charging-site[data-site-id="${escaped}"]`)
     ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   if (site && Number.isFinite(site.latitude) && Number.isFinite(site.longitude) && activeMainTab === 'charging') {
-    map.easeTo({ center: [site.longitude, site.latitude], zoom: Math.max(map.getZoom(), 12) });
+    window.MapCamera.glideTo(map, [site.longitude, site.latitude], Math.max(map.getZoom(), 12));
   }
 }
 
@@ -530,7 +530,7 @@ async function expandChargingCluster(clusterId, coordinates) {
   try {
     const zoom = await source.getClusterExpansionZoom(clusterId);
     if (activeMainTab !== 'charging') return;
-    map.easeTo({ center: coordinates, zoom, duration: 450 });
+    window.MapCamera.glideTo(map, coordinates, zoom);
   } catch (error) {
     console.warn('Charging cluster expansion:', error);
   }
@@ -547,12 +547,12 @@ function updateChargingMap(sites, options = {}) {
     document.getElementById('charging-map-legend').classList.toggle('hidden', visibility === 'none');
     if (!fit || activeMainTab !== 'charging' || geojson.features.length === 0) return;
     if (geojson.features.length === 1) {
-      map.easeTo({ center: geojson.features[0].geometry.coordinates, zoom: 12 });
+      window.MapCamera.glideTo(map, geojson.features[0].geometry.coordinates, 12);
       return;
     }
     const bounds = new maplibregl.LngLatBounds();
     for (const feature of geojson.features) bounds.extend(feature.geometry.coordinates);
-    map.fitBounds(bounds, { padding: 50, maxZoom: 13 });
+    fitMap(bounds, { padding: 50, maxZoom: 13, reason: 'charging' });
   });
 }
 

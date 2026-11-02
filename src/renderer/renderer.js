@@ -238,6 +238,13 @@ const OVERVIEW_IMPORTED_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'], 0, 2.
 const SELECTED_LINE_WIDTH = ['interpolate', ['linear'], ['zoom'],
   0, 2, 4, 2, 10, ['max', 2, ['get', 'w']], 20, ['max', 2, ['*', ['get', 'w'], 2]]];
 
+// Fit data into view: startup and reloads jump, user-driven fits settle.
+// Don't call map.fitBounds/flyTo/easeTo for data fits: animated zooms across
+// tile levels request, then cancel, tiles at every level. See map-camera.cjs.
+function fitMap(bounds, options) {
+  window.MapCamera.fitMap(map, bounds, options);
+}
+
 // Queue source and layer work until the style loads.
 function whenMapReady(fn) {
   if (mapReady) fn();
@@ -257,10 +264,12 @@ function initMap() {
   let currentBaseLayer = MapStyle.normalizeLayerName(savedLayer);
   if (savedLayer != null && savedLayer !== currentBaseLayer) localStorage.setItem('mapLayer', currentBaseLayer);
 
+  // Start where the map was left; the first run uses MapCamera's default.
+  const camera = window.MapCamera.loadCamera(localStorage);
   map = new maplibregl.Map({
     container: 'map',
-    center: [10.0, 50.0], // [longitude, latitude]
-    zoom: 4,
+    center: camera.center, // [longitude, latitude]
+    zoom: camera.zoom,
     maxZoom: 20,
     attributionControl: { compact: false, customAttribution: MapStyle.VERSATILES_ATTRIBUTION },
     // Keep the route view flat.
@@ -272,6 +281,8 @@ function initMap() {
     style: MapStyle.fallbackStyle(currentBaseLayer),
   });
   map.touchZoomRotate.disableRotation();
+  const rememberedCamera = window.MapCamera.rememberCamera(map, localStorage);
+  window.addEventListener('beforeunload', () => rememberedCamera.flush());
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
 
   // Style JSON is fetched once per URL; failures are retried on next use.
@@ -1548,7 +1559,8 @@ async function applyDrivePageState(state) {
     delete drive.gearStates;
     delete drive.fsdEvents;
   }
-  if (selectedDriveId !== null) deselectDrive();
+  // renderOverviewOnMap fits the new page; skip deselect's fit.
+  if (selectedDriveId !== null) deselectDrive({ skipFit: true });
   drivePageState = state;
   drives = state.drives;
   updateDrivePager();
@@ -1609,7 +1621,7 @@ async function applyLoadedDriveData(result, filePath) {
   document.getElementById('date-filter').classList.remove('hidden');
   renderDriveStats(drives, result);
   await renderDriveList(drives);
-  renderOverviewOnMap();
+  renderOverviewOnMap({ reason: 'initial' });
   await loadChargingSites();
   updateDrivePager();
   document.getElementById('btn-repair-gps').disabled = false;
@@ -1897,7 +1909,7 @@ function initViewDrivesTab() {
       if (!result.success) return;
       const wasSelected = selectedDriveId === drive.id;
       drives = drives.filter((d) => d.startTime !== drive.startTime);
-      if (wasSelected) deselectDrive();
+      if (wasSelected) deselectDrive({ skipFit: true });
       // Paint the overlay before the synchronous re-render.
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       renderDriveList(drives);
@@ -1948,7 +1960,7 @@ function initViewDrivesTab() {
         driveStartTimes: targets.map((d) => d.startTime),
       });
       if (!result.success) { alert(`Failed to remove drives:\n${result.error}`); return; }
-      if (targets.some((d) => d.id === selectedDriveId)) deselectDrive();
+      if (targets.some((d) => d.id === selectedDriveId)) deselectDrive({ skipFit: true });
       const removed = new Set(targets.map((d) => d.startTime));
       drives = drives.filter((d) => !removed.has(d.startTime));
       logAction(`removed ${targets.length} drive(s) via bulk remove`);
@@ -3559,9 +3571,9 @@ function beginZoneMapPick(zone) {
       // Fit the zone before enabling its move and resize handles.
       const latPad = (zone.radiusM * 1.8) / 111320;
       const lngPad = (zone.radiusM * 1.8) / (111320 * Math.max(0.2, Math.cos((zone.lat * Math.PI) / 180)));
-      map.fitBounds(
+      fitMap(
         [[zone.lng - lngPad, zone.lat - latPad], [zone.lng + lngPad, zone.lat + latPad]],
-        { duration: 500 },
+        { reason: 'zone' },
       );
       zonePlacementPreview();
       enterZoneConfirm();
@@ -4162,7 +4174,9 @@ function applyOtherDrivesVisibility() {
   updateOverviewStyleState();
 }
 
-function deselectDrive() {
+// Callers that redraw the overview straight after pass skipFit, so the map
+// fits once instead of twice.
+function deselectDrive({ skipFit = false } = {}) {
   cleanupReplay();
   freeDriveDetail(selectedDriveId);
   selectedDriveId = null;
@@ -4179,7 +4193,7 @@ function deselectDrive() {
   updateOverviewStyleState();
 
   // Reuse bounds computed from every overview point.
-  if (overviewBounds) map.fitBounds(overviewBounds, { padding: 30 });
+  if (overviewBounds && !skipFit) fitMap(overviewBounds, { padding: 30, reason: 'back' });
 
   // Apply a file change deferred while the drive was open.
   if (pendingExternalReload) {
@@ -4366,7 +4380,7 @@ function updateOverviewStyleState() {
   map.setFilter('overview-dim', selected ? ['!=', ['get', 'driveId'], selectedDriveId] : null);
 }
 
-function renderOverviewOnMap() {
+function renderOverviewOnMap({ reason = 'reload' } = {}) {
   // Stop replay and release selected-drive detail before rebuilding.
   cleanupReplay();
   freeDriveDetail(selectedDriveId);
@@ -4411,7 +4425,7 @@ function renderOverviewOnMap() {
   // Preserve full-route bounds so loops remain in view after deselection.
   overviewBounds = features.length > 0 ? bounds : null;
   if (features.length > 0) {
-    map.fitBounds(bounds, { padding: 30 });
+    fitMap(bounds, { padding: 30, reason });
   }
 }
 
@@ -4567,7 +4581,7 @@ function drawSelectedDrive(drive) {
 
   const bounds = new maplibregl.LngLatBounds();
   for (const p of latLngs) bounds.extend([p[1], p[0]]);
-  map.fitBounds(bounds, { padding: 50 });
+  fitMap(bounds, { padding: 50, reason: 'select' });
 
   const legend = document.getElementById('map-legend');
   if (hasFSD || isTessie) {
