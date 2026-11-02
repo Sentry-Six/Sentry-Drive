@@ -3,6 +3,7 @@
   "version": "1.6.1",
   "type": "module",
   "description": "Standalone Tesla dashcam drives processor - replicates Sentry USB drives processing",
+  "author": "Sentry-Six",
   "main": "src/main/electron-main.cjs",
   "scripts": {
     "start": "electron .",
