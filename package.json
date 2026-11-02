@@ -94,5 +94,8 @@
     "electron-updater": "^6.8.11",
     "stream-chain": "^4.4.1",
     "stream-json": "^3.8.0"
+  },
+  "allowScripts": {
+    "electron-winstaller": true
   }
 }
