@@ -46,7 +46,7 @@ Running Sentry USB? You can import your drive data! Simply locate your drive-dat
 ## Platforms
 This application is available for Windows, macOS, and Linux (AppImage and .deb). [Check the releases tab](https://github.com/Sentry-Six/Sentry-Drive/releases) for the latest version.
 
-The Mac version is signed and notarized by Apple, so it opens normally.
+The Mac version is one universal download that runs natively on Apple silicon and Intel Macs. It is signed and notarized by Apple, so it opens normally.
 
 ## Privacy & Data
 Sentry Drive is local-first: your TeslaCam footage, SEI telemetry, GPS data, tags, and analytics live only on your computer and are never uploaded to us. The following features do communicate with third parties, and only as described:

@@ -91,6 +91,26 @@ jobs:
             npx electron-builder --mac --publish never -c.mac.identity=null -c.mac.notarize=false
           fi
 
+      # One universal app serves Intel and Apple silicon Macs, and the updater
+      # on both moves existing installs to it, so every Mach-O file in it must
+      # carry both architectures.
+      - name: Verify universal macOS app
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app="dist/mac-universal/Sentry Drive.app"
+          test -d "$app"
+          status=0
+          while IFS= read -r -d '' file; do
+            archs=$(lipo -archs "$file" 2>/dev/null) || continue
+            if [ "$archs" != "x86_64 arm64" ]; then
+              echo "::error::${file#$app/} has architectures: $archs"
+              status=1
+            fi
+          done < <(find "$app" -type f -print0)
+          grep -E '^  - url: Sentry-Drive-.*-universal\.zip$' dist/latest-mac.yml
+          exit $status
+
       - name: Verify macOS signature and notarization
         if: runner.os == 'macOS' && env.MAC_SIGNING == '1'
         shell: bash
