@@ -27,7 +27,7 @@ Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam file
 <br> With TeslaUSB, Sentry USB, and Tesla's 2025 Holiday Update (2025.44.25 or newer), you can save and visualize your drives. Every single one.
 - **Visualize your Charging Stops**
 <br> Using Sentry USB's BLE telemetry feature, you can track and see every charging stop you make - whether at home or at a Supercharger.
-- **Check your drives (ALPHA)**
+- **Check Drives (ALPHA)**
 <br> Using the public OSRM routing service (router.project-osrm.org), attempt to fix drives that may be broken. You can also check for previous Summon driving.
 <br> **Note:** _Feature is currently in ALPHA and may not work as expected. Bridged gaps will appear as manual._
 - **Full Self Driving Analytics**
@@ -39,12 +39,18 @@ Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam file
 - **Import from 3rd Party Sources**
 <br> Import your drives from Tessie or Teslascope for a more extensive drive history!
 <br> **Note:** _Imported drives do not affect FSD score._
+- **Privacy Zones**
+<br> Draw a circle around Home, Work, or any other spot, then remove the drives that start or end inside it.
 
 ### Sentry USB-Compatible
 Running Sentry USB? You can import your drive data! Simply locate your drive-data.json and load it! If it's in your TeslaCam folder, it'll automatically locate and load it for you. Any telemetry included in your drive-data.json is also loaded, such as location and state of charge!
 
 ## Platforms
-This application is available for Windows, macOS, and Linux (AppImage and .deb). [Check the releases tab](https://github.com/Sentry-Six/Sentry-Drive/releases) for the latest version.
+This application is available for Windows 10 or later, macOS 12 or later, and Linux on x64 (AppImage and .deb). [Check the releases tab](https://github.com/Sentry-Six/Sentry-Drive/releases) for the latest version:
+
+- Windows: `Sentry-Drive-Setup-<version>.exe`
+- macOS: `Sentry-Drive-<version>-universal.dmg`
+- Linux: `Sentry-Drive-<version>.AppImage` or `Sentry-Drive-<version>.deb`
 
 The Mac version is one universal download that runs natively on Apple silicon and Intel Macs. It is signed and notarized by Apple, so it opens normally.
 
