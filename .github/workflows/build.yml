@@ -145,7 +145,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
-        run: bash scripts/upload-release-assets.sh "$GITHUB_REF_NAME" dist/*.exe dist/latest.yml
+        run: bash scripts/upload-release-assets.sh "$GITHUB_REF_NAME" dist/*.exe dist/*.exe.blockmap dist/latest.yml
 
       - name: Upload assets (macOS)
         if: github.event_name == 'release' && runner.os == 'macOS'
