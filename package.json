@@ -1,6 +1,6 @@
 {
   "name": "sentry-drive",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "type": "module",
   "description": "Standalone Tesla dashcam drives processor - replicates Sentry USB drives processing",
   "author": "Sentry-Six",

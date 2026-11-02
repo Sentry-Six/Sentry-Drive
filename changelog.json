@@ -1,6 +1,29 @@
 {
   "versions": [
     {
+      "version": "1.6.2",
+      "date": "2026-11-02",
+      "title": "Smoother Maps",
+      "changes": [
+        {
+          "type": "improvement",
+          "description": "Selecting a drive, going back, and opening charging sessions or Privacy Zones now move the map smoothly, without blank tiles on the way."
+        },
+        {
+          "type": "improvement",
+          "description": "Switching between the light and dark map is instant, and the map reopens where you left it."
+        },
+        {
+          "type": "improvement",
+          "description": "Mac: one universal app for Apple silicon and Intel. Macs that ran the Intel version will switch to it with this update."
+        },
+        {
+          "type": "improvement",
+          "description": "The map credits its land cover, ocean depth and terrain data."
+        }
+      ]
+    },
+    {
       "version": "1.6.1",
       "date": "2026-11-01",
       "title": "Time Zone Update",
