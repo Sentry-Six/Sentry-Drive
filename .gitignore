@@ -3,6 +3,8 @@ node_modules/
 .worktrees/
 dist/
 drive-data.json
+# Synthetic test fixtures (Denver-area made-up drives) are tracked.
+!scripts/tauri/fixtures/**/drive-data.json
 *.bak
 *.psd
 temp/
