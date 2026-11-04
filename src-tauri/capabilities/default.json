@@ -1,7 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: core IPC and events. App commands are allowed by default; plugins are driven from Rust.",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "Main window: core IPC and events, plus the dialog plugin's message box, which backs window.alert/confirm. App commands are allowed by default; other plugins are driven from Rust.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:allow-message"
+  ]
 }

@@ -1,12 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Sentry Drive",
+  "mainBinaryName": "Sentry Drive",
   "version": "../package.json",
   "identifier": "com.jefffromtheirs.sentry-drive",
   "build": {
     "beforeBuildCommand": "node scripts/tauri/prepare-frontend.mjs",
     "beforeDevCommand": "node scripts/tauri/prepare-frontend.mjs",
-    "frontendDist": "../tauri-dist"
+    "frontendDist": "../tauri-dist",
+    "beforeBundleCommand": "node scripts/tauri/squirrel-shim.mjs"
   },
   "app": {
     "withGlobalTauri": true,
@@ -46,7 +48,10 @@
     },
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "frameworks": [
+        "target/squirrel-shim/Squirrel.framework"
+      ]
     },
     "createUpdaterArtifacts": false,
     "publisher": "Sentry-Six",

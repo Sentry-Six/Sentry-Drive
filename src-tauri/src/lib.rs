@@ -35,6 +35,24 @@ pub struct BenchConfig {
     pub idle_ms: u64,
 }
 
+/// UI test hooks exist only in builds made with SENTRY_DRIVE_TEST_HOOKS set:
+/// SENTRY_DRIVE_UI_TEST names a script to run in the window, and
+/// `ui_test_report` appends its results to SENTRY_DRIVE_UI_TEST_OUT.
+const TEST_HOOKS: bool = option_env!("SENTRY_DRIVE_TEST_HOOKS").is_some();
+
+#[tauri::command]
+fn ui_test_report(line: serde_json::Value) {
+    if !TEST_HOOKS {
+        return;
+    }
+    if let Some(out) = std::env::var_os("SENTRY_DRIVE_UI_TEST_OUT") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(out) {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+}
+
 pub struct AppPaths {
     pub user_data: PathBuf,
     pub resources: PathBuf,
@@ -89,6 +107,11 @@ pub fn create_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     let mut script = init_script(&version, bench.as_ref().and_then(|b| b.inner().as_ref()));
     if let Some(p) = app.try_state::<AppPaths>() {
         script.push_str(&migrate::local_storage_script(&migrate::pending_local_storage(&p.user_data)));
+    }
+    if TEST_HOOKS {
+        if let Some(test) = std::env::var_os("SENTRY_DRIVE_UI_TEST") {
+            script.push_str(&std::fs::read_to_string(test).unwrap_or_default());
+        }
     }
     let window_state = migrate::load_window_state(app);
     let mut builder = WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::App("src/renderer/index.html".into()))
@@ -214,6 +237,7 @@ pub fn run() {
             imports::teslascope_remove_hidden,
             imports::teslascope_remove_all,
             migrate::electron_storage_imported,
+            ui_test_report,
             drive_edit::import_drive_data_file_preview,
             drive_edit::import_drive_data_file,
             updater::set_allow_prerelease,

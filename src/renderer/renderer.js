@@ -2479,7 +2479,8 @@ function initTessieImport() {
       lines.push('');
       lines.push('Click OK to delete these hidden drives from the file (recoverable from .bak).');
       lines.push('Click Cancel to keep them stored (they will stay hidden as long as SEI covers the same time).');
-      if (confirm(lines.join('\n'))) {
+      // await: the Tauri build's confirm() is asynchronous (a no-op in Electron).
+      if (await confirm(lines.join('\n'))) {
         // Cover the full-file rewrite with the spinner.
         showLoading('Removing hidden imported drives…');
         const cleanupResult = await svc().removeHidden();
@@ -2705,7 +2706,8 @@ async function repairGPS() {
     let useRouting = isOnline;
 
     if (!isOnline) {
-      const proceed = confirm(
+      // await: the Tauri build's confirm() is asynchronous (a no-op in Electron).
+      const proceed = await confirm(
         'You are offline. Gap bridging will use straight lines instead of road-following routes.\n\n' +
         'You can re-run Check Drives later when online to replace straight lines with road routes.\n\n' +
         'Continue?'
