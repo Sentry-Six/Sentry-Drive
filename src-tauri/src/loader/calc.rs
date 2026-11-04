@@ -48,6 +48,27 @@ pub const SUMMON_MIN_FSD_SHARE: f64 = 0.5;
 const WGS84_A: f64 = 6378137.0;
 const WGS84_F: f64 = 1.0 / 298.257223563;
 
+/// V8's Math.sin/cos/tan/atan/atan2 are fdlibm ports; so is the `libm`
+/// crate. Using it (instead of the platform libm behind f64::sin etc.) keeps
+/// distances bit-identical to the Electron build.
+mod m {
+    pub fn sin(x: f64) -> f64 {
+        libm::sin(x)
+    }
+    pub fn cos(x: f64) -> f64 {
+        libm::cos(x)
+    }
+    pub fn tan(x: f64) -> f64 {
+        libm::tan(x)
+    }
+    pub fn atan(x: f64) -> f64 {
+        libm::atan(x)
+    }
+    pub fn atan2(y: f64, x: f64) -> f64 {
+        libm::atan2(y, x)
+    }
+}
+
 /// Canonical WGS-84 Andoyer–Lambert distance (metres).
 pub fn geodesic_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     if lat1 == lat2 && lon1 == lon2 {
@@ -55,23 +76,23 @@ pub fn geodesic_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     }
     let to_rad = |d: f64| (d * std::f64::consts::PI) / 180.0;
     let f = WGS84_F;
-    let b1 = ((1.0 - f) * to_rad(lat1).tan()).atan();
-    let b2 = ((1.0 - f) * to_rad(lat2).tan()).atan();
+    let b1 = m::atan((1.0 - f) * m::tan(to_rad(lat1)));
+    let b2 = m::atan((1.0 - f) * m::tan(to_rad(lat2)));
     let p = (b1 + b2) / 2.0;
     let q = (b2 - b1) / 2.0;
-    let sin_half_dlon = (to_rad(lon2 - lon1) / 2.0).sin();
-    let sin_q = q.sin();
-    let h = sin_q * sin_q + b1.cos() * b2.cos() * sin_half_dlon * sin_half_dlon;
-    let sigma = 2.0 * h.sqrt().atan2((1.0 - h).max(0.0).sqrt());
+    let sin_half_dlon = m::sin(to_rad(lon2 - lon1) / 2.0);
+    let sin_q = m::sin(q);
+    let h = sin_q * sin_q + m::cos(b1) * m::cos(b2) * sin_half_dlon * sin_half_dlon;
+    let sigma = 2.0 * m::atan2(h.sqrt(), (1.0 - h).max(0.0).sqrt());
     if sigma == 0.0 {
         return 0.0;
     }
-    let sin_sigma = sigma.sin();
+    let sin_sigma = m::sin(sigma);
     let cos2_half = (1.0 - h).max(1e-12);
     let sin2_half = h.max(1e-12);
-    let sin_p = p.sin();
-    let cos_p = p.cos();
-    let cos_q = q.cos();
+    let sin_p = m::sin(p);
+    let cos_p = m::cos(p);
+    let cos_q = m::cos(q);
     let x = (sigma - sin_sigma) * (sin_p * sin_p * cos_q * cos_q) / cos2_half;
     let y = (sigma + sin_sigma) * (cos_p * cos_p * sin_q * sin_q) / sin2_half;
     WGS84_A * (sigma - (f / 2.0) * (x + y))
@@ -82,8 +103,8 @@ pub fn haversine_metres(lat_a: f64, lon_a: f64, lat_b: f64, lon_b: f64) -> f64 {
     let r = |d: f64| d * std::f64::consts::PI / 180.0;
     let dlat = r(lat_b - lat_a);
     let dlon = r(lon_b - lon_a);
-    let a = (dlat / 2.0).sin().powi(2) + r(lat_a).cos() * r(lat_b).cos() * (dlon / 2.0).sin().powi(2);
-    6_371_000.0 * 2.0 * a.sqrt().atan2((1.0 - a).sqrt())
+    let a = m::sin(dlat / 2.0).powi(2) + m::cos(r(lat_a)) * m::cos(r(lat_b)) * m::sin(dlon / 2.0).powi(2);
+    6_371_000.0 * 2.0 * m::atan2(a.sqrt(), (1.0 - a).sqrt())
 }
 
 /// JavaScript `Math.round`: ties round toward +infinity.

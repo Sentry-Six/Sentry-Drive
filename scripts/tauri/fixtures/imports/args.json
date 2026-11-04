@@ -1,0 +1,14 @@
+{
+  "tessie": {
+    "token": "tessie-token",
+    "vin": "5YJ3E1EA7KF000001",
+    "fromSec": 1722492000,
+    "toSec": 1722751199
+  },
+  "teslascope": {
+    "token": "ts-key",
+    "publicId": "tsv1",
+    "fromSec": 1725170400,
+    "toSec": 1725429599
+  }
+}

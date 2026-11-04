@@ -7,13 +7,17 @@
 //! exposed, backed by the Tauri commands registered here.
 
 mod app_commands;
+pub mod check_drives;
 pub mod drive_data;
 mod drive_edit;
 pub mod fsutil;
 mod geocode;
+pub mod imports;
 pub mod loader;
 pub mod logger;
+mod migrate;
 mod processing;
+mod secrets;
 mod supercharger;
 mod updater;
 
@@ -82,10 +86,13 @@ fn init_script(app_version: &str, bench: Option<&BenchConfig>) -> String {
 pub fn create_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     let version = app.package_info().version.to_string();
     let bench = app.try_state::<Option<BenchConfig>>();
-    let script = init_script(&version, bench.as_ref().and_then(|b| b.inner().as_ref()));
+    let mut script = init_script(&version, bench.as_ref().and_then(|b| b.inner().as_ref()));
+    if let Some(p) = app.try_state::<AppPaths>() {
+        script.push_str(&migrate::local_storage_script(&migrate::pending_local_storage(&p.user_data)));
+    }
+    let window_state = migrate::load_window_state(app);
     let mut builder = WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::App("src/renderer/index.html".into()))
         .title("Sentry Drive")
-        .inner_size(1440.0, 900.0)
         .min_inner_size(1050.0, 650.0)
         .background_color(tauri::window::Color(0x0a, 0x0a, 0x0f, 0xff))
         .initialization_script(&script)
@@ -94,8 +101,9 @@ pub fn create_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     {
         builder = builder.devtools(true);
     }
-    builder = builder.visible(true);
-    builder.build()?;
+    builder = migrate::apply_window_state(builder, &window_state).visible(true);
+    let window = builder.build()?;
+    migrate::track_window_state(&window, window_state);
     Ok(())
 }
 
@@ -104,18 +112,10 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(
-            tauri_plugin_window_state::Builder::default()
-                .with_state_flags(
-                    tauri_plugin_window_state::StateFlags::SIZE
-                        | tauri_plugin_window_state::StateFlags::POSITION
-                        | tauri_plugin_window_state::StateFlags::MAXIMIZED
-                        | tauri_plugin_window_state::StateFlags::FULLSCREEN,
-                )
-                .build(),
-        )
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let user_data = app.path().app_data_dir()?;
+            // Electron's data folder, so the Tauri build is a drop-in update.
+            let user_data = migrate::user_data_dir(app.handle())?;
             let resources = app.path().resource_dir()?;
             std::fs::create_dir_all(&user_data)?;
 
@@ -143,6 +143,7 @@ pub fn run() {
             ));
             app.manage(drive_edit::DriveDataLock::default());
             app.manage(drive_edit::Watcher::default());
+            app.manage(imports::ImportState::default());
             app.manage(updater::UpdaterState::default());
             app.manage(geocode::GeocodeState::new(&user_data));
             app.manage(processing::ProcessingState::default());
@@ -150,6 +151,15 @@ pub fn run() {
             app.manage(AppPaths { user_data, resources });
 
             create_main_window(app.handle())?;
+            // Logged like Electron (presence only); moves Electron tokens over.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let has = |k| if secrets::load_token(&handle, k).is_empty() { "no" } else { "yes" };
+                logger::info(
+                    "import",
+                    format!("integrations: tessie={} teslascope={}", has(secrets::Kind::Tessie), has(secrets::Kind::Teslascope)),
+                );
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -182,6 +192,28 @@ pub fn run() {
             drive_edit::watch_drive_data,
             drive_edit::revert_gps,
             drive_edit::has_gps_backup,
+            check_drives::repair_gps,
+            check_drives::check_summon,
+            secrets::tessie_api_get_token,
+            secrets::tessie_api_save_token,
+            secrets::teslascope_api_get_token,
+            secrets::teslascope_api_save_token,
+            imports::tessie_preview,
+            imports::tessie_import,
+            imports::tessie_import_cancel,
+            imports::tessie_remove_hidden,
+            imports::tessie_remove_all,
+            imports::tessie_api_validate,
+            imports::tessie_api_preview,
+            imports::tessie_api_import,
+            imports::tessie_api_cancel,
+            imports::teslascope_api_validate,
+            imports::teslascope_api_preview,
+            imports::teslascope_api_import,
+            imports::teslascope_api_cancel,
+            imports::teslascope_remove_hidden,
+            imports::teslascope_remove_all,
+            migrate::electron_storage_imported,
             drive_edit::import_drive_data_file_preview,
             drive_edit::import_drive_data_file,
             updater::set_allow_prerelease,
@@ -215,6 +247,7 @@ pub fn run() {
             }
         }
         RunEvent::Exit => {
+            updater::install_on_quit(handle);
             processing::kill_active(handle);
             if let Some(loader) = handle.try_state::<loader::LoaderService>() {
                 loader.close_current();

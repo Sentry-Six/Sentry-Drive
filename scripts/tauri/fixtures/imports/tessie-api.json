@@ -1,0 +1,1003 @@
+{
+ "auth": "Bearer tessie-token",
+ "routes": {
+  "/vehicles": {
+   "status": 200,
+   "json": {
+    "results": [
+     {
+      "vin": "5YJ3E1EA7KF000001",
+      "last_state": {
+       "display_name": "Blue",
+       "vehicle_state": {
+        "vehicle_name": "Bluey"
+       }
+      }
+     },
+     {
+      "last_state": {
+       "vehicle_state": {
+        "vin": "7SAYGDEE0PF000002",
+        "vehicle_name": "Wagon"
+       }
+      }
+     },
+     {
+      "last_state": {
+       "display_name": ""
+      }
+     }
+    ]
+   }
+  },
+  "/5YJ3E1EA7KF000001/path?from=1722524405&to=1722525160&separate=true&simplify=false&details=true": {
+   "status": 200,
+   "json": {
+    "results": [
+     {
+      "drive_id": 101,
+      "path": [
+       {
+        "timestamp": 1722524405,
+        "latitude": 39.7392,
+        "longitude": -104.9899,
+        "speed": 30,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13000.5
+       },
+       {
+        "timestamp": 1722524415,
+        "latitude": 39.739547,
+        "longitude": -104.992969,
+        "speed": 31,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13000.58476821192
+       },
+       {
+        "timestamp": 1722524425,
+        "latitude": 39.739879,
+        "longitude": -104.996063,
+        "speed": 32,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13000.66953642384
+       },
+       {
+        "timestamp": 1722524435,
+        "latitude": 39.740184,
+        "longitude": -104.999178,
+        "speed": 33,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13000.754304635762
+       },
+       {
+        "timestamp": 1722524445,
+        "latitude": 39.740452,
+        "longitude": -105.002312,
+        "speed": 34,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13000.839072847682
+       },
+       {
+        "timestamp": 1722524455,
+        "latitude": 39.740678,
+        "longitude": -105.005459,
+        "speed": 35,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13000.923841059603
+       },
+       {
+        "timestamp": 1722524465,
+        "latitude": 39.740859,
+        "longitude": -105.008613,
+        "speed": 36,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13001.008609271523
+       },
+       {
+        "timestamp": 1722524475,
+        "latitude": 39.741,
+        "longitude": -105.01177,
+        "speed": 37,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13001.093377483443
+       },
+       {
+        "timestamp": 1722524485,
+        "latitude": 39.74111,
+        "longitude": -105.014922,
+        "speed": 38,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13001.178145695365
+       },
+       {
+        "timestamp": 1722524495,
+        "latitude": 39.741199,
+        "longitude": -105.018064,
+        "speed": 30,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13001.262913907285
+       },
+       {
+        "timestamp": 1722524505,
+        "latitude": 39.741283,
+        "longitude": -105.02119,
+        "speed": 31,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13001.347682119205
+       },
+       {
+        "timestamp": 1722524515,
+        "latitude": 39.741374,
+        "longitude": -105.024296,
+        "speed": 32,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13001.432450331125
+       },
+       {
+        "timestamp": 1722524525,
+        "latitude": 39.741488,
+        "longitude": -105.027379,
+        "speed": 33,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13001.517218543046
+       },
+       {
+        "timestamp": 1722524535,
+        "latitude": 39.741635,
+        "longitude": -105.030438,
+        "speed": 34,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13001.601986754968
+       },
+       {
+        "timestamp": 1722524545,
+        "latitude": 39.741823,
+        "longitude": -105.033472,
+        "speed": 35,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13001.686754966888
+       },
+       {
+        "timestamp": 1722524555,
+        "latitude": 39.742055,
+        "longitude": -105.036483,
+        "speed": 36,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13001.771523178808
+       },
+       {
+        "timestamp": 1722524565,
+        "latitude": 39.742329,
+        "longitude": -105.039473,
+        "speed": 37,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13001.856291390728
+       },
+       {
+        "timestamp": 1722524575,
+        "latitude": 39.742639,
+        "longitude": -105.042447,
+        "speed": 38,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13001.941059602648
+       },
+       {
+        "timestamp": 1722524585,
+        "latitude": 39.742974,
+        "longitude": -105.045409,
+        "speed": 30,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13002.02582781457
+       },
+       {
+        "timestamp": 1722524595,
+        "latitude": 39.743322,
+        "longitude": -105.048367,
+        "speed": 31,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13002.11059602649
+       },
+       {
+        "timestamp": 1722524605,
+        "latitude": 39.743668,
+        "longitude": -105.051326,
+        "speed": 32,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13002.19536423841
+       },
+       {
+        "timestamp": 1722524615,
+        "latitude": 39.743997,
+        "longitude": -105.054291,
+        "speed": 33,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13002.28013245033
+       },
+       {
+        "timestamp": 1722524625,
+        "latitude": 39.744297,
+        "longitude": -105.05727,
+        "speed": 34,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13002.36490066225
+       },
+       {
+        "timestamp": 1722524635,
+        "latitude": 39.744559,
+        "longitude": -105.060265,
+        "speed": 35,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13002.449668874173
+       },
+       {
+        "timestamp": 1722524645,
+        "latitude": 39.744777,
+        "longitude": -105.063283,
+        "speed": 36,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13002.534437086093
+       },
+       {
+        "timestamp": 1722524655,
+        "latitude": 39.744952,
+        "longitude": -105.066324,
+        "speed": 37,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13002.619205298013
+       },
+       {
+        "timestamp": 1722524665,
+        "latitude": 39.745088,
+        "longitude": -105.06939,
+        "speed": 38,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13002.703973509933
+       },
+       {
+        "timestamp": 1722524675,
+        "latitude": 39.745194,
+        "longitude": -105.072481,
+        "speed": 30,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13002.788741721854
+       },
+       {
+        "timestamp": 1722524685,
+        "latitude": 39.745282,
+        "longitude": -105.075593,
+        "speed": 31,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13002.873509933775
+       },
+       {
+        "timestamp": 1722524695,
+        "latitude": 39.745365,
+        "longitude": -105.078724,
+        "speed": 32,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13002.958278145696
+       },
+       {
+        "timestamp": 1722524705,
+        "latitude": 39.745459,
+        "longitude": -105.08187,
+        "speed": 33,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13003.043046357616
+       },
+       {
+        "timestamp": 1722524715,
+        "latitude": 39.745577,
+        "longitude": -105.085024,
+        "speed": 34,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13003.127814569536
+       },
+       {
+        "timestamp": 1722524725,
+        "latitude": 39.74573,
+        "longitude": -105.088181,
+        "speed": 35,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13003.212582781456
+       },
+       {
+        "timestamp": 1722524735,
+        "latitude": 39.745925,
+        "longitude": -105.091334,
+        "speed": 36,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13003.297350993378
+       },
+       {
+        "timestamp": 1722524745,
+        "latitude": 39.746163,
+        "longitude": -105.094477,
+        "speed": 37,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13003.382119205298
+       },
+       {
+        "timestamp": 1722524755,
+        "latitude": 39.746443,
+        "longitude": -105.097606,
+        "speed": 38,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13003.466887417218
+       },
+       {
+        "timestamp": 1722524765,
+        "latitude": 39.746758,
+        "longitude": -105.100715,
+        "speed": 30,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13003.551655629139
+       },
+       {
+        "timestamp": 1722524775,
+        "latitude": 39.747096,
+        "longitude": -105.103801,
+        "speed": 31,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13003.636423841059
+       },
+       {
+        "timestamp": 1722524785,
+        "latitude": 39.747444,
+        "longitude": -105.106863,
+        "speed": 32,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13003.72119205298
+       },
+       {
+        "timestamp": 1722524795,
+        "latitude": 39.747788,
+        "longitude": -105.1099,
+        "speed": 33,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13003.805960264901
+       },
+       {
+        "timestamp": 1722524805,
+        "latitude": 39.748113,
+        "longitude": -105.112914,
+        "speed": 34,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13003.890728476821
+       },
+       {
+        "timestamp": 1722524815,
+        "latitude": 39.748408,
+        "longitude": -105.115906,
+        "speed": 35,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13003.975496688741
+       },
+       {
+        "timestamp": 1722524825,
+        "latitude": 39.748664,
+        "longitude": -105.118882,
+        "speed": 36,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13004.060264900661
+       },
+       {
+        "timestamp": 1722524835,
+        "latitude": 39.748876,
+        "longitude": -105.121846,
+        "speed": 37,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13004.145033112583
+       },
+       {
+        "timestamp": 1722524845,
+        "latitude": 39.749045,
+        "longitude": -105.124804,
+        "speed": 38,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13004.229801324504
+       },
+       {
+        "timestamp": 1722524855,
+        "latitude": 39.749175,
+        "longitude": -105.127762,
+        "speed": 30,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13004.314569536424
+       },
+       {
+        "timestamp": 1722524865,
+        "latitude": 39.749277,
+        "longitude": -105.130727,
+        "speed": 31,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13004.399337748344
+       },
+       {
+        "timestamp": 1722524875,
+        "latitude": 39.749364,
+        "longitude": -105.133703,
+        "speed": 32,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13004.484105960264
+       },
+       {
+        "timestamp": 1722524885,
+        "latitude": 39.749448,
+        "longitude": -105.136696,
+        "speed": 33,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13004.568874172186
+       },
+       {
+        "timestamp": 1722524895,
+        "latitude": 39.749545,
+        "longitude": -105.139711,
+        "speed": 34,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13004.653642384106
+       },
+       {
+        "timestamp": 1722524905,
+        "latitude": 39.749667,
+        "longitude": -105.142749,
+        "speed": 35,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13004.738410596026
+       },
+       {
+        "timestamp": 1722524915,
+        "latitude": 39.749826,
+        "longitude": -105.145811,
+        "speed": 36,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13004.823178807947
+       },
+       {
+        "timestamp": 1722524925,
+        "latitude": 39.750027,
+        "longitude": -105.148899,
+        "speed": 37,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13004.907947019867
+       },
+       {
+        "timestamp": 1722524935,
+        "latitude": 39.750272,
+        "longitude": -105.152008,
+        "speed": 38,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13004.992715231789
+       },
+       {
+        "timestamp": 1722524945,
+        "latitude": 39.750558,
+        "longitude": -105.155138,
+        "speed": 30,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13005.077483443709
+       },
+       {
+        "timestamp": 1722524955,
+        "latitude": 39.750877,
+        "longitude": -105.158281,
+        "speed": 31,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13005.162251655629
+       },
+       {
+        "timestamp": 1722524965,
+        "latitude": 39.751217,
+        "longitude": -105.161435,
+        "speed": 32,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13005.24701986755
+       },
+       {
+        "timestamp": 1722524975,
+        "latitude": 39.751566,
+        "longitude": -105.164591,
+        "speed": 33,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13005.33178807947
+       },
+       {
+        "timestamp": 1722524985,
+        "latitude": 39.751908,
+        "longitude": -105.167745,
+        "speed": 34,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13005.416556291391
+       },
+       {
+        "timestamp": 1722524995,
+        "latitude": 39.752229,
+        "longitude": -105.17089,
+        "speed": 35,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13005.501324503311
+       },
+       {
+        "timestamp": 1722525005,
+        "latitude": 39.752519,
+        "longitude": -105.174021,
+        "speed": 36,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13005.586092715232
+       },
+       {
+        "timestamp": 1722525015,
+        "latitude": 39.752768,
+        "longitude": -105.177133,
+        "speed": 37,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13005.670860927152
+       },
+       {
+        "timestamp": 1722525025,
+        "latitude": 39.752973,
+        "longitude": -105.180223,
+        "speed": 38,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13005.755629139072
+       },
+       {
+        "timestamp": 1722525035,
+        "latitude": 39.753136,
+        "longitude": -105.183288,
+        "speed": 30,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13005.840397350994
+       },
+       {
+        "timestamp": 1722525045,
+        "latitude": 39.753262,
+        "longitude": -105.186328,
+        "speed": 31,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13005.925165562914
+       },
+       {
+        "timestamp": 1722525055,
+        "latitude": 39.753361,
+        "longitude": -105.189345,
+        "speed": 32,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13006.009933774834
+       },
+       {
+        "timestamp": 1722525065,
+        "latitude": 39.753445,
+        "longitude": -105.19234,
+        "speed": 33,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13006.094701986754
+       },
+       {
+        "timestamp": 1722525075,
+        "latitude": 39.753531,
+        "longitude": -105.195318,
+        "speed": 34,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13006.179470198675
+       },
+       {
+        "timestamp": 1722525085,
+        "latitude": 39.753631,
+        "longitude": -105.198283,
+        "speed": 35,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13006.264238410597
+       },
+       {
+        "timestamp": 1722525095,
+        "latitude": 39.753758,
+        "longitude": -105.201241,
+        "speed": 36,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13006.349006622517
+       },
+       {
+        "timestamp": 1722525105,
+        "latitude": 39.753923,
+        "longitude": -105.204199,
+        "speed": 37,
+        "autopilot": "Off",
+        "heading": 90,
+        "odometer": 13006.433774834437
+       },
+       {
+        "timestamp": 1722525115,
+        "latitude": 39.754131,
+        "longitude": -105.207162,
+        "speed": 38,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13006.518543046357
+       },
+       {
+        "timestamp": 1722525125,
+        "latitude": 39.754382,
+        "longitude": -105.210137,
+        "speed": 30,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13006.603311258277
+       },
+       {
+        "timestamp": 1722525135,
+        "latitude": 39.754673,
+        "longitude": -105.213127,
+        "speed": 31,
+        "autopilot": "Self Driving",
+        "heading": 90,
+        "odometer": 13006.6880794702
+       },
+       {
+        "timestamp": 1722525145,
+        "latitude": 39.754996,
+        "longitude": -105.216139,
+        "speed": 32,
+        "autopilot": "Standby",
+        "heading": 90,
+        "odometer": 13006.77284768212
+       },
+       {
+        "timestamp": 1722525155,
+        "latitude": 39.755339,
+        "longitude": -105.219174,
+        "speed": 33,
+        "autopilot": "Unavailable",
+        "heading": 90,
+        "odometer": 13006.85761589404
+       }
+      ]
+     }
+    ]
+   }
+  },
+  "/5YJ3E1EA7KF000001/path?from=1722538800&to=1722539400&separate=true&simplify=false&details=true": {
+   "status": 500,
+   "text": "<html>Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error Internal Server Error </html>"
+  },
+  "/5YJ3E1EA7KF000001/path?from=1722604500&to=1722604890&separate=true&simplify=false&details=true": {
+   "status": 200,
+   "json": {
+    "results": []
+   }
+  },
+  "/5YJ3E1EA7KF000001/path?from=1722614400&to=1722614640&separate=true&simplify=false&details=true": {
+   "status": 200,
+   "json": {
+    "results": [
+     [
+      {
+       "timestamp": 1722614400,
+       "latitude": 39.7392,
+       "longitude": -104.9899,
+       "speed": 0,
+       "autopilot": null
+      },
+      {
+       "timestamp": 1722614420,
+       "latitude": 39.731089,
+       "longitude": -105.004304,
+       "speed": 1,
+       "autopilot": "Standby"
+      },
+      {
+       "timestamp": 1722614440,
+       "latitude": 39.722964,
+       "longitude": -105.018732,
+       "speed": 2,
+       "autopilot": null
+      },
+      {
+       "latitude": 39.7,
+       "longitude": -105,
+       "speed": 10
+      },
+      {
+       "timestamp": 1722614480,
+       "latitude": 39.706622,
+       "longitude": -105.047651,
+       "speed": 4,
+       "autopilot": null
+      },
+      {
+       "timestamp": 1722614500,
+       "latitude": "39.7",
+       "longitude": -105.062132,
+       "speed": 5,
+       "autopilot": "Standby"
+      },
+      {
+       "timestamp": 1722614520,
+       "latitude": 39.690114,
+       "longitude": -105.076622,
+       "speed": 6,
+       "autopilot": null
+      },
+      {
+       "timestamp": 1722614540,
+       "latitude": 39.681798,
+       "longitude": -105.091113,
+       "speed": 7,
+       "autopilot": "Standby"
+      },
+      {
+       "timestamp": 1722614560,
+       "latitude": 39.67345,
+       "longitude": -105.1056,
+       "speed": 8,
+       "autopilot": null
+      },
+      {
+       "timestamp": 1722614580,
+       "latitude": 39.665081,
+       "longitude": -105.120076,
+       "speed": 9,
+       "autopilot": "Standby"
+      },
+      {
+       "timestamp": 1722614600,
+       "latitude": 39.656707,
+       "longitude": -105.134537,
+       "speed": 10,
+       "autopilot": null
+      },
+      {
+       "timestamp": 1722614620,
+       "latitude": 39.648341,
+       "longitude": -105.148978,
+       "speed": 11,
+       "autopilot": "Standby"
+      },
+      {
+       "timestamp": 1722614640,
+       "latitude": 39.639997,
+       "longitude": -105.163396,
+       "speed": 12,
+       "autopilot": null
+      }
+     ],
+     [
+      {
+       "timestamp": 1722614400,
+       "latitude": 39.7392,
+       "longitude": -104.9899,
+       "speed": 0,
+       "autopilot": null
+      }
+     ]
+    ]
+   }
+  },
+  "/5YJ3E1EA7KF000001/path?from=1722731400&to=1722731760&separate=true&simplify=false&details=true": {
+   "status": 200,
+   "json": {
+    "results": [
+     {
+      "timestamp": 1722731400,
+      "latitude": 39.8561,
+      "longitude": -104.6733,
+      "speed": 50.25,
+      "autopilot": "Self Driving"
+     },
+     {
+      "timestamp": 1722731445,
+      "latitude": 39.841618,
+      "longitude": -104.712887,
+      "speed": 50.25,
+      "autopilot": "Self Driving"
+     },
+     {
+      "timestamp": 1722731490,
+      "latitude": 39.827122,
+      "longitude": -104.752499,
+      "speed": 50.25,
+      "autopilot": "Self Driving"
+     },
+     {
+      "timestamp": 1722731535,
+      "latitude": 39.812599,
+      "longitude": -104.792132,
+      "speed": 50.25,
+      "autopilot": "Self Driving"
+     },
+     {
+      "timestamp": 1722731580,
+      "latitude": 39.798039,
+      "longitude": -104.831784,
+      "speed": 50.25,
+      "autopilot": "Self Driving"
+     },
+     {
+      "timestamp": 1722731625,
+      "latitude": 39.783436,
+      "longitude": -104.871449,
+      "speed": 50.25,
+      "autopilot": "Self Driving"
+     },
+     {
+      "timestamp": 1722731670,
+      "latitude": 39.768789,
+      "longitude": -104.911122,
+      "speed": 50.25,
+      "autopilot": "Self Driving"
+     },
+     {
+      "timestamp": 1722731715,
+      "latitude": 39.754102,
+      "longitude": -104.950796,
+      "speed": 50.25,
+      "autopilot": "Self Driving"
+     },
+     {
+      "timestamp": 1722731760,
+      "latitude": 39.739383,
+      "longitude": -104.990466,
+      "speed": 50.25,
+      "autopilot": "Self Driving"
+     }
+    ]
+   }
+  },
+  "/5YJ3E1EA7KF000001/path?from=1722740400&to=1722740700&separate=true&simplify=false&details=true": {
+   "status": 200,
+   "json": {
+    "results": []
+   }
+  },
+  "/5YJ3E1EA7KF000001/drives?distance_format=mi&from=1722492000&to=1722751199": {
+   "status": 200,
+   "json": {
+    "results": [
+     {
+      "id": 101,
+      "started_at": 1722524405,
+      "ended_at": 1722525160,
+      "odometer_distance": 6.4,
+      "autopilot_distance": 3.1,
+      "starting_odometer": 13000.5,
+      "ending_odometer": 13006.9,
+      "starting_latitude": 39.7392,
+      "starting_longitude": -104.9903,
+      "ending_latitude": 39.7555,
+      "ending_longitude": -105.2211
+     },
+     {
+      "id": 102,
+      "started_at": 1722538800,
+      "ended_at": 1722539400,
+      "odometer_distance": 4,
+      "autopilot_distance": 0,
+      "starting_odometer": 13010,
+      "starting_latitude": 39.7555,
+      "starting_longitude": -105.2211,
+      "ending_latitude": 39.7392,
+      "ending_longitude": -104.9903
+     },
+     {
+      "id": 103,
+      "started_at": 1722604500,
+      "ended_at": 1722604890,
+      "odometer_distance": 2.5,
+      "autopilot_distance": 2.5,
+      "starting_odometer": 13020.25,
+      "starting_latitude": 39.7392,
+      "starting_longitude": -104.9903,
+      "ending_latitude": 39.75,
+      "ending_longitude": -104.97
+     },
+     {
+      "id": 104,
+      "started_at": 1722614400,
+      "ended_at": 1722614640,
+      "odometer_distance": 1.9,
+      "autopilot_distance": 0.4,
+      "starting_odometer": 13030.875,
+      "starting_latitude": 39.7392,
+      "starting_longitude": -104.9903,
+      "ending_latitude": 39.6403,
+      "ending_longitude": -105.163
+     },
+     {
+      "id": 105,
+      "started_at": 1722628920,
+      "ended_at": 1722630000,
+      "odometer_distance": 9,
+      "autopilot_distance": 1,
+      "starting_odometer": 13040
+     },
+     {
+      "id": 106,
+      "started_at": 1722731400,
+      "ended_at": 1722731760,
+      "odometer_distance": 3.3,
+      "autopilot_distance": 0,
+      "starting_odometer": null
+     },
+     {
+      "id": 107,
+      "started_at": 1722740400,
+      "ended_at": 1722740700,
+      "odometer_distance": 1,
+      "autopilot_distance": 0,
+      "starting_odometer": 13050
+     }
+    ]
+   }
+  }
+ }
+}

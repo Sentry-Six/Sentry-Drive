@@ -738,3 +738,27 @@ pub fn group_indexed_drives(index: &DriveIndex, progress: ProgressFn, cancel: &A
     out.insert("aggregates".into(), aggregates);
     Ok(Value::Object(out))
 }
+
+/// Hand every time window of indexed routes (split where consecutive clips are
+/// more than GAP_FILL_MAX apart, exactly as `group_indexed_drives` does) to
+/// `each`. Grouping a window gives the same drives as grouping every route at
+/// once, without holding the whole file in memory.
+pub fn for_each_route_window(index: &DriveIndex, mut each: impl FnMut(Vec<Route>) -> Result<()>) -> Result<()> {
+    let mut stmt = index.db.prepare("SELECT timestamp_ms, payload FROM routes ORDER BY timestamp_ms, sequence")?;
+    let mut rows = stmt.query([])?;
+    let mut window: Vec<Route> = Vec::new();
+    let mut previous: Option<i64> = None;
+    while let Some(row) = rows.next()? {
+        let ts: i64 = row.get(0)?;
+        if previous.is_some_and(|prev| ts - prev > calc::GAP_FILL_MAX_MS) {
+            each(std::mem::take(&mut window))?;
+        }
+        let payload: Vec<u8> = row.get(1)?;
+        window.push(bincode::deserialize(&payload)?);
+        previous = Some(ts);
+    }
+    if !window.is_empty() {
+        each(window)?;
+    }
+    Ok(())
+}

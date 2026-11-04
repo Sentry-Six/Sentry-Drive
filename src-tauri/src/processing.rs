@@ -5,7 +5,7 @@
 //! stream the same `processing-output` events.
 
 mod discovery;
-mod extract;
+pub mod extract;
 pub mod pipeline;
 
 use std::panic::AssertUnwindSafe;

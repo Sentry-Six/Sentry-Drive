@@ -269,6 +269,12 @@ pub enum Replacement {
         extra: Vec<Vec<u8>>,
         pretty: bool,
     },
+    /// Rewrite elements in place: `edit` returns replacement bytes for an
+    /// element, or None to keep it unchanged.
+    Map {
+        edit: Box<dyn FnMut(&[u8]) -> Result<Option<Vec<u8>>> + Send>,
+        pretty: bool,
+    },
 }
 
 fn write_array<W: Write>(out: &mut W, items: &mut dyn Iterator<Item = Result<Vec<u8>>>, pretty: bool) -> Result<()> {
@@ -329,6 +335,30 @@ pub fn write_drive_data(
         let write_replacement = |out: &mut BufWriter<File>, key: &str, rep: Replacement, existing: Option<&Section>, src: Option<&mut File>| -> Result<()> {
             match rep {
                 Replacement::Value(v) => out.write_all(serde_json::to_string(&v)?.as_bytes())?,
+                Replacement::Map { mut edit, pretty } => {
+                    let mut any = false;
+                    out.write_all(b"[")?;
+                    if let (Some(sec), Some(src)) = (existing, src) {
+                        for_each_array_element(src, sec, |el| {
+                            out.write_all(match (pretty, any) {
+                                (true, true) => b",\n    ".as_slice(),
+                                (true, false) => b"\n    ".as_slice(),
+                                (false, true) => b",".as_slice(),
+                                (false, false) => b"".as_slice(),
+                            })?;
+                            match edit(el)? {
+                                Some(bytes) => out.write_all(&bytes)?,
+                                None => out.write_all(el)?,
+                            }
+                            any = true;
+                            Ok(())
+                        })?;
+                    }
+                    if pretty && any {
+                        out.write_all(b"\n  ")?;
+                    }
+                    out.write_all(b"]")?;
+                }
                 Replacement::Filter { mut keep, extra, pretty } => {
                     // Streamed straight into `out` to keep memory flat.
                     let mut any = false;

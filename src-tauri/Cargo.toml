@@ -18,7 +18,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-window-state = "2"
+tauri-plugin-updater = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 rusqlite = { version = "0.41", features = ["bundled"] }
@@ -33,6 +33,17 @@ semver = "1"
 tokio = { version = "1", features = ["sync"] }
 sys-locale = "0.3.2"
 mimalloc = "0.1.52"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+pbkdf2 = "0.12"
+sha1 = "0.10"
+libm = "0.2"
+rusty-leveldb = "4"
+
+[target.'cfg(windows)'.dependencies]
+aes-gcm = "0.10"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }
 
 [profile.release]
 lto = true
