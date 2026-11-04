@@ -90,6 +90,7 @@
     }
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
     "electron": "45.1.0",
     "electron-builder": "^26.18.0"
   },

@@ -7,5 +7,12 @@ drive-data.json
 *.psd
 temp/
 *.tmp
-docs
+# Local notes stay untracked; the Tauri benchmark write-up is tracked.
+docs/*
+!docs/tauri-benchmarks.md
 .DS_Store
+
+# Tauri build outputs
+tauri-dist/
+src-tauri/target/
+src-tauri/gen/

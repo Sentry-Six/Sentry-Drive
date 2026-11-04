@@ -1,0 +1,45 @@
+[package]
+name = "sentry-drive"
+version = "1.6.3"
+description = "Sentry Drive (Tauri preview)"
+authors = ["Sentry-Six"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "sentry_drive_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-window-state = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+chrono = "0.4"
+base64 = "0.22"
+bincode = "1.3"
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"
+regex = "1"
+ureq = { version = "3", features = ["json"] }
+semver = "1"
+tokio = { version = "1", features = ["sync"] }
+sys-locale = "0.3.2"
+mimalloc = "0.1.52"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# Proc-macros and build scripts must keep their metadata: stripping them
+# breaks `--target` builds ("can't find crate for `tauri_macros`").
+[profile.release.build-override]
+strip = false
