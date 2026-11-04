@@ -278,9 +278,70 @@
     return 'installing (the app restarts)';
   });
 
+
+  // ── Extra checks (C.extra): run against the big drive file ──────────────
+  const extra = [];
+  const xstep = (name, fn) => extra.push({ name, fn });
+
+  xstep('extra: load the big drive file', async () => {
+    await sleep(2000);
+    if (shown($('update-overlay'))) $('btn-update-skip').click();
+    await autoLoadDriveData(C.file);
+    await waitFor(() => driveCount() > 0 && loadedFilePath === C.file, 120000, 'drive list');
+    return { drives: drives.length };
+  });
+
+  xstep('extra: external change to drive-data.json triggers a reload', async () => {
+    deselectDrive?.({ skipFit: true });
+    let fired = 0;
+    window.electronAPI.onDriveDataChanged(() => { fired++; });
+    await report({ step: 'extra: touch the file now', ok: true });
+    await waitFor(() => fired > 0, 60000, 'drive-data-changed event');
+    await waitFor(() => driveCount() > 0 && !shown($('loading-overlay')), 120000, 'reload');
+    return { fired, drives: drives.length };
+  });
+
+  xstep('extra: charging sites, a site, a session', async () => {
+    switchMainTab('charging');
+    await waitFor(() => document.querySelector('.charging-site-button'), 30000, 'sites');
+    const sites = document.querySelectorAll('.charging-site-button').length;
+    document.querySelector('.charging-site-button').click();
+    await waitFor(() => document.querySelector('.charging-session-button'), 30000, 'sessions');
+    document.querySelector('.charging-session-button').click();
+    await waitFor(() => document.querySelector('.charging-session-detail .charging-metric'), 30000, 'session detail');
+    const metrics = [...document.querySelectorAll('.charging-session-detail .charging-metric')].map((m) => m.innerText.replace(/\n/g, ' '));
+    switchMainTab('drives');
+    return { sites, metrics: metrics.slice(0, 6) };
+  });
+
+  xstep('extra: changelog opens with content', async () => {
+    $('btn-settings').click();
+    $('btn-view-changelog').click();
+    await waitFor(() => shown($('changelog-overlay')) && $('changelog-modal-content').innerText.length > 50, 20000, 'changelog');
+    const t = $('changelog-modal-content').innerText.slice(0, 120);
+    $('btn-changelog-dismiss').click();
+    $('btn-close-settings').click();
+    return { start: t };
+  });
+
+  xstep('extra: reverse geocode + geocoder settings round-trip', async () => {
+    const g = await window.electronAPI.reverseGeocode({ lat: 53.5444, lng: -113.4909 });
+    const before = await window.electronAPI.getGeocodeSettings();
+    await window.electronAPI.setGeocodeSettings({ ...before, language: 'fr' });
+    const mid = await window.electronAPI.getGeocodeSettings();
+    await window.electronAPI.setGeocodeSettings(before);
+    return { label: g && (g.label || g.name || JSON.stringify(g).slice(0, 120)), language: mid.language };
+  });
+
+  xstep('extra: Supercharger catalog refresh (Overpass)', async () => {
+    const before = await window.electronAPI.getSuperchargerCatalogStatus();
+    const r = await window.electronAPI.refreshSuperchargerCatalog();
+    const after = await window.electronAPI.getSuperchargerCatalogStatus();
+    return { before, result: r && { success: r.success, error: r.error, count: r.count }, after };
+  });
+
   async function run() {
-    for (const s of steps) {
-      if (C.only && !C.only.includes(steps.indexOf(s))) continue;
+    for (const s of C.extra ? extra : steps) {
       const t0 = Date.now();
       try {
         const detail = await s.fn();

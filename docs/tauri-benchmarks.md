@@ -1,46 +1,69 @@
-# Sentry Drive: Electron vs Tauri benchmarks
+# Sentry Drive: moving from Electron to Tauri
 
-An experiment on branch `claude/tauri-port-d4641b`: Sentry Drive v1.6.3 ported from
-Electron 45 to Tauri 2. The web UI is unchanged; the Electron main process,
-preload and Node-only code are replaced by Rust. Nothing here is shipped, pushed
-or published, and `main` and the Electron release setup are untouched.
+Branch `claude/tauri-port-d4641b`: Sentry Drive ported from Electron 45 to
+Tauri 2. The web UI is unchanged (two `confirm()` calls gained an `await`); the
+Electron main process, preload and Node-only code are replaced by Rust. The
+port is now feature-complete. The Tauri app is a drop-in update for existing
+Electron installs, and the release workflow is ready. Everything is local:
+nothing is pushed, tagged or published.
+
+**Start with "[Ready to ship?](#ready-to-ship)"** for what is done, what is
+untested and what Scott has to do.
 
 ## Results
 
-Same Mac, same 1.08 GB `drive-data.json`, same harness. Electron numbers are the
-v1.6.3 build from `main`; Tauri numbers are the port on this branch. Times are
-medians of 5 cold starts (app fully quit between runs); the "no drive loaded"
-row is a single run for both apps.
+Same Mac, same 1.08 GB `drive-data.json`, same harness. Times are medians of
+5 cold starts (app fully quit between runs). The "no drive loaded" rows are a
+single run.
 
-| | Electron 45 (v1.6.3) | Tauri 2 (this branch) | Change |
+- **Electron 45 (v1.6.3):** the build from `main`.
+- **Tauri, experiment:** the first port (commit `0bbaf2a`).
+- **Tauri, ship candidate:** this branch now. Every feature is ported, it uses
+  the production identity, and it includes the updater, migration and Keychain
+  code.
+
+| | Electron 45 (v1.6.3) | Tauri, experiment | **Tauri, ship candidate** |
 |---|---:|---:|---:|
-| **DMG download** (universal) | 230.2 MB | 19.9 MB | **11.6× smaller** |
-| **ZIP download** (universal) | 222.9 MB | 18.0 MB | 12.4× smaller |
-| **Installed .app** (universal) | 517.2 MB | 32.6 MB | 15.9× smaller |
-| First contentful paint | 597 ms | 594 ms | same |
-| Renderer "ui ready" log line | 608 ms | 590 ms | same |
-| **Launch → drive list + map shown** (auto-loads the 1.08 GB file) | 71.7 s | 9.0 s | **7.9× faster** |
-| Warm reload of the same file in the running app | 71.5 s | 8.3 s ¹ | 8.6× faster |
-| Memory, drive loaded and map open (sum of all app processes) | 482 MiB | 548 MiB | +14% |
-| Memory, after start with no drive loaded | 443 MiB | 331 MiB | −25% |
-| Peak memory during load (sum of per-process peaks) | 1,212 MiB | 1,504 MiB | +24% |
-| Memory after the warm reload | 1,073 MiB | 1,040 MiB | −3% |
-| Idle CPU over 60 s, drive loaded | 0.14% | 0.04% | lower |
-| Idle CPU over 60 s, no drive loaded | 1.17% | 0.03% | lower |
-| Processes attributed to the app | 6 | 6 | — |
+| **DMG download** (universal) | 230.2 MB | 19.9 MB | **22.0 MB** (10.5× smaller) |
+| **ZIP download** (universal) | 222.9 MB | 18.0 MB | **20.2 MB** |
+| **Installed .app** (universal) | 517.2 MB | 32.6 MB | **37.2 MB** (13.9× smaller) |
+| First contentful paint | 597 ms | 594 ms | 555 ms |
+| Renderer "ui ready" log line | 608 ms | 590 ms | 573 ms |
+| **Launch → drive list + map shown** (auto-loads the 1.08 GB file) | 71.7 s | 9.0 s | **9.8 s** (7.3× faster) |
+| Warm reload of the same file in the running app | 71.5 s | 8.3 s ¹ | 9.2 s |
+| Memory, drive loaded and map open (sum of all app processes) | 482 MiB | 548 MiB | 552 MiB |
+| Memory, after start with no drive loaded | 443 MiB | 331 MiB | 337 MiB |
+| Peak memory during load (sum of per-process peaks) | 1,212 MiB | 1,504 MiB | 1,498 MiB |
+| Memory after the warm reload | 1,073 MiB | 1,040 MiB | 971 MiB |
+| Idle CPU over 60 s, drive loaded | 0.14% | 0.04% | 0.03% |
+| Idle CPU over 60 s, no drive loaded | 1.17% | 0.03% | 0.03% |
+| Processes attributed to the app | 6 | 6 | 6 |
 
-¹ One of the five Tauri reloads took 200 s. Its log shows the Rust load itself
-finished in 8.1 s (index 5.4 s + group 2.7 s), so the delay was in the page
-before the drive list appeared. The most likely cause is WebKit throttling a
-window that was covered or in the background: other sessions were using the
-screen during the run. It did not recur in the other four runs; the median
-ignores it, and the raw value is in `scripts/bench/results/tauri-results.json`.
+What changed since the experiment:
+
+- **Load is about 0.8 s slower.** All of it is in grouping (3.6 s, was
+  2.7 s). The distance maths now uses the `libm` crate, the same fdlibm
+  lineage V8 uses, instead of the platform's faster but differently rounded
+  libm. That made every drive bit-identical to the Electron build: 1,220 of
+  1,220, where the experiment had 4 drives off by 0.1 m. Exact parity seemed
+  worth 0.8 s on a 1 GB file.
+- **The bundle is about 4.6 MB bigger.** The extra code is
+  tauri-plugin-updater (HTTP with TLS, minisign), the Keychain and Secret
+  Service client, the LevelDB reader for the settings migration, the
+  Tessie/Teslascope clients, and the small relaunch helper for the Squirrel
+  update.
+
+¹ In the experiment, one of the five Tauri reloads took 200 s. Its log showed
+the Rust load itself finished in 8.1 s, so the delay was in the page, most
+likely WebKit throttling a background window while other sessions used the
+screen. All five reloads of the ship candidate took 9.1–9.2 s. The raw
+results are in `scripts/bench/results/`.
 
 ### Where the time and memory go
 
 - **Loading.** The Electron utility process streams the JSON token by token in
   JavaScript (`stream-json`) into SQLite, then groups drives. The Rust loader
-  does the same work in about 5.5 s of indexing plus 2.7 s of grouping. It
+  does the same work in about 5.5 s of indexing plus 3.6 s of grouping (2.7 s before the switch to fdlibm trig, see above). It
   splits the routes array into raw elements, parses batches of them in
   parallel with serde, and groups the 30-minute windows in parallel. For
   reference, the original JS loader run on its own under Node took 81.6 s on
@@ -69,8 +92,9 @@ Everything is in `scripts/bench/` so it can be re-run:
 ```bash
 node scripts/bench/bench.mjs --app electron --bundle "dist/mac-universal/Sentry Drive.app" \
   --file /path/to/drive-data.json --work /tmp/bench --runs 5 --idle-runs 1 --out electron.json
-node scripts/bench/bench.mjs --app tauri \
-  --bundle "src-tauri/target/universal-apple-darwin/release/bundle/macos/Sentry Drive Tauri.app" \
+# The Tauri probe only exists in builds made with SENTRY_DRIVE_TEST_HOOKS=1.
+# Build those under a test identity (see "Testing without touching real data").
+node scripts/bench/bench.mjs --app tauri --bundle "<test build>.app" \
   --file /path/to/drive-data.json --work /tmp/bench --runs 5 --idle-runs 1 --out tauri.json
 ```
 
@@ -90,8 +114,8 @@ node scripts/bench/bench.mjs --app tauri \
   How each app gets the probe:
   - Electron receives it over the DevTools protocol, with
     `--remote-debugging-port` and a throwaway `--user-data-dir`.
-  - The Tauri build injects it from its bridge only when
-    `SENTRY_DRIVE_BENCH_OUT` is set.
+  - The Tauri build injects it from its bridge only when it was built with
+    `SENTRY_DRIVE_TEST_HOOKS` and `SENTRY_DRIVE_BENCH_OUT` is set at run time.
 - **Auto-load setup.** Both apps open the file through their normal
   auto-load-last-file path. Electron's localStorage is seeded once over the
   DevTools protocol; Tauri's is seeded by the same bench-only init script.
@@ -122,253 +146,415 @@ node scripts/bench/bench.mjs --app tauri \
 - **Electron build:** Sentry Drive v1.6.3 from `main` (49d9aae), Electron 45.1.0 (Chromium 156.0.8078.49, Node 24.22.1).
   - Built with electron-builder 26.18.0: `CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --publish never -c.mac.identity=- -c.mac.notarize=false`
   - Universal DMG + ZIP, ad-hoc signed, not notarized.
-- **Tauri build:** tauri 2.12.5, tauri-cli 2.12.4, Rust 1.95.0, WKWebView 22625.2.8.11.9.
-  - Built with `npx tauri build --target universal-apple-darwin`.
-  - Universal `.app` + DMG, ad-hoc signed (`signingIdentity: "-"`), not notarized.
+- **Tauri build:** tauri 2.12.5, tauri-cli 2.12.4, tauri-plugin-updater 2.14.1, Rust 1.95.0, WKWebView 22625.2.8.11.9.
+  - Sizes: `APPLE_SIGNING_IDENTITY="Developer ID Application: …" npx tauri build --target universal-apple-darwin`
+    (universal, Developer ID signed with hardened runtime, not notarized).
+  - Timings ("ship candidate" column): the same code built for arm64 under the
+    test identity with `SENTRY_DRIVE_TEST_HOOKS=1`, because the production
+    identity would read and write the real Sentry Drive data folder. The
+    "experiment" column was a universal build; on an Apple silicon Mac both
+    run the same arm64 code.
   - Release profile: `lto = true`, `codegen-units = 1`, `strip = true`.
 - Other Claude sessions shared the Mac. Heavy work was taken in turns through a shared schedule, and nothing else heavy ran during either benchmark.
 
 ## Caveats
 
 - **Different web engine.** On macOS the UI runs in WKWebView (Safari's
-  engine) instead of Chromium. Checked: the map, tiles from
-  `tiles.sentryusb.com`, the drive list and the charging pills render, and
-  MapLibre's module worker runs. Not checked by eye: every screen, every CSS
-  detail, and replay animation smoothness. WKWebView is also the engine that
-  throttles background windows (see the outlier above).
-- **Windows (WebView2) and Linux (WebKitGTK): not built or tested.**
-  - WebView2 is Chromium-based, so rendering should be closest to today's
-    build. It is preinstalled on Windows 10/11, but not on every machine, so the
-    installer needs its bootstrapper.
-  - WebKitGTK varies by distribution, and its WebGL/MapLibre performance is the
-    weakest of the three. It needs its own testing on the AppImage and `.deb`
-    targets.
-  - The Rust code is portable, but nothing here was compiled for either OS.
-- **No app identity carried over.** The Tauri build uses its own bundle id
-  (`com.sentrysix.sentrydrive.tauripreview`), data folder, WebKit storage and
-  cache folder, so it never touches the Electron app's data. A shipping port
-  needs a one-time migration of Electron's `userData` files (geocode cache,
-  known places, settings) and of its localStorage. That covers the last file,
-  colours, units and privacy zones, which live in Chromium's LevelDB.
-- **Unsigned, not notarized, so first launch is blocked.** Both apps are
-  ad-hoc signed only, so Gatekeeper will block the first open: right-click →
-  Open, or `xattr -dr com.apple.quarantine <app>` if they were copied from
-  elsewhere. Signing and notarizing changes neither size nor speed meaningfully.
-- **Network work at start.** Both apps check GitHub for updates when they
-  start: electron-updater versus a GitHub Releases API call. Reverse geocoding
-  of drive endpoints (Nominatim) runs in both and is cached after the first run.
-- **Index cache.** Both builds write a temporary SQLite index (about 1.4 GB for
-  this file) and delete it on a normal quit. A killed process leaves it behind
-  until the next start sweeps it. Electron keeps it next to the executable or
-  in system temp; Tauri keeps it in `~/Library/Caches/<id>/load-cache`.
-- **Time zones.** Clip filenames are parsed in local time in both builds:
-  - Rust (`chrono`), WebKit and Electron all use the system's zone data.
-  - Node 22's bundled ICU does not. In 2026 it still has America/Edmonton at
-    UTC−7, while macOS 27 has it at UTC−6.
-  - So the JS-vs-Rust parity runs below pin `TZ=America/Denver`, and the
-    harness never parses logged wall-clock times.
-- **Small samples.**
-  - Five cold starts per app and one idle run each, on one machine.
-  - The processing parity sample is 21 clips, with GPS on 5 of them.
+  engine) instead of Chromium. The in-window UI test (below) exercised every
+  main screen, but no one has compared every CSS detail by eye.
+- **Windows (WebView2) and Linux (WebKitGTK) are not tested.** The Windows
+  `.exe` was cross-compiled once from the Mac (MinGW,
+  `x86_64-pc-windows-gnu`), which proves the Windows-only code compiles. The
+  NSIS installer could not be built locally: Homebrew's `makensis` 3.13
+  crashes on this macOS even on a two-line script. Linux was not built: that
+  needs a GTK/WebKit sysroot or a Linux machine. Both are set up in CI and
+  waiting for a run.
+- **Not notarized.** The local build is Developer ID signed. Gatekeeper
+  rejects it only as "Unnotarized Developer ID". CI notarizes.
+- **Network work at start.** Both builds check GitHub for updates at start.
+  Reverse geocoding (Nominatim) is cached after the first run.
+- **Index cache.** Both builds write a temporary SQLite index (about 1.4 GB
+  for this file) and delete it on quit. Electron keeps it next to the
+  executable (inside the app bundle on macOS) or in system temp. Tauri keeps
+  it in the OS cache folder (`~/Library/Caches/com.jefffromtheirs.sentry-drive`
+  on macOS).
+- **Time zones.** Node 22's bundled ICU still has America/Edmonton at UTC−7,
+  while macOS 27 has UTC−6, so the JS-vs-Rust parity runs pin
+  `TZ=America/Denver`. The apps use the system's zone data and agree.
+- **Small samples.** Five cold starts and one idle run per build, on one
+  machine.
 
 ## How the port is built
 
 - **Frontend: unchanged.** `scripts/tauri/prepare-frontend.mjs` copies
-  `src/renderer` and the vendored assets into `tauri-dist/`, keeping the same
-  layout. It removes the HTML's CSP `<meta>`; the same policy is set in
-  `tauri.conf.json`, where Tauri can add its IPC origin to it.
-- **Preload → `src/tauri-bridge/bridge.js`.** An initialization script that
-  installs the same `window.electronAPI` surface. Every method maps to a Rust
-  command, and every `on…` subscription maps to a Tauri event with the same
-  name. `drive-calc.cjs` and `drive-telemetry-view.cjs` are wrapped as page
-  globals, as the preload's `contextBridge` exposed them.
+  `src/renderer` and the vendored assets into `tauri-dist/`. It drops the
+  HTML's CSP `<meta>`; the same policy lives in `tauri.conf.json`.
+- **Preload → `src/tauri-bridge/bridge.js`.** Installs the same
+  `window.electronAPI`. Every method maps to a Rust command and every `on…`
+  subscription to a Tauri event of the same name.
 - **Main process + Node code → `src-tauri/src/`:**
 
 | Electron | Rust |
 |---|---|
-| `drive-loader-*`, `drive-index`, `disk-drive-grouper` (utility process) | `loader/index.rs`, `loader/mod.rs`: parallel split/parse, SQLite (bundled `rusqlite`), windowed grouping |
-| `grouper.js`, `drive-calc.cjs`, `event-gap-fill`, `clip-path`, `drive-telemetry` | `loader/grouper.rs`, `loader/calc.rs`, `loader/route.rs`: line-by-line ports keeping JS number semantics (`Math.round`, `Date` truncation, local-time parsing) |
+| `drive-loader-*`, `drive-index`, `disk-drive-grouper` (utility process) | `loader/index.rs`, `loader/mod.rs`: parallel split/parse, SQLite, windowed grouping |
+| `grouper.js`, `drive-calc.cjs`, `event-gap-fill`, `clip-path`, `drive-telemetry` | `loader/grouper.rs`, `loader/calc.rs` (fdlibm trig via `libm`), `loader/route.rs` |
 | `charging-history.cjs`, `supercharger-catalog.cjs` | `loader/charging.rs`, `supercharger.rs` |
-| `drive-data-writer.cjs`, `atomic-write.cjs` | `drive_data.rs`, `fsutil.rs`: section-preserving writer. Filtered sections are streamed element by element, so editing a 1 GB file never loads the whole thing |
-| tags / remove drive(s) / import file / change watcher / GPS backup | `drive_edit.rs` |
-| `process.js` + `worker.js` + `extract.js` + `clip-discovery.js` (child process) | `processing/*`: in-process threads; MP4 box walk, SEI/protobuf decode, same stdout lines |
+| `drive-data-writer.cjs`, `atomic-write.cjs` | `drive_data.rs` (streaming, section-preserving: replace / filter / edit-in-place), `fsutil.rs` |
+| tags, remove drive(s), import a drive-data file, change watcher, GPS backup | `drive_edit.rs` |
+| `repair-gps`, `check-summon` | `check_drives.rs`: streams the file; Summon groups from a temporary index, one time window at a time |
+| `tessie-import.cjs`, `tessie-api.cjs`, `teslascope-api.cjs` and their handlers | `imports.rs`, `imports/*`: CSV, clip building, both API clients, remove all/hidden |
+| `safeStorage` token files | `secrets.rs`: OS credential store, plus a one-time import of Electron's tokens |
+| `process.js`, `worker.js`, `extract.js`, `clip-discovery.js` (child process) | `processing/*`: in-process threads |
 | `geocode.cjs`, `known-places.cjs` | `geocode/*` |
-| `logger.cjs` | `logger.rs`: same line format, file sink and redacted export |
-| dialogs, `shell.openExternal`, window state | `tauri-plugin-dialog`, `tauri-plugin-opener`, `tauri-plugin-window-state` |
-| `electron-updater` | `updater.rs`: checks GitHub Releases and opens the release page (see below) |
-
-The Rust is ported from Sentry Drive's own MIT-licensed JavaScript.
-Sentry-USB-Rusty has a Rust grouper and extractor, but it is under PolyForm
-Noncommercial with other co-authors, so none of its code was copied.
+| `logger.cjs` | `logger.rs` |
+| dialogs, `shell.openExternal`, window state | `tauri-plugin-dialog`, `tauri-plugin-opener`, `migrate.rs` (Electron's `window-state.json` format) |
+| `electron-updater` | `updater.rs`: `tauri-plugin-updater` + GitHub Releases |
+| (first launch after the switch) | `migrate.rs`: data folder, localStorage import |
 
 ## Parity checklist
 
-**Verified by comparing against the JavaScript implementation**
+Everything Electron does is ported. "Same output" means compared against the
+Electron code running in Node on the same input.
 
-- [x] **Load and group `drive-data.json`.** `scripts/tauri/loader-parity.mjs`
-  ran the original JS loader and the Rust loader on the 1.08 GB file and
-  compared every drive's full summary plus a digest of its detail: point
-  count, coordinate/time/speed sums, first and last point, FSD/gear
-  histograms and FSD events.
-  - Load counts and aggregates are identical.
-  - **1,216 of 1,220 drives are identical.** In the other 4, one geocode
-    endpoint (the stationary-cluster medoid) differs by 0.000001°, about
-    0.1 m. The cause is a near-tie broken differently because V8 and the
-    system libm round sin/cos differently. Nothing else differs.
-- [x] **Charging history.** Sites and sessions are identical, including
-  per-site session lists.
-- [x] **Process clips (SEI extraction → `drive-data.json`).** On 21 sample
-  clips (two RecentClips days plus a SavedClips event in a gap) the output
-  route lines are byte-identical to `process.js`, and `processedFiles` and
-  `driveTags` match.
+**Compared against the JavaScript on real data (the 1.08 GB `drive-data.json`)**
 
-**Verified by unit tests (37 Rust tests, all passing)**
+- [x] **Load and group:** 1,220 of 1,220 drives identical (full summary plus a
+  digest of every detail), aggregates identical. `scripts/tauri/loader-parity.mjs`.
+- [x] **Charging history:** sites and sessions identical.
+- [x] **Check Drives, bridge gaps:** the output file is identical route by
+  route, with the same 9 gaps bridged. It took 8.7 s against 79 s in Node.
+  `scripts/tauri/check-drives-parity.mjs`.
+- [x] **Check Drives, Summon check:** the same candidate drives (787) and the
+  same clip reads. On a run that re-read 10 clips from the USB drive, the
+  written file is identical. It took 23 s against 105 s.
+- [x] **Bridge gaps along roads (OSRM):** a gap was bridged with a 95-point
+  road route from the live OSRM server.
+- [x] **Process clips:** 21 sample clips give byte-identical route lines
+  (from the experiment).
 
-- [x] Rounding and geodesy contract, clip-path normalisation, local-time parsing.
-- [x] Section-preserving writer: replace `driveTags`, filter `routes`, keep
-  unknown sections.
-- [x] Geocoding and known places: all 13 cases from `geocode.test.js` and
-  `known-places.test.js` ported, plus extra edge cases. No network calls in
-  tests.
-- [x] Clip discovery (the `clip-discovery.test.js` cases), protobuf/SEI helpers,
-  run-length builders.
+**Compared against the JavaScript on fixtures** (`scripts/tauri/imports-parity.mjs`, `scripts/tauri/fixtures/imports/`)
 
-**Verified by running the built app** (benchmark runs and a smoke test)
+- [x] **Tessie CSV import, Tessie API import, Teslascope API import, remove
+  all, remove hidden:**
+  - All 25 handler steps give the same results and progress events.
+  - The HTTP requests made to a fake server match.
+  - All 12 written files and their `.bak` copies are byte-identical.
+- [x] **Not called with real accounts.** There are no real tokens for either
+  service. The test called both live APIs with fake tokens, and each returned
+  its normal "Unauthorized" message.
 
-- [x] Window opens; the UI renders in WKWebView with the Tauri `electronAPI` bridge.
-- [x] Auto-load of the last drive-data file on start, load progress, drive list
-  paging, map with route overview, tiles from `tiles.sentryusb.com`.
-- [x] Charging sites listed (`list_charging_sites`, Supercharger matching).
-- [x] Update check against GitHub ("up to date (v1.6.3)" in the log).
-- [x] Logging: same line format, `session.log` / `previous-session.log`.
+**Unit tests:** 63 Rust tests pass, and the existing 236 JS tests still pass.
 
-**Ported but not clicked through by hand**
+**Exercised in the real Tauri window** (`scripts/tauri/ui-test.js`, results in `scripts/tauri/ui-test-results.ndjson`)
 
-- [ ] File and folder pickers; "Download logs" save dialog (`tauri-plugin-dialog`).
-- [ ] Add/remove drive tags; remove one drive or several (the writer path is
-  unit-tested).
-- [ ] Import another `drive-data.json` (preview + import, `.bak` restore point).
-- [ ] Reload prompt when `drive-data.json` changes on disk (3 s mtime/size poll).
-- [ ] Revert to the GPS backup; "has backup" check.
-- [ ] Drive detail view and replay; charging-session detail.
-- [ ] Reverse-geocoded labels, geocoder settings, known places and privacy zones.
-- [ ] Processing tab end to end in the app: start, stop, progress output.
-- [ ] Supercharger catalog refresh (Overpass).
-- [ ] Changelog (bundled and remote), external links, `check-online`.
-- [ ] DevTools (F12 / Ctrl+Shift+I) and reload (Cmd/Ctrl+R) shortcuts; window
-  size/position restore; the app staying in the Dock when its window closes.
+The test clicks the real controls and checks what the page and the file on
+disk show. It stubs only the native file pickers, and records `alert()`
+messages instead of opening native dialogs.
 
-**Not ported yet.** The bridge returns "Not available in the Tauri preview
-yet." and the UI shows its normal error.
+- [x] Startup auto-load of the last file, drive list and map.
+- [x] Processing tab: 60 real clips → 3 drives, progress output, "Complete!".
+- [x] Drive detail: select a drive, stats, map.
+- [x] Replay: play moves the slider, pause stops it, scrubbing.
+- [x] Tags: add in the detail panel, then remove from the list. Each change
+  was checked in the file after a reload.
+- [x] Check Drives → Bridge Gaps, then Revert; Check Drives → Check for Summon.
+- [x] Import Drives → Tessie CSV (preview + import), and → another
+  `drive-data.json` (merge + confirmation).
+- [x] Remove Imported Drives (Tessie). The test then confirmed nothing
+  Tessie-sourced was left in the file.
+- [x] Remove one drive; remove two with multi-select.
+- [x] Settings: unit switch persists; Integrations shows the connected tokens;
+  token save, replace and clear.
+- [x] An external change to `drive-data.json` triggers the reload.
+- [x] Charging tab: sites, a site's sessions, session detail.
+- [x] Changelog dialog; reverse geocoding; geocoder settings round-trip;
+  Supercharger catalog refresh from Overpass (5,840 bundled stations →
+  refreshed).
+- [x] In-app update: check → download with progress → install → relaunch as
+  the new version.
+- [x] `confirm()` shows a native dialog (checked by screenshot).
+- [x] Window position and size restored from `window-state.json`, and saved
+  again on quit.
 
-- [ ] **Check Drives:** repair GPS via OSRM, and the Summon check/backfill.
-- [ ] **Tessie** CSV import, **Tessie API** import, **Teslascope API** import,
-  and "remove all / remove hidden" for imported drives.
-- [ ] **API token storage.** Electron uses `safeStorage`; the Tauri version
-  would go in the macOS Keychain (`keyring` crate).
-- [ ] **In-app update download and install.** The Tauri build only checks
-  GitHub and opens the release page (see below).
+**Not exercised in the window** (ported, but needs a person):
+
+- [ ] Native file and folder pickers, and the "Download logs" save dialog.
+- [ ] Privacy-zone editing on the map (zones migrate and render), known-place
+  renames from the drive list.
+- [ ] DevTools (F12 / Ctrl+Shift+I), reload (Cmd/Ctrl+R), and the app staying
+  in the Dock after its window is closed.
+- [ ] Cancel in the middle of a long import or processing run.
+- [ ] Imports and validation against real Tessie and Teslascope accounts.
+
+**Bugs found and fixed while testing in the window**
+
+- `alert()` and `confirm()` did nothing. Tauri's dialog plugin makes them
+  asynchronous, and the app lacked the permission to show them. The
+  permission is now granted, and the renderer's two `confirm()` calls are
+  awaited. Electron is unaffected, since awaiting a boolean is a no-op.
+- Quitting didn't save the window position (Tauri's close event only fires
+  when the window is closed). It is now also saved about a second after each
+  move or resize.
 
 **Known behaviour differences**
 
-- **macOS menu bar.** Tauri shows the standard app menu (Quit, Edit, Window);
-  Electron sets no menu.
-- **Removing drives.** The routes to delete come from the grouping in the
-  loaded index, which is done window by window. Electron re-groups the whole
-  file at that moment. These should agree, since the index groups the same way,
-  but this has not been compared on real removals.
-- **Processing** (from the port's notes):
-  - A route that is re-processed moves to the end of the routes array instead
-    of staying in place.
-  - App edits made during a run are kept rather than overwritten.
-  - Ties in clip order are broken by byte order instead of `localeCompare`.
-- **Geocoding:**
-  - A `null` setting resets to defaults.
-  - Malformed zones or a `null` Nominatim body are skipped where the JS threw.
-  - Redirects are not followed, which matches Node's `https.get`.
-- **Index cache location:** see Caveats.
+- **macOS menu bar.** Tauri shows the standard app menu; Electron sets none.
+- **Duplicate clip paths.** When two routes normalise to the same path, the
+  Summon check updates the first one; Electron updates the last.
+- **Legacy files.** Electron re-encodes every route when it rewrites the file:
+  array-typed gear and autopilot bytes become base64, and malformed elements
+  become `{}`. Tauri copies routes it doesn't change byte for byte. Both
+  readers accept both forms.
+- **Imports.** `Date.parse` of month-name strings ("Jan 5 2024") returns NaN
+  in the Teslascope client. No known API response uses that form. Network
+  error messages read differently from Node's.
+- **Processing** (from the experiment):
+  - A re-processed route moves to the end of the routes array.
+  - App edits made during a run are kept.
+  - Ties in clip order are broken by byte order.
+- **Electron bugs ported faithfully**, listed by the import port:
+  - Remove-all overwrites the `.bak` file even when nothing is removed.
+  - Remove-hidden leaves `processedFiles` entries behind.
+  - The CSV import always rewrites the file.
+  - Teslascope's millisecond timestamps are scaled twice for pre-2001 values.
+  - The fix for each belongs in both builds, so it is left for later.
 
-## Trade-offs
+## Moving existing users over
 
-**Gains**
-- About a 12× smaller download and a 16× smaller install.
-- The 1 GB drive file loads and shows about 8× faster, including warm reloads.
-- Less memory at idle with no drive loaded, and near-zero idle CPU.
-- One Rust backend instead of a main process, a utility process and a Node
-  child process. Native threads replace Electron's `utilityProcess` and the
-  Node processing child.
+**The Tauri app is a drop-in replacement, not a separate app with an import
+step.** It uses:
 
-**Costs**
-- WKWebView instead of Chromium on macOS, and WebKitGTK on Linux. This means
-  three engines to test instead of one.
-- Memory with a big drive loaded is about the same, not lower, and peak memory
-  during a load is higher unless the parallelism is reduced.
-- About 7,000 lines of Rust now duplicate logic that also lives in JavaScript:
-  `drive-calc.cjs` still runs in the renderer, and Sentry USB has its own Rust
-  version. The JS↔Rust parity scripts in `scripts/tauri/` would need to run in
-  CI to keep them in step.
-- Some features are still missing (list above).
+- the same product name, "Sentry Drive";
+- the same bundle id, `com.jefffromtheirs.sentry-drive`;
+- the same executable name: "Sentry Drive" (`sentry-drive` on Linux);
+- the same data folder: `<config dir>/sentry-drive`, which is
+  `~/Library/Application Support/sentry-drive` on macOS, `%APPDATA%\sentry-drive`
+  on Windows and `~/.config/sentry-drive` on Linux.
 
-## Still needed before this could ship
+Everything the Electron main process kept there is used as-is: logs,
+`window-state.json`, the geocode cache and settings, known places, the
+Supercharger catalog cache and `support-prefs.json`.
 
-1. **Signing and notarization.**
-   - Set the Developer ID in `tauri.conf.json` (`bundle.macOS.signingIdentity`).
-   - Provide the Apple notarization credentials (`APPLE_ID`/`APPLE_TEAM_ID`/an
-     app-specific password, or an API key).
-   - Review entitlements: the Tauri build needs none of Electron's JIT and
-     unsigned-memory exceptions.
-2. **Auto-update.**
-   - Add `tauri-plugin-updater` and generate an update signing key.
-   - Publish signed `.app.tar.gz` artifacts plus a `latest.json` manifest on
-     GitHub Releases (the Tauri GitHub Action produces both).
-   - Replace `updater.rs`'s open-the-release-page fallback.
-   - Decide how existing Electron users move over: the last Electron release
-     downloads the Tauri DMG once, then Tauri's updater takes over.
-3. **Windows and Linux.**
-   - Build and test the NSIS installer with the WebView2 bootstrapper, and the
-     AppImage and `.deb` on WebKitGTK.
-   - Check paths, the index-cache location and file dialogs on each OS.
-4. **Remaining features:** Check Drives (OSRM repair and Summon), the
-   Tessie/Teslascope imports, and Keychain-backed tokens.
-5. **Migration:** carry over Electron's `userData` files and its localStorage
-   settings on first launch.
-6. **Testing:**
-   - Click through every screen in WKWebView.
-   - Run the JS↔Rust parity scripts in CI on a fixture set.
-   - Move the release workflow from electron-builder to `tauri-action`.
+Two things lived in Chromium's own storage, and are moved once on first launch
+(`migrate.rs`, `secrets.rs`):
 
-## Trying the two builds side by side
+- **Renderer settings** (last file, auto-load, units, privacy zones, map and
+  marker options, beta enrolment and so on) are in Chromium's localStorage
+  LevelDB. A copy of it is read with `rusty-leveldb` and replayed into the
+  webview before the page's scripts run. Keys the webview already has are
+  skipped, and a marker file stops it from running again.
+- **API tokens** are in `tessie-token.bin` and `teslascope-token.bin`,
+  encrypted by `safeStorage` (Chromium os_crypt "v10"). They are decrypted
+  and moved into the OS credential store, then the files are deleted:
+  - macOS: AES-128-CBC with the key from the "sentry-drive Safe Storage"
+    Keychain item.
+  - Windows: AES-256-GCM with the DPAPI-wrapped key in `Local State`.
+  - Linux: Chromium's fixed key.
 
-Both are universal, ad-hoc signed `.app` bundles inside this worktree:
+  Tokens are now stored in the macOS Keychain, Windows Credential Manager or
+  Linux Secret Service. This is more secure than Electron's encrypted file
+  plus a Keychain key. On Linux, tokens Electron encrypted with the desktop
+  keyring ("v11") are not migrated; those users re-enter them.
 
-- **Electron v1.6.3:** `dist/mac-universal/Sentry Drive.app` (DMG: `dist/Sentry-Drive-1.6.3-universal.dmg`)
-- **Tauri port:** `src-tauri/target/universal-apple-darwin/release/bundle/macos/Sentry Drive Tauri.app`
-  (DMG: `src-tauri/target/universal-apple-darwin/release/bundle/dmg/Sentry Drive Tauri_1.6.3_universal.dmg`)
+Nothing else in the folder is deleted, so a user can go back to an Electron
+build without losing anything.
 
-The Tauri app has its own name, bundle id and data, so both can be installed
-and run at once. Run from the worktree, the Electron build uses the same data
-folder as your installed Sentry Drive (`~/Library/Application Support/sentry-drive`).
+**How Electron users get the Tauri build: their existing updater.** Every
+release publishes electron-updater's feeds (`latest-mac.yml`, `latest.yml`,
+`latest-linux.yml`) alongside Tauri's `latest.json`. The electron-updater
+feeds point at the Tauri artifacts. No special "bridge" Electron release is
+needed, and users on any older version move over in one step.
 
-To rebuild the Tauri app:
+- **macOS: proven locally, end to end.** I used Developer-ID-signed builds
+  under a separate test identity (`com.sentrysix.sentrydrive.migtest`), so no
+  real data was involved:
+  1. Installed the Electron build (v1.6.3).
+  2. Seeded it with settings, a privacy zone, a Unicode key and two
+     encrypted dummy tokens.
+  3. Clicked through its normal check → download → install. Squirrel.Mac
+     accepted the Tauri zip, because the bundle id and Developer ID team
+     match its designated-requirement check.
+  4. Squirrel replaced the app in place and relaunched it as Tauri v1.7.0.
+  5. The Tauri log showed the tokens moved to the Keychain (no Keychain
+     prompt), 9 settings imported, and 1,220 drives auto-loaded from the
+     migrated last-file path.
+
+  Two things had to be fixed for this to work:
+  - **Bundle name.** Squirrel names the installed bundle after the new
+    executable, so the Tauri executable must be called "Sentry Drive"
+    (`mainBinaryName`).
+  - **Relaunch.** Squirrel relaunches by running
+    `<app>/Contents/Frameworks/Squirrel.framework/Resources/ShipIt` from the
+    new bundle. The Tauri app ships a tiny signed stand-in at that path that
+    only `open`s the app (`src-tauri/macos/squirrel-shim/`, built by
+    `scripts/tauri/squirrel-shim.mjs`).
+- **Windows: written, untested.** electron-updater runs the Tauri NSIS
+  installer. Its pre-install hook (`src-tauri/windows/installer-hooks.nsh`)
+  finds electron-builder's install by the GUID derived from the app id and
+  runs its uninstaller silently. It uses the same `/KEEP_APP_DATA --updated`
+  flags electron-builder uses when it replaces an old version, so
+  `%APPDATA%\sentry-drive` is kept.
+- **Linux: written, untested.** electron-updater replaces the AppImage in
+  place. For `.deb` it installs the new package over the old one, which needs
+  the package name to stay `sentry-drive`; CI prints the name.
+
+## Updates and releases
+
+- **In the app** (`updater.rs`): the renderer drives the same flow and status
+  events as before (checking → available → downloading % → ready → install).
+  1. The release is picked from the GitHub Releases API. This keeps the beta
+     toggle and "revert to stable", and only releases that carry `latest.json`
+     are offered, so Electron-only releases are skipped.
+  2. `tauri-plugin-updater` downloads the platform bundle and checks its
+     minisign signature against the public key built into the app.
+     `requireSignedVersion` also requires the signature to name the announced
+     version, which blocks downgrade tricks.
+  3. Install replaces the app and relaunches. A downloaded update that isn't
+     installed is installed on quit, as electron-updater did.
+
+  **Proven locally:** v1.7.0 → v1.7.1 check, download with progress,
+  signature check, install and relaunch, against a local feed.
+- **Release workflow** (`.github/workflows/build.yml`, prepared locally, not
+  pushed):
+  - Builds on macOS (universal), Windows (NSIS) and Linux (AppImage + deb).
+  - Runs the JS and Rust tests.
+  - Signs and notarizes the Mac app with the existing secrets and verifies the
+    result: universal binaries, Team ID, `spctl`, stapling.
+  - Builds the Squirrel zip.
+  - On a published release, uploads the installers, then writes and uploads
+    `latest.json` and the three `latest*.yml` feeds
+    (`scripts/tauri/release-feeds.mjs`). Feeds go last, so they never point at
+    a file that isn't uploaded yet.
+  - The updater public key comes from a repository variable, so no key is
+    committed.
+
+  `test.yml` now runs the Rust tests and a Linux `.deb` packaging smoke test
+  instead of electron-builder.
+
+## Ready to ship?
+
+**Done and verified on this Mac**
+
+- [x] Every Electron feature is ported; parity was checked as listed above.
+- [x] Every main screen was exercised in the real Tauri window.
+- [x] Drop-in identity, the data folder, and settings and token migration.
+- [x] The Electron updater installs and relaunches the Tauri app (macOS, test
+  identity).
+- [x] The Tauri updater updates itself (macOS, local feed).
+- [x] A universal production build, Developer ID signed with hardened runtime
+  and a timestamp: `codesign --verify --deep --strict` passes, the designated
+  requirement matches Electron's, and every Mach-O file is x86_64 + arm64.
+- [x] The release workflow and feed generator are written. The feed generator
+  ran against the test builds.
+- [x] Benchmarks rerun (table above).
+
+**Not verified (needs CI or another machine)**
+
+- [ ] **Notarization.** No notarytool profile was found on this Mac, and I
+  didn't go looking through the Keychain. CI notarizes with the existing App
+  Store Connect API key.
+- [ ] **Windows:**
+  - Build the NSIS installer.
+  - Check that the app runs in WebView2.
+  - Check the Electron → Tauri upgrade, including the uninstall hook and that
+    `%APPDATA%\sentry-drive` is kept.
+  - Check token migration with DPAPI.
+- [ ] **Linux:**
+  - Build the AppImage and `.deb`, and check the `.deb` package name.
+  - Run the app on WebKitGTK.
+  - Check the Electron → Tauri upgrade for both formats.
+  - Check Secret Service token storage.
+- [ ] **The whole workflow.** It has never run on GitHub: action versions,
+  runner images and artifact names are untested.
+- [ ] **The items under "Not exercised in the window"** above, and real
+  Tessie and Teslascope accounts.
+- [ ] **The Squirrel update on an Intel Mac** (it was proven on Apple
+  silicon).
+
+**What Scott needs to do**
+
+1. **Create the updater signing key** (a secret, so I didn't make it):
+
+   ```bash
+   npx tauri signer generate -w ~/.tauri/sentry-drive-updater.key
+   ```
+
+   Choose a password and back the key up somewhere safe: if it's lost,
+   installed copies can never update again. Then, in the repository settings:
+   - secret `TAURI_SIGNING_PRIVATE_KEY`: the contents of the `.key` file;
+   - secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the password;
+   - **variable** (not secret) `TAURI_UPDATER_PUBKEY`: the contents of the
+     `.key.pub` file.
+2. **Mac signing secrets:** keep the existing ones
+   (`MAC_CERTIFICATE_P12`, `MAC_CERTIFICATE_PASSWORD`, `APPLE_API_KEY`,
+   `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, `APPLE_TEAM_ID`); nothing changes.
+   For local notarization, optionally store a profile once
+   (`xcrun notarytool store-credentials …`) and pass the same values as
+   `APPLE_API_KEY` / `APPLE_API_ISSUER` / `APPLE_API_KEY_PATH` to
+   `npx tauri build`.
+3. **Approve pushing this branch.** Then run "Build and Release" with
+   `workflow_dispatch`, and check the three artifacts.
+4. **Test the upgrade on real machines** before the first release. Install
+   v1.6.3 (Electron) on Windows and Linux, publish a draft or pre-release
+   from this branch, and update from inside the app. On a spare Mac, do the
+   same with the real identity.
+5. **Pick the version number** for the first Tauri release (it must be higher
+   than the newest Electron release). The workflow syncs it from the tag.
+6. **Afterwards (follow-up):** remove the Electron sources and dependencies
+   once no rollback is needed. The parity scripts in `scripts/tauri/` use the
+   JS modules, so keep those, or freeze their outputs as fixtures first.
+
+## Testing without touching real data
+
+The production identity reads and writes the real data folder, so never
+launch a production build on a machine whose Sentry Drive data matters. All
+local tests used a test identity.
 
 ```bash
-npm install
-npx tauri build --target universal-apple-darwin
+# overlay: productName/mainBinaryName "Sentry Drive Migtest",
+#          identifier com.sentrysix.sentrydrive.migtest, updater pubkey, ...
+SENTRY_DRIVE_ELECTRON_NAME=sentry-drive-migtest \
+SENTRY_DRIVE_UPDATE_FEED=http://127.0.0.1:8765/tauri \
+SENTRY_DRIVE_TEST_HOOKS=1 \
+npx tauri build --target aarch64-apple-darwin --bundles app --config <overlay.json>
 ```
 
-To check processing parity on a folder of sample clips:
+- **`SENTRY_DRIVE_ELECTRON_NAME`:** the Electron data folder and Keychain
+  names. Default: `sentry-drive`.
+- **`SENTRY_DRIVE_UPDATE_FEED`:** a fixed update feed.
+- **`SENTRY_DRIVE_TEST_HOOKS`:** compiles in the UI-test and benchmark hooks.
+  Release builds have none of these.
+- **Running the UI test:**
 
-```bash
-node src/processing/process.js <clips> out-js.json 2
-PARITY_CLIPS=<clips> PARITY_OUT=out-rs.json cargo test --release --manifest-path src-tauri/Cargo.toml \
-  --lib processing::pipeline::tests::parity_run -- --ignored --nocapture
-node scripts/tauri/processing-parity-compare.mjs out-js.json out-rs.json
-```
+  ```bash
+  open -n -a <app> --env SENTRY_DRIVE_UI_TEST=<script> --env SENTRY_DRIVE_UI_TEST_OUT=<out.ndjson>
+  ```
 
-To check loader parity against the JS implementation:
+  `<script>` is `window.__UI_TEST__ = {clips, out, fixtures}` followed by
+  `scripts/tauri/ui-test.js`.
+
+Parity checks:
 
 ```bash
 TZ=America/Denver node scripts/tauri/loader-parity.mjs dump /path/to/drive-data.json js.ndjson
 TZ=America/Denver cargo run --release --manifest-path src-tauri/Cargo.toml --example loader_dump -- /path/to/drive-data.json rust.ndjson
 node scripts/tauri/loader-parity.mjs compare js.ndjson rust.ndjson
+
+# Check Drives (on copies; both rewrite the file)
+TZ=America/Denver node scripts/tauri/check-drives-parity.mjs repair copy-js.json
+TZ=America/Denver src-tauri/target/release/examples/check_drives_run repair copy-rs.json
+node scripts/tauri/check-drives-parity.mjs digest copy-js.json js.ndjson   # and copy-rs.json
+node scripts/tauri/check-drives-parity.mjs compare js.ndjson rs.ndjson
+
+node scripts/tauri/imports-parity.mjs   # Tessie / Teslascope, on fixtures
 ```
+
+## Built apps on this Mac
+
+- **Tauri, production identity:**
+  `src-tauri/target/universal-apple-darwin/release/bundle/macos/Sentry Drive.app`,
+  with the DMG at `…/bundle/dmg/Sentry Drive_1.6.3_universal.dmg`. It is
+  universal, Developer ID signed and not notarized. **Don't open it on this
+  Mac:** it would use the real Sentry Drive data folder (see above). Install
+  it on a test machine instead.
+- **Electron v1.6.3** (the baseline): `dist/mac-universal/Sentry Drive.app`.

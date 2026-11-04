@@ -58,7 +58,12 @@ pub struct AppPaths {
     pub resources: PathBuf,
 }
 
+/// Test builds only, like the UI test hook: a shipped app never injects the
+/// probe or writes results because of an environment variable.
 fn bench_config() -> Option<BenchConfig> {
+    if !TEST_HOOKS {
+        return None;
+    }
     let out = std::env::var_os("SENTRY_DRIVE_BENCH_OUT")?;
     Some(BenchConfig {
         out: PathBuf::from(out),

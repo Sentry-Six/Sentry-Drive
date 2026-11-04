@@ -1,0 +1,287 @@
+{
+  "app": "tauri",
+  "bundle": "<scratch>/e2e/Applications/Sentry Drive Migtest.app",
+  "file": "<scratch>/bench-data/drive-data.json",
+  "startedAt": "2026-11-04T22:24:32.662Z",
+  "drive": [
+    {
+      "variant": "drive",
+      "fcpMs": 550,
+      "uiReadyMs": 567,
+      "memFootprintMB": 483.48966217041016,
+      "memResidentMB": 1275.90625,
+      "processCount": 6,
+      "processes": [
+        {
+          "name": "Sentry Drive Migtest",
+          "footprintMB": 142.6
+        },
+        {
+          "name": "SetStoreUpdateService",
+          "footprintMB": 2.1
+        },
+        {
+          "name": "com.apple.WebKit.GPU",
+          "footprintMB": 29.3
+        },
+        {
+          "name": "com.apple.WebKit.WebContent",
+          "footprintMB": 297.3
+        },
+        {
+          "name": "com.apple.WebKit.Networking",
+          "footprintMB": 7
+        },
+        {
+          "name": "com.apple.audio.SandboxHelper",
+          "footprintMB": 5.3
+        }
+      ],
+      "idleCpuPct": 0.03451901584607408,
+      "driveShownMs": 10190,
+      "mapIdleMs": 10190,
+      "loadedLogMs": 9657,
+      "driveCount": 250,
+      "reloadMs": 9193,
+      "reloadIdleMs": 9193,
+      "peakFootprintSumMB": 1434.3333206176758,
+      "memAfterReloadMB": 938.896598815918
+    },
+    {
+      "variant": "drive",
+      "fcpMs": 555,
+      "uiReadyMs": 573,
+      "memFootprintMB": 551.7866287231445,
+      "memResidentMB": 1280.578125,
+      "processCount": 6,
+      "processes": [
+        {
+          "name": "Sentry Drive Migtest",
+          "footprintMB": 176.2
+        },
+        {
+          "name": "SetStoreUpdateService",
+          "footprintMB": 2
+        },
+        {
+          "name": "com.apple.WebKit.GPU",
+          "footprintMB": 27.9
+        },
+        {
+          "name": "com.apple.WebKit.WebContent",
+          "footprintMB": 333.1
+        },
+        {
+          "name": "com.apple.WebKit.Networking",
+          "footprintMB": 7.3
+        },
+        {
+          "name": "com.apple.audio.SandboxHelper",
+          "footprintMB": 5.2
+        }
+      ],
+      "idleCpuPct": 0.16145016999162734,
+      "driveShownMs": 9797,
+      "mapIdleMs": 9797,
+      "loadedLogMs": 9551,
+      "driveCount": 250,
+      "reloadMs": 9200,
+      "reloadIdleMs": 9200,
+      "peakFootprintSumMB": 1448.0990371704102,
+      "memAfterReloadMB": 1098.193588256836
+    },
+    {
+      "variant": "drive",
+      "fcpMs": 555,
+      "uiReadyMs": 563,
+      "memFootprintMB": 563.7864685058594,
+      "memResidentMB": 1303.78125,
+      "processCount": 6,
+      "processes": [
+        {
+          "name": "Sentry Drive Migtest",
+          "footprintMB": 241.5
+        },
+        {
+          "name": "SetStoreUpdateService",
+          "footprintMB": 2
+        },
+        {
+          "name": "com.apple.WebKit.GPU",
+          "footprintMB": 28.1
+        },
+        {
+          "name": "com.apple.WebKit.WebContent",
+          "footprintMB": 279.9
+        },
+        {
+          "name": "com.apple.WebKit.Networking",
+          "footprintMB": 7
+        },
+        {
+          "name": "com.apple.audio.SandboxHelper",
+          "footprintMB": 5.2
+        }
+      ],
+      "idleCpuPct": 0.03329693263444203,
+      "driveShownMs": 9732,
+      "mapIdleMs": 9732,
+      "loadedLogMs": 9529,
+      "driveCount": 250,
+      "reloadMs": 9164,
+      "reloadIdleMs": 9164,
+      "peakFootprintSumMB": 1533.552001953125,
+      "memAfterReloadMB": 971.0215301513672
+    },
+    {
+      "variant": "drive",
+      "fcpMs": 571,
+      "uiReadyMs": 582,
+      "memFootprintMB": 608.0208206176758,
+      "memResidentMB": 1255.28125,
+      "processCount": 6,
+      "processes": [
+        {
+          "name": "Sentry Drive Migtest",
+          "footprintMB": 234
+        },
+        {
+          "name": "SetStoreUpdateService",
+          "footprintMB": 2
+        },
+        {
+          "name": "com.apple.WebKit.GPU",
+          "footprintMB": 28.1
+        },
+        {
+          "name": "com.apple.WebKit.WebContent",
+          "footprintMB": 331.3
+        },
+        {
+          "name": "com.apple.WebKit.Networking",
+          "footprintMB": 7.3
+        },
+        {
+          "name": "com.apple.audio.SandboxHelper",
+          "footprintMB": 5.3
+        }
+      ],
+      "idleCpuPct": 0.030233935158219587,
+      "driveShownMs": 9757,
+      "mapIdleMs": 9757,
+      "loadedLogMs": 9501,
+      "driveCount": 250,
+      "reloadMs": 9109,
+      "reloadIdleMs": 9109,
+      "peakFootprintSumMB": 1516.3019790649414,
+      "memAfterReloadMB": 993.974609375
+    },
+    {
+      "variant": "drive",
+      "fcpMs": 565,
+      "uiReadyMs": 581,
+      "memFootprintMB": 543.0833435058594,
+      "memResidentMB": 1254.4375,
+      "processCount": 6,
+      "processes": [
+        {
+          "name": "Sentry Drive Migtest",
+          "footprintMB": 220.2
+        },
+        {
+          "name": "SetStoreUpdateService",
+          "footprintMB": 2
+        },
+        {
+          "name": "com.apple.WebKit.GPU",
+          "footprintMB": 28
+        },
+        {
+          "name": "com.apple.WebKit.WebContent",
+          "footprintMB": 280.9
+        },
+        {
+          "name": "com.apple.WebKit.Networking",
+          "footprintMB": 6.8
+        },
+        {
+          "name": "com.apple.audio.SandboxHelper",
+          "footprintMB": 5.2
+        }
+      ],
+      "idleCpuPct": 0.03544481513527905,
+      "driveShownMs": 9746,
+      "mapIdleMs": 9746,
+      "loadedLogMs": 9469,
+      "driveCount": 250,
+      "reloadMs": 9149,
+      "reloadIdleMs": 9149,
+      "peakFootprintSumMB": 1498.1770477294922,
+      "memAfterReloadMB": 935.2715530395508
+    }
+  ],
+  "idle": [
+    {
+      "variant": "idle",
+      "fcpMs": 551,
+      "uiReadyMs": 550,
+      "memFootprintMB": 337.0980529785156,
+      "memResidentMB": 546.625,
+      "processCount": 6,
+      "processes": [
+        {
+          "name": "Sentry Drive Migtest",
+          "footprintMB": 47
+        },
+        {
+          "name": "SetStoreUpdateService",
+          "footprintMB": 2.1
+        },
+        {
+          "name": "com.apple.WebKit.GPU",
+          "footprintMB": 21.7
+        },
+        {
+          "name": "com.apple.WebKit.WebContent",
+          "footprintMB": 253.6
+        },
+        {
+          "name": "com.apple.WebKit.Networking",
+          "footprintMB": 7.4
+        },
+        {
+          "name": "com.apple.audio.SandboxHelper",
+          "footprintMB": 5.3
+        }
+      ],
+      "idleCpuPct": 0.03389295203545629,
+      "mapIdleMs": 606
+    }
+  ],
+  "median": {
+    "drive": {
+      "fcpMs": 555,
+      "uiReadyMs": 573,
+      "driveShownMs": 9757,
+      "mapIdleMs": 9757,
+      "loadedLogMs": 9529,
+      "memFootprintMB": 551.7866287231445,
+      "memResidentMB": 1275.90625,
+      "processCount": 6,
+      "idleCpuPct": 0.03451901584607408,
+      "reloadMs": 9164,
+      "reloadIdleMs": 9164,
+      "peakFootprintSumMB": 1498.1770477294922
+    },
+    "idle": {
+      "fcpMs": 551,
+      "uiReadyMs": 550,
+      "mapIdleMs": 606,
+      "memFootprintMB": 337.0980529785156,
+      "memResidentMB": 546.625,
+      "processCount": 6,
+      "idleCpuPct": 0.03389295203545629
+    }
+  },
+  "finishedAt": "2026-11-04T22:34:24.604Z"
+}

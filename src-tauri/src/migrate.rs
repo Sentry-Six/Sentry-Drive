@@ -137,18 +137,18 @@ pub fn electron_storage_imported(app: AppHandle, count: u64) {
 #[serde(rename_all = "camelCase")]
 pub struct WindowState {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub x: Option<f64>,
+    pub x: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub y: Option<f64>,
-    pub width: f64,
-    pub height: f64,
+    pub y: Option<i64>,
+    pub width: i64,
+    pub height: i64,
     pub is_maximized: bool,
     pub is_full_screen: bool,
 }
 
 impl Default for WindowState {
     fn default() -> Self {
-        Self { x: None, y: None, width: 1440.0, height: 900.0, is_maximized: false, is_full_screen: false }
+        Self { x: None, y: None, width: 1440, height: 900, is_maximized: false, is_full_screen: false }
     }
 }
 
@@ -160,7 +160,8 @@ pub fn load_window_state(app: &AppHandle) -> WindowState {
     let mut s = WindowState::default();
     let Ok(raw) = std::fs::read(window_state_file(app)) else { return s };
     let Ok(Value::Object(m)) = serde_json::from_slice::<Value>(&raw) else { return s };
-    let num = |k: &str| m.get(k).and_then(Value::as_f64);
+    // Electron writes whole logical pixels.
+    let num = |k: &str| m.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v.round() as i64);
     s.x = num("x");
     s.y = num("y");
     s.width = num("width").unwrap_or(s.width);
@@ -171,33 +172,64 @@ pub fn load_window_state(app: &AppHandle) -> WindowState {
 }
 
 /// Keep the window's normal (not maximized or full-screen) bounds current and
-/// write them on close, as Electron's saveWindowState did.
+/// persist them, as Electron's saveWindowState did. Electron saved on the
+/// window's `close`, which also fires on quit; Tauri sends CloseRequested only
+/// when the window itself is closed, so the file is also written about a
+/// second after the last move or resize.
 pub fn track_window_state(window: &WebviewWindow, initial: WindowState) {
-    let state = std::sync::Arc::new(std::sync::Mutex::new(initial));
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    let state = Arc::new(Mutex::new(initial));
+    let dirty = Arc::new(AtomicBool::new(false));
+    let file = window_state_file(window.app_handle());
+    let write = {
+        let state = state.clone();
+        move || {
+            if let Ok(json) = serde_json::to_string_pretty(&*state.lock().unwrap()) {
+                let _ = std::fs::write(&file, json);
+            }
+        }
+    };
+    {
+        let (dirty, write, w) = (dirty.clone(), write.clone(), window.clone());
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if dirty.swap(false, Ordering::SeqCst) {
+                write();
+            }
+            if w.is_visible().is_err() {
+                break; // window destroyed
+            }
+        });
+    }
     let w = window.clone();
     window.on_window_event(move |event| {
-        let snapshot = || -> Option<(f64, f64, f64, f64)> {
-            let scale = w.scale_factor().ok()?;
-            let pos = w.outer_position().ok()?.to_logical::<f64>(scale);
-            let size = w.inner_size().ok()?.to_logical::<f64>(scale);
-            Some((pos.x, pos.y, size.width, size.height))
-        };
         let maximized = w.is_maximized().unwrap_or(false);
         let full = w.is_fullscreen().unwrap_or(false);
         match event {
-            WindowEvent::Moved(_) | WindowEvent::Resized(_) if !maximized && !full => {
-                if let Some((x, y, width, height)) = snapshot() {
-                    let mut s = state.lock().unwrap();
-                    (s.x, s.y, s.width, s.height) = (Some(x.round()), Some(y.round()), width.round(), height.round());
+            WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+                let mut s = state.lock().unwrap();
+                (s.is_maximized, s.is_full_screen) = (maximized, full);
+                if !maximized && !full {
+                    let bounds = (|| {
+                        let scale = w.scale_factor().ok()?;
+                        let pos = w.outer_position().ok()?.to_logical::<f64>(scale);
+                        let size = w.inner_size().ok()?.to_logical::<f64>(scale);
+                        Some((pos.x, pos.y, size.width, size.height))
+                    })();
+                    if let Some((x, y, width, height)) = bounds {
+                        (s.x, s.y, s.width, s.height) = (Some(x.round() as i64), Some(y.round() as i64), width.round() as i64, height.round() as i64);
+                    }
                 }
+                dirty.store(true, Ordering::SeqCst);
             }
             WindowEvent::CloseRequested { .. } => {
-                let mut s = state.lock().unwrap().clone();
-                s.is_maximized = maximized;
-                s.is_full_screen = full;
-                if let Ok(json) = serde_json::to_string_pretty(&s) {
-                    let _ = std::fs::write(window_state_file(w.app_handle()), json);
+                {
+                    let mut s = state.lock().unwrap();
+                    (s.is_maximized, s.is_full_screen) = (maximized, full);
                 }
+                dirty.store(false, Ordering::SeqCst);
+                write();
             }
             _ => {}
         }
@@ -208,9 +240,9 @@ pub fn apply_window_state<'a, R: tauri::Runtime, M: Manager<R>>(
     builder: tauri::WebviewWindowBuilder<'a, R, M>,
     s: &WindowState,
 ) -> tauri::WebviewWindowBuilder<'a, R, M> {
-    let mut b = builder.inner_size(s.width, s.height);
+    let mut b = builder.inner_size(s.width as f64, s.height as f64);
     if let (Some(x), Some(y)) = (s.x, s.y) {
-        b = b.position(x, y);
+        b = b.position(x as f64, y as f64);
     }
     b.maximized(s.is_maximized).fullscreen(s.is_full_screen)
 }

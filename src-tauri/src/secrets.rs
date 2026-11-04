@@ -99,6 +99,7 @@ pub fn save_token(app: &AppHandle, kind: Kind, token: &str) -> Result<()> {
 
 // ── Electron safeStorage (Chromium os_crypt) ────────────────────────────────
 
+#[cfg(target_os = "macos")]
 use crate::migrate::ELECTRON_APP_NAME;
 
 pub fn decode_legacy(user_data: &Path, buf: &[u8]) -> Result<String> {
