@@ -1,6 +1,45 @@
 {
   "versions": [
     {
+      "version": "2.0.0",
+      "date": "2026-11-04",
+      "title": "A Faster, Lighter Sentry Drive",
+      "changes": [
+        {
+          "type": "feature",
+          "description": "Rebuilt: Sentry Drive now runs on Tauri and Rust instead of Electron. It looks and works the same."
+        },
+        {
+          "type": "improvement",
+          "description": "Faster loading: a large drive history appears in about 10 seconds instead of over a minute."
+        },
+        {
+          "type": "improvement",
+          "description": "Faster Check Drives: GPS repair and the Summon check run 4–9 times faster."
+        },
+        {
+          "type": "improvement",
+          "description": "Smaller: on Mac, the download is 21 MB instead of 230 MB, and the installed app is 33 MB instead of 517 MB."
+        },
+        {
+          "type": "improvement",
+          "description": "Updates as usual: this update installs over your current version. Your drives, settings, Privacy Zones and saved Tessie and Teslascope tokens come with it."
+        },
+        {
+          "type": "improvement",
+          "description": "Tokens: Tessie and Teslascope tokens are now kept in macOS Keychain, Windows Credential Manager or the Linux keyring."
+        },
+        {
+          "type": "improvement",
+          "description": "Mac: Sentry Drive now has the standard macOS menu bar."
+        },
+        {
+          "type": "improvement",
+          "description": "Requirements: macOS 13 or newer, Windows 10 or 11, or Linux such as Ubuntu 22.04 or newer."
+        }
+      ]
+    },
+    {
       "version": "1.6.3",
       "date": "2026-11-02",
       "title": "Smoother Maps",
