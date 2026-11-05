@@ -12,87 +12,9 @@
     "test": "node --test src/shared/drive-calc.test.js src/shared/atomic-write.test.js src/shared/clip-path.test.js src/shared/event-gap-fill.test.js src/shared/drive-telemetry.test.js src/shared/charging-history.test.js src/processing/clip-discovery.test.js src/processing/process-result.test.js src/processing/geocode.test.js src/processing/known-places.test.js src/processing/grouper.test.js src/main/drive-data-reader.test.js src/main/drive-data-writer.test.js src/main/drive-index.test.js src/main/disk-drive-grouper.test.js src/main/drive-loader-service.test.js src/main/drive-loader-client.test.js src/main/supercharger-catalog.test.js src/renderer/drive-page-model.test.js src/renderer/drive-telemetry-view.test.js src/renderer/replay-bearing.test.js src/renderer/charging-view.test.js src/renderer/charging-ui.test.js src/renderer/map-style.test.js src/renderer/map-camera.test.js",
     "update:superchargers": "node scripts/update-supercharger-catalog.cjs"
   },
-  "build": {
-    "appId": "com.jefffromtheirs.sentry-drive",
-    "productName": "Sentry Drive",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "src/**/*",
-      "assets/**/*",
-      "node_modules/**/*",
-      "changelog.json"
-    ],
-    "asarUnpack": [
-      "src/processing/**",
-      "src/shared/**",
-      "src/main/drive-data-reader.cjs",
-      "src/main/drive-data-writer.cjs",
-      "node_modules/stream-json/**",
-      "node_modules/stream-chain/**"
-    ],
-    "artifactName": "Sentry-Drive-Setup-${version}.${ext}",
-    "win": {
-      "target": "nsis",
-      "icon": "assets/app-icon/sentrydrive.ico"
-    },
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "universal"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "universal"
-          ]
-        }
-      ],
-      "category": "public.app-category.utilities",
-      "artifactName": "Sentry-Drive-${version}-${arch}.${ext}",
-      "icon": "assets/app-icon/sentrydrive.icns",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "identity": "Scott Vandereems (6733Y82885)",
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
-      "notarize": true
-    },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ],
-      "maintainer": "JeffFromTheIRS <155955500+JeffFromTheIRS@users.noreply.github.com>",
-      "category": "Utility",
-      "syncDesktopName": true,
-      "desktop": {
-        "entry": {
-          "StartupWMClass": "Sentry Drive"
-        }
-      },
-      "artifactName": "Sentry-Drive-${version}.${ext}",
-      "icon": "assets/app-icon/sentrydrive.png"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "perMachine": false
-    },
-    "publish": {
-      "provider": "github",
-      "owner": "Sentry-Six",
-      "repo": "Sentry-Drive"
-    }
-  },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.4",
-    "electron": "45.1.0",
-    "electron-builder": "^26.18.0"
+    "electron": "45.1.0"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
