@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// Before/after benchmark driver for the Electron and Tauri builds of Sentry Drive.
+// Benchmark driver for Sentry Drive (Tauri). It measured the Electron build
+// too until the Electron code was removed after v2.0.0; those results are in
+// results/electron-results.json and docs/tauri-benchmarks.md.
 //
-//   node scripts/bench/bench.mjs --app electron --bundle "dist/mac-universal/Sentry Drive.app" \
-//        --file /path/drive-data.json --work /tmp/bench --runs 5 --idle-runs 3 --out electron.json
-//   node scripts/bench/bench.mjs --app tauri --bundle "src-tauri/target/.../Sentry Drive.app" ...
+//   node scripts/bench/bench.mjs --app tauri --bundle "<test build>.app" \
+//        --file /path/drive-data.json --work /tmp/bench --runs 5 --idle-runs 1 --out tauri.json
+//
+// The probe exists only in builds made with SENTRY_DRIVE_TEST_HOOKS=1; build
+// one under a test identity so it never touches real app data.
 //
 // Each run launches the app binary directly (app fully quit between runs) and
 // measures, on the same clock:
@@ -16,8 +20,7 @@
 //   reload       warm in-app reload of the same file via autoLoadDriveData()
 // "idle" runs start with auto-load off and measure memory/CPU with no drive.
 //
-// Electron is driven over the DevTools protocol on a throwaway --user-data-dir.
-// The Tauri build runs the same probe from its bridge script when
+// The app runs the probe (probe.js) from its bridge script when
 // SENTRY_DRIVE_BENCH_OUT is set and writes results to that file.
 
 import { spawn, execFileSync } from 'node:child_process';
@@ -26,8 +29,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PROBE = fs.readFileSync(path.join(HERE, 'probe.js'), 'utf8');
-const CDP_PORT = 9333;
 const SETTLE_MS = 15000;
 const CPU_WINDOW_MS = 60000;
 const IDLE_MS = 80000; // probe waits this long after the drive shows before the reload
@@ -121,75 +122,6 @@ async function quit(proc) {
   await sleep(3000); // let helper/XPC processes wind down before the next launch
 }
 
-// ── Minimal DevTools-protocol client (Electron only) ─────────────────────────
-async function cdpConnect() {
-  for (let i = 0; i < 400; i++) {
-    try {
-      const pages = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json`)).json();
-      const page = pages.find((p) => p.type === 'page');
-      if (page) {
-        const ws = new WebSocket(page.webSocketDebuggerUrl);
-        await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-        let id = 0;
-        const pending = new Map();
-        ws.onmessage = (ev) => {
-          const msg = JSON.parse(ev.data);
-          if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-        };
-        const send = (method, params = {}) => new Promise((res) => {
-          const mid = ++id;
-          pending.set(mid, res);
-          ws.send(JSON.stringify({ id: mid, method, params }));
-        });
-        const evaluate = async (expression, awaitPromise = false) => {
-          const r = await send('Runtime.evaluate', { expression, awaitPromise, returnByValue: true });
-          if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails));
-          return r.result?.result?.value;
-        };
-        return { ws, evaluate };
-      }
-    } catch { /* not up yet */ }
-    await sleep(25);
-  }
-  throw new Error('DevTools endpoint never came up');
-}
-
-const waitPhaseExpr = (phases) => `new Promise((r) => { const iv = setInterval(() => {
-  const R = window.__benchResults; if (R && ${JSON.stringify(phases)}.includes(R.phase)) { clearInterval(iv); r(JSON.stringify(R)); }
-}, 25); })`;
-
-// ── Driver per app ───────────────────────────────────────────────────────────
-function electronDriver(o) {
-  const binary = binaryOf(o.bundle);
-  const profile = (variant) => path.join(o.work, `electron-profile-${variant}`);
-  return {
-    async seed(variant) {
-      fs.rmSync(profile(variant), { recursive: true, force: true });
-      const proc = launch(o.bundle, binary, [`--user-data-dir=${profile(variant)}`, `--remote-debugging-port=${CDP_PORT}`], {}, () => {}, o.work);
-      const cdp = await cdpConnect();
-      await sleep(3000);
-      await cdp.evaluate(`localStorage.setItem('lastSeenVersion', ${JSON.stringify(o.version ?? '1.6.3')});
-        localStorage.setItem('autoLoadDriveData', ${JSON.stringify(String(variant === 'drive'))});
-        ${variant === 'drive' ? `localStorage.setItem('lastDriveDataPath', ${JSON.stringify(o.file)});` : `localStorage.removeItem('lastDriveDataPath');`}
-        true`);
-      await sleep(2000);
-      cdp.ws.close();
-      await quit(proc);
-    },
-    async start(variant, lines) {
-      const proc = launch(o.bundle, binary, [`--user-data-dir=${profile(variant)}`, `--remote-debugging-port=${CDP_PORT}`], {}, (l) => lines.push({ at: Date.now(), l }), o.work);
-      const cdp = await cdpConnect();
-      await cdp.evaluate(PROBE);
-      await cdp.evaluate(`window.__benchStart({ mode: ${JSON.stringify(variant)}, idleMs: ${IDLE_MS}, file: ${JSON.stringify(o.file)} }); true`);
-      return {
-        proc,
-        waitPhase: async (phases) => JSON.parse(await cdp.evaluate(waitPhaseExpr(phases), true)),
-        close: () => cdp.ws.close(),
-      };
-    },
-  };
-}
-
 function tauriDriver(o) {
   const binary = binaryOf(o.bundle);
   const outFile = path.join(o.work, 'tauri-bench-results.json');
@@ -238,7 +170,7 @@ const median = (xs) => {
 async function main() {
   const o = args();
   fs.mkdirSync(o.work, { recursive: true });
-  const driver = o.app === 'electron' ? electronDriver(o) : tauriDriver(o);
+  const driver = tauriDriver(o);
   const results = { app: o.app, bundle: o.bundle, file: o.file, startedAt: new Date().toISOString(), drive: [], idle: [] };
   const save = () => fs.writeFileSync(o.out, JSON.stringify(results, null, 2));
 

@@ -1,5 +1,7 @@
 # Sentry Drive: moving from Electron to Tauri
 
+> **History.** The Electron code was removed from the repository after v2.0.0 shipped; this document describes the port as it was at the time, and the commands and parity scripts it mentions for the Electron build no longer exist.
+
 Branch `claude/tauri-port-d4641b`: Sentry Drive ported from Electron 45 to
 Tauri 2. The web UI is unchanged (two `confirm()` calls gained an `await`); the
 Electron main process, preload and Node-only code are replaced by Rust. The

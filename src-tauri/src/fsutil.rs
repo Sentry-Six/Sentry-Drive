@@ -85,3 +85,85 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 pub fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
+
+/// Ports of `src/shared/atomic-write.test.js`, against real temporary files.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TmpFile(PathBuf);
+
+    impl Drop for TmpFile {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+
+    fn tmp_file(contents: &str) -> TmpFile {
+        let p = std::env::temp_dir().join(format!("sd-aw-test-{}.tmp", uuid::Uuid::new_v4()));
+        fs::write(&p, contents).unwrap();
+        TmpFile(p)
+    }
+
+    fn missing() -> PathBuf {
+        std::env::temp_dir().join(format!("sd-aw-missing-{}.tmp", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn temp_looks_complete_accepts_a_complete_pretty_printed_document() {
+        let f = tmp_file("{\n  \"processedFiles\": [],\n  \"routes\": [],\n  \"driveTags\": {}\n}\n");
+        assert!(temp_looks_complete(&f.0));
+    }
+
+    #[test]
+    fn temp_looks_complete_accepts_a_compact_document_without_trailing_newline() {
+        let f = tmp_file(r#"{"processedFiles":[],"routes":[],"driveTags":{}}"#);
+        assert!(temp_looks_complete(&f.0));
+    }
+
+    #[test]
+    fn temp_looks_complete_accepts_a_populated_document() {
+        let f = tmp_file(r#"{"processedFiles":["a/b.mp4"],"routes":[{"file":"a/b.mp4","points":[[1,2]]}],"driveTags":{}}"#);
+        assert!(temp_looks_complete(&f.0));
+    }
+
+    #[test]
+    fn temp_looks_complete_rejects_a_truncated_write() {
+        let f = tmp_file(r#"{"processedFiles":[],"routes":[{"file":"a","points":[[1,2],[3,4"#);
+        assert!(!temp_looks_complete(&f.0));
+    }
+
+    #[test]
+    fn temp_looks_complete_rejects_an_empty_file() {
+        let f = tmp_file("");
+        assert!(!temp_looks_complete(&f.0));
+    }
+
+    #[test]
+    fn temp_looks_complete_rejects_a_tiny_file_under_the_size_floor() {
+        let f = tmp_file("{}");
+        assert!(!temp_looks_complete(&f.0));
+    }
+
+    #[test]
+    fn temp_looks_complete_rejects_content_not_starting_with_a_brace() {
+        let f = tmp_file("garbage that happens to be long enough to pass the size floor }");
+        assert!(!temp_looks_complete(&f.0));
+    }
+
+    #[test]
+    fn temp_looks_complete_rejects_a_missing_file() {
+        assert!(!temp_looks_complete(&missing()));
+    }
+
+    #[test]
+    fn fsync_file_flushes_a_real_file() {
+        let f = tmp_file(r#"{"processedFiles":[],"routes":[],"driveTags":{}}"#);
+        fsync_file(&f.0).expect("fsync");
+    }
+
+    #[test]
+    fn fsync_file_fails_on_a_missing_file() {
+        assert!(fsync_file(&missing()).is_err());
+    }
+}

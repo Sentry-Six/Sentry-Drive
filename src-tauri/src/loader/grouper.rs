@@ -914,3 +914,924 @@ fn filter_gps_outliers(points: &mut Vec<Pt>) {
         keep
     });
 }
+
+/// Ports of `src/processing/grouper.test.js` (grouping, rollups, geocode
+/// endpoints, end-time convention, clip spans, Summon, park splitting) and
+/// `src/shared/drive-telemetry.test.js`. The clip-path and gap-fill tests from
+/// grouper.test.js live with their implementations in `route.rs`.
+///
+/// Clip timestamps are parsed in the machine's local zone, as in the JS build;
+/// every assertion here compares durations, orderings or counts derived from
+/// those epochs, so the tests hold in any zone (including DST-observing ones,
+/// since no fixture spans a transition).
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::loader::calc::{ApRun, FlagRun, GearRun};
+    use crate::loader::route::{RouteJson, Telemetry};
+
+    const GEAR_PARK: i64 = calc::GEAR_PARK;
+    const GEAR_DRIVE: i64 = 1;
+    const GEAR_REVERSE: i64 = 2;
+
+    // ── Fixtures ────────────────────────────────────────────────────────────
+
+    fn line_points(n: usize, base_lat: f64, base_lng: f64) -> Vec<[f64; 2]> {
+        (0..n).map(|i| [base_lat + i as f64 * 1e-4, base_lng]).collect()
+    }
+
+    fn test_route(file: &str, points: Vec<[f64; 2]>) -> Route {
+        Route {
+            file: file.into(),
+            points,
+            gear_states: Some(vec![]),
+            autopilot_states: Some(vec![]),
+            speeds: Some(vec![]),
+            accel_positions: Some(vec![]),
+            raw_park_count: Some(0.0),
+            raw_frame_count: Some(10.0),
+            gear_runs: Some(vec![GearRun { gear: Some(GEAR_DRIVE), frames: 10.0 }]),
+            ..Default::default()
+        }
+    }
+
+    fn park_route(file: &str, lat: f64) -> Route {
+        Route {
+            raw_park_count: Some(60.0),
+            raw_frame_count: Some(60.0),
+            gear_runs: Some(vec![GearRun { gear: Some(GEAR_PARK), frames: 60.0 }]),
+            ..test_route(file, vec![[lat, -76.795]])
+        }
+    }
+
+    /// One point per frame keeps frame-fraction slicing aligned with point indices.
+    fn clip_with_gear_runs(file: &str, runs: &[(i64, u32)], base_lat: f64) -> Route {
+        let total: u32 = runs.iter().map(|r| r.1).sum();
+        let park: u32 = runs.iter().filter(|r| r.0 == GEAR_PARK).map(|r| r.1).sum();
+        Route {
+            raw_park_count: Some(park as f64),
+            raw_frame_count: Some(total as f64),
+            gear_runs: Some(runs.iter().map(|&(gear, frames)| GearRun { gear: Some(gear), frames: frames as f64 }).collect()),
+            ..test_route(file, line_points(total.max(1) as usize, base_lat, -122.0))
+        }
+    }
+
+    fn with_telemetry(mut r: Route, t: Telemetry) -> Route {
+        r.telemetry = t;
+        r
+    }
+
+    fn drives_of(routes: Vec<Route>) -> Vec<GroupedDrive> {
+        group_into_drives(routes).drives
+    }
+
+    fn field<'a>(d: &'a GroupedDrive, key: &str) -> &'a Value {
+        d.fields.get(key).unwrap_or_else(|| panic!("drive has no {key}"))
+    }
+
+    fn num(d: &GroupedDrive, key: &str) -> f64 {
+        field(d, key).as_f64().unwrap_or_else(|| panic!("{key} is not a number"))
+    }
+
+    fn point2(d: &GroupedDrive, key: &str) -> [f64; 2] {
+        let v = field(d, key).as_array().expect("point array");
+        [v[0].as_f64().unwrap(), v[1].as_f64().unwrap()]
+    }
+
+    fn files(d: &GroupedDrive) -> Vec<&str> {
+        d.route_files.iter().map(String::as_str).collect()
+    }
+
+    // ── Grouping ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_input_yields_no_drives() {
+        assert_eq!(drives_of(vec![]).len(), 0);
+    }
+
+    #[test]
+    fn single_clip_yields_one_drive() {
+        let drives = drives_of(vec![test_route("/cam/2025-01-15_12-30-45-front.mp4", vec![[37.0, -122.0]])]);
+        assert_eq!(drives.len(), 1);
+        assert_eq!(drives[0].route_files.len(), 1);
+    }
+
+    #[test]
+    fn gap_over_five_minutes_splits_drives() {
+        let drives = drives_of(vec![
+            test_route("/cam/2025-01-15_12-00-00-front.mp4", vec![[37.0, -122.0]]),
+            test_route("/cam/2025-01-15_13-00-00-front.mp4", vec![[37.1, -122.1]]),
+        ]);
+        assert_eq!(drives.len(), 2);
+    }
+
+    #[test]
+    fn clips_under_five_minutes_apart_stay_in_one_drive() {
+        let drives = drives_of(vec![
+            test_route("/cam/2025-01-15_12-00-00-front.mp4", vec![[37.0, -122.0]]),
+            test_route("/cam/2025-01-15_12-01-00-front.mp4", vec![[37.0001, -122.0]]),
+        ]);
+        assert_eq!(drives.len(), 1);
+        assert_eq!(drives[0].route_files.len(), 2);
+    }
+
+    // ── Gear-state park splitting ───────────────────────────────────────────
+
+    #[test]
+    fn two_internal_park_gaps_split_one_clip_into_three_drives() {
+        let drives = drives_of(vec![clip_with_gear_runs(
+            "/cam/2025-01-15_12-00-00-front.mp4",
+            &[(GEAR_DRIVE, 20), (GEAR_PARK, 5), (GEAR_DRIVE, 15), (GEAR_PARK, 5), (GEAR_DRIVE, 15)],
+            37.0,
+        )]);
+        assert_eq!(drives.len(), 3);
+    }
+
+    #[test]
+    fn no_internal_park_gap_keeps_one_drive() {
+        let drives = drives_of(vec![clip_with_gear_runs("/cam/2025-01-15_12-00-00-front.mp4", &[(GEAR_DRIVE, 60)], 37.0)]);
+        assert_eq!(drives.len(), 1);
+    }
+
+    #[test]
+    fn all_parked_clip_yields_no_drive() {
+        // Fully parked groups are recordings, not trips.
+        let drives = drives_of(vec![clip_with_gear_runs("/cam/2025-01-15_12-00-00-front.mp4", &[(GEAR_PARK, 60)], 37.0)]);
+        assert_eq!(drives.len(), 0);
+    }
+
+    #[test]
+    fn fully_parked_clip_between_two_drives_yields_two_drives() {
+        let drives = drives_of(vec![
+            clip_with_gear_runs("/cam/2025-01-15_12-00-00-front.mp4", &[(GEAR_DRIVE, 60)], 37.0),
+            clip_with_gear_runs("/cam/2025-01-15_12-01-00-front.mp4", &[(GEAR_PARK, 60)], 37.0),
+            clip_with_gear_runs("/cam/2025-01-15_12-02-00-front.mp4", &[(GEAR_DRIVE, 60)], 37.0),
+        ]);
+        assert_eq!(drives.len(), 2);
+        assert_eq!(drives[0].route_files.len(), 1);
+        assert_eq!(drives[1].route_files.len(), 1);
+    }
+
+    // ── Dedup + event-folder filtering ──────────────────────────────────────
+
+    #[test]
+    fn duplicate_paths_with_mixed_separators_are_deduped() {
+        let drives = drives_of(vec![
+            test_route("cam/2025-01-15_12-00-00-front.mp4", vec![[37.0, -122.0]]),
+            test_route("cam\\2025-01-15_12-00-00-front.mp4", vec![[37.0, -122.0]]),
+        ]);
+        assert_eq!(drives.len(), 1);
+        assert_eq!(drives[0].route_files.len(), 1);
+    }
+
+    #[test]
+    fn recentclips_prefixed_and_canonical_paths_are_one_clip() {
+        let drives = drives_of(vec![
+            test_route("RecentClips/2026-07-27/2026-07-27_14-01-02-front.mp4", vec![[37.0, -122.0]]),
+            test_route("2026-07-27/2026-07-27_14-01-02-front.mp4", vec![[38.0, -123.0]]),
+        ]);
+        assert_eq!(drives.len(), 1);
+        assert_eq!(files(&drives[0]), vec!["2026-07-27/2026-07-27_14-01-02-front.mp4"]);
+    }
+
+    #[test]
+    fn event_folder_routes_are_filtered_out_of_grouping() {
+        let drives = drives_of(vec![
+            test_route("RecentClips/2025-01-15/2025-01-15_12-30-00-front.mp4", vec![[37.0, -122.0]]),
+            test_route("SavedClips/2025-01-15_12-30-30/2025-01-15_12-30-00-front.mp4", vec![[37.0, -122.0]]),
+            test_route("SentryClips/2025-01-15_12-29-30/2025-01-15_12-30-00-front.mp4", vec![[37.0, -122.0]]),
+        ]);
+        assert_eq!(drives.len(), 1);
+        assert_eq!(files(&drives[0]), vec!["2025-01-15/2025-01-15_12-30-00-front.mp4"]);
+    }
+
+    #[test]
+    fn july_27_manual_save_driving_savedclips_fill_the_recentclips_hole() {
+        let mut routes = vec![test_route("2026-07-27/2026-07-27_14-01-02-front.mp4", vec![[39.0, -76.7]])];
+        let saved = [
+            "14-02-02", "14-03-02", "14-04-03", "14-05-03", "14-06-03", "14-07-03", "14-08-04", "14-09-04", "14-10-04",
+            "14-11-04", "14-12-05",
+        ];
+        for (index, time) in saved.iter().enumerate() {
+            routes.push(test_route(
+                &format!("SavedClips/2026-07-27_14-12-29/2026-07-27_{time}-front.mp4"),
+                vec![[39.001 + index as f64 * 0.001, -76.7]],
+            ));
+        }
+        routes.push(test_route("2026-07-27/2026-07-27_14-12-26-front.mp4", vec![[39.013, -76.7]]));
+        let expected: Vec<String> = routes.iter().map(|r| r.file.clone()).collect();
+
+        let drives = drives_of(routes);
+        assert_eq!(drives.len(), 1);
+        assert_eq!(drives[0].route_files.len(), 13);
+        assert_eq!(drives[0].route_files.iter().filter(|f| f.starts_with("SavedClips/")).count(), 11);
+        assert_eq!(drives[0].route_files, expected);
+    }
+
+    #[test]
+    fn may_17_event_clips_do_not_create_a_phantom_parked_drive() {
+        let mut routes = Vec::new();
+        for minute in 35..=45u32 {
+            let ss = 39 + (minute - 35);
+            routes.push(park_route(
+                &format!("SentryClips/2026-05-17_18-46-39/2026-05-17_18-{minute}-{ss:02}-front.mp4"),
+                39.1988 + minute as f64 * 1e-6,
+            ));
+        }
+        routes.push(test_route(
+            "SavedClips/2026-05-17_18-47-59/2026-05-17_18-47-34-front.mp4",
+            vec![[39.198835, -76.795246]],
+        ));
+        let minutes = ["47", "48", "49", "50", "51"];
+        for (i, m) in minutes.iter().enumerate() {
+            routes.push(test_route(
+                &format!("RecentClips/2026-05-17/2026-05-17_18-{m}-34-front.mp4"),
+                vec![[39.198835 + i as f64 * 1e-4, -76.795246]],
+            ));
+        }
+        let expected: Vec<String> = minutes.iter().map(|m| format!("2026-05-17/2026-05-17_18-{m}-34-front.mp4")).collect();
+
+        let drives = drives_of(routes);
+        assert_eq!(drives.len(), 1);
+        assert_eq!(drives[0].route_files, expected);
+    }
+
+    // ── BLE telemetry rollups ───────────────────────────────────────────────
+
+    #[test]
+    fn location_name_rollup_keeps_first_start_and_last_end() {
+        let drives = drives_of(vec![
+            with_telemetry(
+                test_route("RecentClips/2026-05-17_10-00-00-front.mp4", vec![[37.0, -122.0]]),
+                Telemetry { location_name_end: Some("100 First St".into()), ..Default::default() },
+            ),
+            with_telemetry(
+                test_route("RecentClips/2026-05-17_10-01-00-front.mp4", vec![[37.001, -122.0]]),
+                Telemetry {
+                    location_name_start: Some("100 First St".into()),
+                    location_name_end: Some("250 Mid Ave".into()),
+                    ..Default::default()
+                },
+            ),
+            test_route("RecentClips/2026-05-17_10-02-00-front.mp4", vec![[37.002, -122.0]]),
+        ]);
+        assert_eq!(drives.len(), 1);
+        assert_eq!(field(&drives[0], "locationNameStart"), "100 First St");
+        assert_eq!(field(&drives[0], "locationNameEnd"), "250 Mid Ave");
+    }
+
+    #[test]
+    fn location_name_and_battery_rollups_are_omitted_without_telemetry() {
+        let drives = drives_of(vec![
+            test_route("RecentClips/2026-05-17_10-00-00-front.mp4", vec![[37.0, -122.0]]),
+            test_route("RecentClips/2026-05-17_10-01-00-front.mp4", vec![[37.001, -122.0]]),
+        ]);
+        assert_eq!(drives.len(), 1);
+        for key in ["locationNameStart", "locationNameEnd", "batteryPctStart", "batteryPctEnd"] {
+            assert!(!drives[0].fields.contains_key(key), "{key} present");
+        }
+    }
+
+    #[test]
+    fn battery_rollup_keeps_first_start_and_last_end() {
+        let drives = drives_of(vec![
+            test_route("RecentClips/2026-05-17_10-00-00-front.mp4", vec![[37.0, -122.0]]),
+            with_telemetry(
+                test_route("RecentClips/2026-05-17_10-01-00-front.mp4", vec![[37.001, -122.0]]),
+                Telemetry { battery_pct_start: Some(78.0), battery_pct_end: Some(71.0), ..Default::default() },
+            ),
+            with_telemetry(
+                test_route("RecentClips/2026-05-17_10-02-00-front.mp4", vec![[37.002, -122.0]]),
+                Telemetry { battery_pct_start: Some(71.0), battery_pct_end: Some(64.0), ..Default::default() },
+            ),
+        ]);
+        assert_eq!(drives.len(), 1);
+        assert_eq!(num(&drives[0], "batteryPctStart"), 78.0);
+        assert_eq!(num(&drives[0], "batteryPctEnd"), 64.0);
+    }
+
+    #[test]
+    fn complete_ble_telemetry_rollup_matches_sentry_usb_summaries() {
+        let drives = drives_of(vec![
+            with_telemetry(
+                test_route("2026-07-27/2026-07-27_10-00-00-front.mp4", vec![[37.0, -122.0]]),
+                Telemetry {
+                    battery_pct_start: Some(80.0),
+                    battery_pct_end: Some(79.0),
+                    interior_temp_min: Some(20.0),
+                    interior_temp_max: Some(24.0),
+                    exterior_temp_avg: Some(30.0),
+                    hvac_runtime_s: Some(30.0),
+                    tire_fl_psi: Some(42.0),
+                    tire_rl_psi: Some(43.0),
+                    odometer_mi_start: Some(1000.0),
+                    ..Default::default()
+                },
+            ),
+            with_telemetry(
+                test_route("2026-07-27/2026-07-27_10-01-00-front.mp4", vec![[37.001, -122.0]]),
+                Telemetry {
+                    battery_pct_start: Some(79.0),
+                    battery_pct_end: Some(78.0),
+                    interior_temp_min: Some(18.0),
+                    interior_temp_max: Some(28.0),
+                    exterior_temp_avg: Some(32.0),
+                    hvac_runtime_s: Some(45.0),
+                    tire_fl_psi: Some(41.5),
+                    tire_fr_psi: Some(42.5),
+                    tire_rr_psi: Some(43.5),
+                    odometer_mi_end: Some(1002.25),
+                    ..Default::default()
+                },
+            ),
+        ]);
+        assert_eq!(drives.len(), 1);
+        let expected = [
+            ("batteryPctStart", 80.0),
+            ("batteryPctEnd", 78.0),
+            ("batteryPctUsed", 2.0),
+            ("interiorTempMinC", 18.0),
+            ("interiorTempMaxC", 28.0),
+            ("exteriorTempAvgC", 31.0),
+            ("hvacRuntimeS", 75.0),
+            ("tireFlPsi", 41.5),
+            ("tireFrPsi", 42.5),
+            ("tireRlPsi", 43.0),
+            ("tireRrPsi", 43.5),
+            ("odometerMiStart", 1000.0),
+            ("odometerMiEnd", 1002.25),
+            ("odometerMiDriven", 2.25),
+        ];
+        for (key, want) in expected {
+            assert_eq!(num(&drives[0], key), want, "{key}");
+        }
+    }
+
+    // ── Geocode endpoint snapping ───────────────────────────────────────────
+
+    #[test]
+    fn geocode_endpoints_stationary_medoid_start_and_raw_terminal_fix_when_rolling() {
+        let pts = vec![
+            [37.000000, -122.0],
+            [37.000018, -122.0],
+            [36.999991, -122.0],
+            [37.000009, -122.0],
+            [37.000036, -122.0],
+            [37.000300, -122.0],
+            [37.000600, -122.0],
+            [37.000900, -122.0],
+        ];
+        let drives = drives_of(vec![test_route("RecentClips/2026-05-17_10-00-00-front.mp4", pts)]);
+        assert_eq!(drives.len(), 1);
+        let d = &drives[0];
+        assert_eq!(point2(d, "geocodeStartPoint"), [37.000009, -122.0]);
+        assert_eq!(point2(d, "geocodeEndPoint"), [37.000900, -122.0]);
+        assert_eq!(field(d, "geocodeStartStationary"), &json!(true));
+        assert_eq!(num(d, "geocodeStartSamples"), 4.0);
+        let acc = num(d, "geocodeStartAccuracyM");
+        assert!((5.0..=15.0).contains(&acc), "{acc}");
+        assert_eq!(field(d, "geocodeEndStationary"), &json!(false));
+        assert_eq!(num(d, "geocodeEndAccuracyM"), 35.0);
+    }
+
+    #[test]
+    fn geocode_endpoint_medoid_skips_a_terminal_gps_outlier_using_speed_evidence() {
+        let pts = vec![
+            [37.000000, -122.0],
+            [37.000300, -122.0],
+            [37.000600, -122.0],
+            [37.001000, -122.0],
+            [37.001009, -122.0],
+            [37.000991, -122.0],
+            [37.001500, -122.0], // stopped, but a bad terminal GPS fix
+        ];
+        let mut route = test_route("RecentClips/2026-05-17_10-00-00-front.mp4", pts.clone());
+        route.gear_states = Some(vec![GEAR_DRIVE as u8; pts.len()]);
+        route.speeds = Some(vec![5.0, 5.0, 5.0, 0.0, 0.0, 0.0, 0.0]);
+        let drives = drives_of(vec![route]);
+        assert_eq!(point2(&drives[0], "geocodeStartPoint"), pts[0]);
+        assert_eq!(point2(&drives[0], "geocodeEndPoint"), [37.001000, -122.0]);
+    }
+
+    #[test]
+    fn geocode_endpoint_does_not_mistake_tightly_spaced_moving_samples_for_parking() {
+        let pts = vec![[37.000000, -122.0], [37.000030, -122.0], [37.000060, -122.0], [37.000090, -122.0]];
+        let mut route = test_route("RecentClips/2026-05-17_10-00-00-front.mp4", pts.clone());
+        route.gear_states = Some(vec![GEAR_DRIVE as u8; pts.len()]);
+        route.speeds = Some(vec![3.0; pts.len()]);
+        let drives = drives_of(vec![route]);
+        assert_eq!(point2(&drives[0], "geocodeStartPoint"), pts[0]);
+        assert_eq!(point2(&drives[0], "geocodeEndPoint"), pts[pts.len() - 1]);
+    }
+
+    #[test]
+    fn geocode_endpoint_clustering_uses_elapsed_time_rather_than_sample_count() {
+        let point = [37.0, -122.0];
+        let sparse = drives_of(vec![test_route("RecentClips/2026-05-17_10-00-00-front.mp4", vec![point; 61])]);
+        let dense = drives_of(vec![test_route("RecentClips/2026-05-17_10-00-00-front.mp4", vec![point; 601])]);
+        let (sparse, dense) = (&sparse[0], &dense[0]);
+        assert_eq!(point2(sparse, "geocodeStartPoint"), point2(dense, "geocodeStartPoint"));
+        assert_eq!(num(sparse, "geocodeStartAccuracyM"), 5.0);
+        assert_eq!(num(dense, "geocodeStartAccuracyM"), 5.0);
+        assert_eq!(num(sparse, "geocodeStartSamples"), 31.0);
+        assert_eq!(num(dense, "geocodeStartSamples"), 301.0);
+    }
+
+    // ── Drive end-time convention ───────────────────────────────────────────
+
+    #[test]
+    fn drive_ends_at_the_last_driving_frame_when_the_final_clip_is_park_split() {
+        let drives = drives_of(vec![clip_with_gear_runs(
+            "RecentClips/2026-05-17_10-00-00-front.mp4",
+            &[(GEAR_DRIVE, 30), (GEAR_PARK, 30)],
+            37.0,
+        )]);
+        assert_eq!(drives.len(), 1);
+        assert_eq!(num(&drives[0], "durationMs"), 30000.0);
+    }
+
+    #[test]
+    fn drive_with_an_unsplit_final_clip_keeps_the_plus_60s_convention() {
+        let drives = drives_of(vec![test_route("RecentClips/2026-05-17_10-00-00-front.mp4", line_points(10, 37.0, -122.0))]);
+        assert_eq!(drives.len(), 1);
+        assert_eq!(num(&drives[0], "durationMs"), 60000.0);
+    }
+
+    // ── Event-clip gap fill through grouping ────────────────────────────────
+
+    #[test]
+    fn trailing_pre_roll_chain_extends_the_drive_and_parked_tail_is_excluded() {
+        let driving = |file: &str, lat: f64| Route {
+            file: file.into(),
+            points: vec![[lat, -122.0], [lat + 0.001, -122.0]],
+            speeds: Some(vec![5.0, 5.0]),
+            gear_states: Some(vec![1, 1]),
+            gear_runs: Some(vec![GearRun { gear: Some(1), frames: 2.0 }]),
+            ..Default::default()
+        };
+        let parked = |file: &str, lat: f64| Route {
+            file: file.into(),
+            points: vec![[lat, -122.0], [lat, -122.0]],
+            speeds: Some(vec![0.0, 0.0]),
+            gear_states: Some(vec![0, 0]),
+            gear_runs: Some(vec![GearRun { gear: Some(0), frames: 2.0 }]),
+            ..Default::default()
+        };
+        let drives = drives_of(vec![
+            driving("RecentClips/2026-07-04/2026-07-04_20-42-50-front.mp4", 37.0),
+            driving("RecentClips/2026-07-04/2026-07-04_20-43-50-front.mp4", 37.001),
+            driving("SentryClips/2026-07-04_20-55-50/2026-07-04_20-44-51-front.mp4", 37.002),
+            driving("SentryClips/2026-07-04_20-55-50/2026-07-04_20-45-51-front.mp4", 37.003),
+            parked("SentryClips/2026-07-04_20-55-50/2026-07-04_20-46-52-front.mp4", 37.003),
+            parked("SentryClips/2026-07-04_20-55-50/2026-07-04_20-47-52-front.mp4", 37.003),
+        ]);
+        assert_eq!(drives.len(), 1, "expected a single extended drive");
+        assert_eq!(
+            files(&drives[0]),
+            vec![
+                "2026-07-04/2026-07-04_20-42-50-front.mp4",
+                "2026-07-04/2026-07-04_20-43-50-front.mp4",
+                "SentryClips/2026-07-04_20-55-50/2026-07-04_20-44-51-front.mp4",
+                "SentryClips/2026-07-04_20-55-50/2026-07-04_20-45-51-front.mp4",
+            ]
+        );
+    }
+
+    // ── Clip span ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_clip_that_stopped_early_stamps_its_points_inside_the_drive() {
+        // The next clip starts 20 s later, so clip A's 700 frames cover 20 s,
+        // not a nominal minute.
+        let a = clip_with_gear_runs("2026-08-11/2026-08-11_00-33-32-front.mp4", &[(GEAR_DRIVE, 700)], 37.0);
+        let b = clip_with_gear_runs("2026-08-11/2026-08-11_00-33-52-front.mp4", &[(GEAR_DRIVE, 2100)], 37.1);
+        let drives = drives_of(vec![a, b]);
+        assert_eq!(drives.len(), 1);
+        let pts = &drives[0].points;
+        for i in 1..pts.len() {
+            assert!(pts[i][2] >= pts[i - 1][2], "point {i} steps backwards");
+        }
+        let span = pts[pts.len() - 1][2] - pts[0][2];
+        let duration = num(&drives[0], "durationMs");
+        assert!(span <= duration, "point span {span} exceeds duration {duration}");
+        // 20 s of clip A, then clip B runs to its own nominal end.
+        assert_eq!(duration, 80000.0);
+    }
+
+    #[test]
+    fn clip_spans_do_not_stretch_across_a_recording_gap() {
+        let a = clip_with_gear_runs("2026-08-11/2026-08-11_00-33-32-front.mp4", &[(GEAR_DRIVE, 2100)], 37.0);
+        let b = clip_with_gear_runs("2026-08-11/2026-08-11_00-43-32-front.mp4", &[(GEAR_DRIVE, 2100)], 37.1);
+        let drives = drives_of(vec![a, b]);
+        assert_eq!(drives.len(), 2);
+        assert_eq!(num(&drives[0], "durationMs"), 60000.0);
+        assert_eq!(num(&drives[1], "durationMs"), 60000.0);
+    }
+
+    // ── Summon detection ────────────────────────────────────────────────────
+    // flagRuns and gearRuns share the raw SEI frame sequence.
+
+    struct SummonOpts {
+        speed: f64,
+        n: usize,
+        ap_runs: Option<Vec<ApRun>>,
+        ap_state: Option<u8>,
+    }
+
+    impl Default for SummonOpts {
+        fn default() -> Self {
+            SummonOpts { speed: 2.0, n: 100, ap_runs: None, ap_state: None }
+        }
+    }
+
+    fn summon_clip(file: &str, runs: &[(i64, u32)], flag_runs: Option<Vec<FlagRun>>, o: SummonOpts) -> Route {
+        let base_lat = 37.0;
+        let mut clip = clip_with_gear_runs(file, runs, base_lat);
+        clip.points.truncate(o.n);
+        while clip.points.len() < o.n {
+            let len = clip.points.len();
+            clip.points.push([base_lat + len as f64 * 1e-6, -122.0]);
+        }
+        clip.speeds = Some(vec![o.speed; o.n]);
+        clip.flag_runs = flag_runs;
+        if let Some(runs) = o.ap_runs {
+            clip.ap_runs = Some(runs);
+        }
+        if let Some(state) = o.ap_state {
+            clip.autopilot_states = Some(vec![state; o.n]);
+        }
+        clip
+    }
+
+    fn fr(flags: i64, frames: u32) -> FlagRun {
+        FlagRun { flags, frames: frames as f64, max_mps: None }
+    }
+
+    fn frm(flags: i64, frames: u32, max_mps: f64) -> FlagRun {
+        FlagRun { flags, frames: frames as f64, max_mps: Some(max_mps) }
+    }
+
+    fn apr(ap: i64, frames: u32) -> ApRun {
+        ApRun { ap: Some(ap), frames: frames as f64 }
+    }
+
+    fn ass_start_runs() -> Vec<FlagRun> {
+        vec![fr(0, 27), fr(3, 123) /* hazards through P→D */, fr(0, 17), fr(1, 873), fr(0, 746)]
+    }
+
+    fn ass_end_runs() -> Vec<FlagRun> {
+        vec![fr(0, 471), fr(3, 82) /* hazards through D→P */]
+    }
+
+    #[test]
+    fn summon_hazard_bookended_pedal_free_crawl_across_two_clips_is_flagged() {
+        let a = summon_clip(
+            "2026-07-15/2026-07-15_20-49-54-front.mp4",
+            &[(GEAR_PARK, 60), (GEAR_DRIVE, 1726)],
+            Some(ass_start_runs()),
+            SummonOpts::default(),
+        );
+        let b = summon_clip(
+            "2026-07-15/2026-07-15_20-50-43-front.mp4",
+            &[(GEAR_DRIVE, 500), (GEAR_PARK, 53)],
+            Some(ass_end_runs()),
+            SummonOpts::default(),
+        );
+        let drives = drives_of(vec![a, b]);
+        assert_eq!(drives.len(), 1);
+        assert!(drives[0].summon);
+        assert_eq!(field(&drives[0], "summon"), &json!(true));
+    }
+
+    #[test]
+    fn summon_missing_flag_runs_or_pedal_input_never_flags() {
+        // Missing evidence must not infer Summon.
+        let bare_a = summon_clip(
+            "2026-07-15/2026-07-15_20-49-54-front.mp4",
+            &[(GEAR_PARK, 60), (GEAR_DRIVE, 1726)],
+            None,
+            SummonOpts::default(),
+        );
+        let bare_b = summon_clip(
+            "2026-07-15/2026-07-15_20-50-43-front.mp4",
+            &[(GEAR_DRIVE, 500), (GEAR_PARK, 53)],
+            None,
+            SummonOpts::default(),
+        );
+        let bare = drives_of(vec![bare_a, bare_b]);
+        assert_eq!(bare.len(), 1);
+        assert!(!bare[0].summon && !bare[0].fields.contains_key("summon"));
+
+        let pedal_runs = vec![fr(3, 150), fr(0, 800), fr(8, 36), fr(0, 718), fr(3, 82)];
+        let pedal = drives_of(vec![summon_clip(
+            "2026-07-16/2026-07-16_09-00-00-front.mp4",
+            &[(GEAR_PARK, 60), (GEAR_DRIVE, 1726)],
+            Some(pedal_runs),
+            SummonOpts::default(),
+        )]);
+        assert_eq!(pedal.len(), 1);
+        assert!(!pedal[0].summon && !pedal[0].fields.contains_key("summon"));
+    }
+
+    #[test]
+    fn summon_self_driving_crawl_without_hazards_is_flagged_and_skips_fsd_stats() {
+        // Newer firmware reports Summon as autopilot_state = FSD.
+        let clip = summon_clip(
+            "2026-08-14/2026-08-14_09-00-00-front.mp4",
+            &[(GEAR_PARK, 90), (GEAR_DRIVE, 300), (GEAR_PARK, 60)],
+            Some(vec![fr(0, 450)]),
+            SummonOpts { ap_runs: Some(vec![apr(0, 90), apr(1, 300), apr(0, 60)]), ap_state: Some(1), ..Default::default() },
+        );
+        let drives = drives_of(vec![clip]);
+        assert_eq!(drives.len(), 1);
+        let d = &drives[0];
+        assert!(d.summon);
+        // The maneuver is driverless: no FSD engagement or disengagement.
+        assert_eq!(num(d, "fsdEngagedMs"), 0.0);
+        assert_eq!(num(d, "fsdDistanceKm"), 0.0);
+        assert_eq!(num(d, "fsdPercent"), 0.0);
+        assert_eq!(num(d, "fsdDisengagements"), 0.0);
+        assert_eq!(num(d, "assistedPercent"), 0.0);
+        assert!(d.fsd_events.is_none());
+    }
+
+    #[test]
+    fn summon_slow_pedal_free_fsd_fragment_without_park_bracketing_keeps_fsd_stats() {
+        let clip = summon_clip(
+            "2026-08-14/2026-08-14_11-00-00-front.mp4",
+            &[(GEAR_DRIVE, 450)],
+            Some(vec![fr(0, 450)]),
+            SummonOpts { ap_runs: Some(vec![apr(1, 450)]), ap_state: Some(1), ..Default::default() },
+        );
+        let drives = drives_of(vec![clip]);
+        assert_eq!(drives.len(), 1);
+        assert!(!drives[0].summon && !drives[0].fields.contains_key("summon"));
+        assert!(num(&drives[0], "fsdEngagedMs") > 0.0);
+        assert_eq!(num(&drives[0], "fsdPercent"), 100.0);
+    }
+
+    #[test]
+    fn summon_pedal_free_fsd_crawl_still_needs_the_speed_gate() {
+        let clip = summon_clip(
+            "2026-08-14/2026-08-14_10-00-00-front.mp4",
+            &[(GEAR_PARK, 90), (GEAR_DRIVE, 300), (GEAR_PARK, 60)],
+            Some(vec![fr(0, 450)]),
+            SummonOpts {
+                speed: 12.0,
+                ap_runs: Some(vec![apr(0, 90), apr(1, 300), apr(0, 60)]),
+                ap_state: Some(1),
+                ..Default::default()
+            },
+        );
+        let drives = drives_of(vec![clip]);
+        assert_eq!(drives.len(), 1);
+        assert!(!drives[0].summon);
+        assert!(num(&drives[0], "fsdEngagedMs") > 0.0);
+    }
+
+    #[test]
+    fn summon_reverse_only_with_negative_sei_speeds_is_flagged() {
+        let clip = summon_clip(
+            "2026-07-20/2026-07-20_09-00-00-front.mp4",
+            &[(GEAR_PARK, 90), (GEAR_REVERSE, 300), (GEAR_PARK, 60)],
+            Some(vec![fr(3, 120), fr(0, 240), fr(3, 90)]),
+            SummonOpts { speed: -1.5, ..Default::default() },
+        );
+        let drives = drives_of(vec![clip]);
+        assert_eq!(drives.len(), 1);
+        assert!(drives[0].summon);
+        // Display statistics also use the SEI magnitude.
+        assert_eq!(num(&drives[0], "maxSpeedMph"), 3.36);
+        assert_eq!(num(&drives[0], "avgSpeedMph"), 3.36);
+    }
+
+    #[test]
+    fn summon_reverse_summon_ending_seconds_before_the_human_drives_off_splits_and_flags() {
+        let a = summon_clip(
+            "2026-07-27/2026-07-27_20-04-00-front.mp4",
+            &[(GEAR_PARK, 46), (GEAR_REVERSE, 727), (GEAR_DRIVE, 917)],
+            Some(vec![fr(0, 11), fr(3, 113) /* hazards spanning P→R */, fr(0, 394), fr(2, 256), fr(0, 301), fr(2, 615)]),
+            SummonOpts { speed: 2.0, ..Default::default() },
+        );
+        let mut b = summon_clip(
+            "2026-07-27/2026-07-27_20-04-46-front.mp4",
+            &[(GEAR_DRIVE, 120), (GEAR_PARK, 84), (GEAR_DRIVE, 1469)],
+            Some(vec![
+                fr(2, 81),
+                fr(3, 89), // hazards through D→P
+                fr(4, 70),
+                fr(0, 200),
+                fr(8, 690),
+                fr(0, 112),
+                fr(1, 431),
+            ]),
+            SummonOpts { speed: 0.3, ..Default::default() },
+        );
+        // Only the pre-park tail remains at Summon speed.
+        b.speeds = Some((0..100).map(|i| if i < 10 { 0.3 } else { 5.4 }).collect());
+
+        let drives = drives_of(vec![a, b]);
+        assert_eq!(drives.len(), 2);
+        assert!(drives[0].summon);
+        assert!(!drives[1].summon);
+    }
+
+    #[test]
+    fn summon_point_slice_speed_pollution_does_not_reject_a_frame_slow_summon() {
+        let a = summon_clip(
+            "2026-07-27/2026-07-27_00-34-31-front.mp4",
+            &[(GEAR_PARK, 68), (GEAR_REVERSE, 538), (GEAR_DRIVE, 311)],
+            Some(vec![frm(0, 7, 0.0), frm(3, 144, 0.1) /* hazards spanning P→R */, frm(0, 766, 2.7)]),
+            SummonOpts { speed: 1.5, ..Default::default() },
+        );
+        let mut b = summon_clip(
+            "2026-07-27/2026-07-27_00-34-59-front.mp4",
+            &[(GEAR_DRIVE, 579), (GEAR_PARK, 114), (GEAR_DRIVE, 1162)],
+            Some(vec![
+                frm(0, 143, 2.7),
+                frm(3, 219, 2.6),
+                frm(0, 105, 2.0),
+                frm(3, 191, 1.8), // hazards through D→P
+                frm(4, 50, 0.0),
+                frm(0, 10, 0.0),
+                frm(8, 521, 4.7),
+                frm(0, 16, 4.0),
+                frm(8, 545, 4.7),
+                frm(0, 55, 1.0),
+            ]),
+            SummonOpts { speed: 0.4, ..Default::default() },
+        );
+        // The fraction-based slice reaches into faster post-park samples.
+        b.speeds = Some((0..100).map(|i| if i < 25 { 0.4 } else { 4.7 }).collect());
+
+        let drives = drives_of(vec![a, b]);
+        assert_eq!(drives.len(), 2);
+        assert!(num(&drives[0], "maxSpeedMph") > 8.0, "fixture must reproduce the pollution");
+        assert!(drives[0].summon);
+        assert!(!drives[1].summon);
+    }
+
+    // ── Park splitting: short segments survive GPS deduplication ────────────
+
+    #[test]
+    fn summon_tail_finishing_seconds_into_the_next_clip_survives_gps_dedup() {
+        let clips_for = |n: usize| {
+            vec![
+                summon_clip(
+                    "2026-08-01/2026-08-01_09-00-00-front.mp4",
+                    &[(GEAR_PARK, 60), (GEAR_DRIVE, 1740)],
+                    Some(vec![frm(0, 20, 0.0), frm(3, 130, 0.4) /* hazards through P→D */, frm(0, 1650, 2.2)]),
+                    SummonOpts { n: 100, ..Default::default() },
+                ),
+                summon_clip(
+                    "2026-08-01/2026-08-01_09-01-00-front.mp4",
+                    &[(GEAR_DRIVE, 120), (GEAR_PARK, 120), (GEAR_DRIVE, 1560)],
+                    Some(vec![frm(3, 120, 1.1) /* hazards through D→P */, frm(0, 120, 0.0), frm(8, 1560, 12.0)]),
+                    SummonOpts { n, speed: 1.0, ..Default::default() },
+                ),
+            ]
+        };
+        // Six points across clip B is the dedup level that used to lose the tail.
+        for n in [6, 12, 100] {
+            let drives = drives_of(clips_for(n));
+            assert_eq!(drives.len(), 2, "n={n}");
+            assert!(drives[0].summon, "n={n}");
+            assert_eq!(drives[0].route_files.len(), 2, "n={n}: tail segment kept");
+            // 58 s of clip A plus 4 s of clip B, from raw frame bounds.
+            assert_eq!(num(&drives[0], "durationMs"), 62000.0, "n={n}");
+            assert!(!drives[1].summon, "n={n}");
+        }
+    }
+
+    #[test]
+    fn park_split_leading_and_middle_motion_segments_survive_at_any_point_density() {
+        let runs = [
+            (GEAR_DRIVE, 30),
+            (GEAR_PARK, 120),
+            (GEAR_DRIVE, 420),
+            (GEAR_PARK, 120),
+            (GEAR_DRIVE, 30),
+            (GEAR_PARK, 120),
+            (GEAR_DRIVE, 960),
+        ];
+        let expected = [1000.0, 14000.0, 1000.0, 32000.0];
+        for n in [6, 100, 1800] {
+            let mut clip = clip_with_gear_runs("2026-08-02/2026-08-02_09-00-00-front.mp4", &runs, 37.0);
+            clip.points.truncate(n);
+            let drives = drives_of(vec![clip]);
+            assert_eq!(drives.len(), expected.len(), "n={n}: one drive per motion run");
+            let durations: Vec<f64> = drives.iter().map(|d| num(d, "durationMs")).collect();
+            assert_eq!(durations, expected, "n={n}");
+            for d in &drives {
+                assert!(num(d, "pointCount") > 0.0, "n={n}: every drive keeps a point");
+            }
+        }
+    }
+
+    // ── drive-telemetry.test.js (rollUpDriveTelemetry) ──────────────────────
+
+    fn roll_up(routes: Vec<Value>) -> Value {
+        let clips: Vec<Clip> = routes
+            .into_iter()
+            .map(|v| Clip {
+                r: serde_json::from_value::<RouteJson>(v).expect("route json").into_route(),
+                source: "sei".into(),
+                timestamp_ms: 0,
+                clip_span_ms: None,
+                sub_clip_frames: None,
+            })
+            .collect();
+        let mut out = Map::new();
+        roll_up_drive_telemetry(&clips, &mut out);
+        Value::Object(out)
+    }
+
+    #[test]
+    fn telemetry_rolls_every_supported_category_across_a_drive() {
+        let got = roll_up(vec![
+            json!({
+                "file": "2026-07-27/a-front.mp4",
+                "batteryPctStart": 80, "batteryPctEnd": 79.5,
+                "interiorTempMin": 20, "interiorTempMax": 24, "exteriorTempAvg": 30,
+                "hvacRuntimeS": 30, "tireFlPsi": 42, "tireRlPsi": 43,
+                "odometerMiStart": 1000, "locationNameStart": "Home",
+            }),
+            json!({
+                "file": "2026-07-27/b-front.mp4",
+                "batteryPctStart": 79.5, "batteryPctEnd": 78,
+                "interiorTempMin": 18, "interiorTempMax": 28, "exteriorTempAvg": 32,
+                "hvacRuntimeS": 45, "tireFlPsi": 41.5, "tireFrPsi": 42.5,
+                "tireRrPsi": 43.5, "odometerMiEnd": 1002.25, "locationNameEnd": "Work",
+            }),
+        ]);
+        assert_eq!(
+            got,
+            json!({
+                "batteryPctStart": 80.0, "batteryPctEnd": 78.0, "batteryPctUsed": 2.0,
+                "interiorTempMinC": 18.0, "interiorTempMaxC": 28.0, "exteriorTempAvgC": 31.0,
+                "hvacRuntimeS": 75.0, "tireFlPsi": 41.5, "tireFrPsi": 42.5,
+                "tireRlPsi": 43.0, "tireRrPsi": 43.5,
+                "odometerMiStart": 1000.0, "odometerMiEnd": 1002.25, "odometerMiDriven": 2.25,
+                "locationNameStart": "Home", "locationNameEnd": "Work",
+            })
+        );
+    }
+
+    #[test]
+    fn telemetry_counts_a_parent_clip_once_when_it_appears_as_multiple_subclips() {
+        let sub = json!({
+            "file": "2026-07-27/a-front.mp4",
+            "batteryPctStart": 70, "batteryPctEnd": 69, "exteriorTempAvg": 30, "hvacRuntimeS": 30,
+        });
+        assert_eq!(
+            roll_up(vec![sub.clone(), sub]),
+            json!({
+                "batteryPctStart": 70.0, "batteryPctEnd": 69.0, "batteryPctUsed": 1.0,
+                "exteriorTempAvgC": 30.0, "hvacRuntimeS": 30.0,
+            })
+        );
+    }
+
+    #[test]
+    fn telemetry_uses_the_latest_tire_reading_independently_per_wheel() {
+        assert_eq!(
+            roll_up(vec![
+                json!({ "file": "2026-07-27/a-front.mp4", "tireFlPsi": 40, "tireFrPsi": 41, "tireRlPsi": 42 }),
+                json!({ "file": "2026-07-27/b-front.mp4", "tireFlPsi": 39.5, "tireRrPsi": 43 }),
+            ]),
+            json!({ "tireFlPsi": 39.5, "tireFrPsi": 41.0, "tireRlPsi": 42.0, "tireRrPsi": 43.0 })
+        );
+    }
+
+    #[test]
+    fn telemetry_omits_a_negative_odometer_delta_but_keeps_its_endpoints() {
+        assert_eq!(
+            roll_up(vec![json!({ "file": "2026-07-27/a-front.mp4", "odometerMiStart": 1002, "odometerMiEnd": 1001 })]),
+            json!({ "odometerMiStart": 1002.0, "odometerMiEnd": 1001.0 })
+        );
+    }
+
+    #[test]
+    fn telemetry_ignores_non_finite_and_non_number_values() {
+        // NaN and ±Infinity have no JSON form (json! writes them as null, as
+        // JSON.stringify does); non-numbers are dropped when the route is read.
+        assert_eq!(
+            roll_up(vec![
+                json!({
+                    "file": "2026-07-27/a-front.mp4",
+                    "batteryPctStart": "80", "batteryPctEnd": f64::NAN,
+                    "interiorTempMin": f64::INFINITY, "exteriorTempAvg": "30",
+                    "hvacRuntimeS": "60", "tireFlPsi": f64::NEG_INFINITY,
+                    "odometerMiStart": null,
+                }),
+                json!({ "file": "2026-07-27/b-front.mp4", "batteryPctStart": 79.25, "batteryPctEnd": 78.1 }),
+            ]),
+            json!({ "batteryPctStart": 79.25, "batteryPctEnd": 78.1, "batteryPctUsed": 1.15 })
+        );
+    }
+
+    #[test]
+    fn telemetry_returns_no_optional_fields_when_a_drive_has_none() {
+        assert_eq!(roll_up(vec![json!({ "file": "2026-07-27/a-front.mp4" })]), json!({}));
+    }
+}

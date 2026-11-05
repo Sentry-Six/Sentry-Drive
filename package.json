@@ -4,24 +4,13 @@
   "type": "module",
   "description": "Standalone Tesla dashcam drives processor - replicates Sentry USB drives processing",
   "author": "Sentry-Six",
-  "main": "src/main/electron-main.cjs",
-  "desktopName": "sentry-drive.desktop",
   "scripts": {
-    "start": "electron .",
-    "process": "node src/processing/process.js",
-    "test": "node --test src/shared/drive-calc.test.js src/shared/atomic-write.test.js src/shared/clip-path.test.js src/shared/event-gap-fill.test.js src/shared/drive-telemetry.test.js src/shared/charging-history.test.js src/processing/clip-discovery.test.js src/processing/process-result.test.js src/processing/geocode.test.js src/processing/known-places.test.js src/processing/grouper.test.js src/main/drive-data-reader.test.js src/main/drive-data-writer.test.js src/main/drive-index.test.js src/main/disk-drive-grouper.test.js src/main/drive-loader-service.test.js src/main/drive-loader-client.test.js src/main/supercharger-catalog.test.js src/renderer/drive-page-model.test.js src/renderer/drive-telemetry-view.test.js src/renderer/replay-bearing.test.js src/renderer/charging-view.test.js src/renderer/charging-ui.test.js src/renderer/map-style.test.js src/renderer/map-camera.test.js",
-    "update:superchargers": "node scripts/update-supercharger-catalog.cjs"
+    "test": "node --test src/shared/drive-calc.test.js src/renderer/drive-page-model.test.js src/renderer/drive-telemetry-view.test.js src/renderer/replay-bearing.test.js src/renderer/charging-view.test.js src/renderer/charging-ui.test.js src/renderer/map-style.test.js src/renderer/map-camera.test.js",
+    "update:superchargers": "cargo run --manifest-path src-tauri/Cargo.toml --example update_superchargers --",
+    "dev": "tauri dev",
+    "build": "tauri build"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.12.4",
-    "electron": "45.1.0"
-  },
-  "dependencies": {
-    "electron-updater": "^6.8.11",
-    "stream-chain": "^4.4.1",
-    "stream-json": "^3.8.0"
-  },
-  "allowScripts": {
-    "electron-winstaller": true
+    "@tauri-apps/cli": "^2.12.4"
   }
 }

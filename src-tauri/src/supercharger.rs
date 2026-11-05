@@ -334,6 +334,25 @@ fn normalize(elements: Vec<Value>, generated_at: String) -> Result<Value> {
     }))
 }
 
+/// Download and normalize the catalog from OpenStreetMap (Overpass): the
+/// in-app refresh, and `examples/update_superchargers.rs`, which regenerates
+/// the bundled `assets/tesla-superchargers.json`. `wikidata_only` queries just
+/// the brand:wikidata selector, like the old maintainer script's flag.
+pub fn fetch_catalog(wikidata_only: bool, progress: &dyn Fn(&str)) -> Result<Value> {
+    let selectors: Vec<&str> = if wikidata_only { vec![SELECTORS[1]] } else { SELECTORS.to_vec() };
+    let mut elements = Vec::new();
+    for (i, sel) in selectors.iter().enumerate() {
+        progress(&format!("Fetching indexed OSM selector {}/{}…", i + 1, selectors.len()));
+        elements.extend(fetch_elements(sel)?);
+    }
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+    let catalog = normalize(elements, now)?;
+    if catalog["stations"].as_array().is_none_or(|s| s.is_empty()) {
+        bail!("Invalid Supercharger catalog: refresh returned no stations");
+    }
+    Ok(catalog)
+}
+
 /// Blocking refresh; returns the IPC result.
 pub fn refresh(state: &SuperchargerCatalog) -> Value {
     let cache_path = match state.lock().as_ref() {
@@ -341,15 +360,7 @@ pub fn refresh(state: &SuperchargerCatalog) -> Value {
         None => return json!({ "success": false, "error": "Catalog unavailable" }),
     };
     let result = (|| -> Result<Value> {
-        let mut elements = Vec::new();
-        for sel in SELECTORS {
-            elements.extend(fetch_elements(sel)?);
-        }
-        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-        let refreshed = normalize(elements, now)?;
-        if refreshed["stations"].as_array().is_none_or(|s| s.is_empty()) {
-            bail!("Invalid Supercharger catalog: refresh returned no stations");
-        }
+        let refreshed = fetch_catalog(false, &|_| {})?;
         crate::fsutil::atomic_write(&cache_path, format!("{refreshed}\n").as_bytes())?;
         Ok(refreshed)
     })();
@@ -371,5 +382,203 @@ pub fn refresh(state: &SuperchargerCatalog) -> Value {
             s["error"] = json!(format!("{e:#}"));
             s
         }
+    }
+}
+
+/// Ports of `src/main/supercharger-catalog.test.js` (no network).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tags(v: Value) -> Map<String, Value> {
+        v.as_object().cloned().expect("tag object")
+    }
+
+    #[test]
+    fn recognizes_explicit_supercharger_tags_and_excludes_destination_charging() {
+        let yes = |v: Value| is_tesla_supercharger(&tags(v));
+        assert!(yes(json!({ "amenity": "charging_station", "brand": "Tesla Supercharger" })));
+        assert!(yes(json!({ "amenity": "charging_station", "brand:wikidata": "Q17089620" })));
+        assert!(yes(json!({ "amenity": "charging_station", "ref:supercharge_info": "1234" })));
+        assert!(yes(json!({ "amenity": "charging_station", "socket:tesla_supercharger": "8" })));
+        assert!(yes(json!({ "amenity": "charging_station", "socket:tesla_supercharger_ccs": "8" })));
+        assert!(!yes(json!({
+            "amenity": "charging_station", "brand": "Tesla", "network": "Tesla Destination",
+            "socket:tesla_supercharger": "2",
+        })));
+        assert!(!yes(json!({ "amenity": "charging_station", "brand": "Tesla" })));
+    }
+
+    #[test]
+    fn normalizes_and_deduplicates_osm_nodes_and_areas_for_the_same_station() {
+        let catalog = normalize(
+            vec![
+                json!({
+                    "type": "node", "id": 1, "lat": 40, "lon": -76,
+                    "tags": { "amenity": "charging_station", "brand": "Tesla Supercharger", "name": "Tesla North" },
+                }),
+                json!({
+                    "type": "way", "id": 2, "center": { "lat": 40.0002, "lon": -76.0002 },
+                    "tags": { "amenity": "charging_station", "brand:wikidata": "Q17089620" },
+                }),
+                json!({
+                    "type": "node", "id": 3, "lat": 41, "lon": -77,
+                    "tags": { "amenity": "charging_station", "network": "Tesla Destination" },
+                }),
+            ],
+            "2026-07-31T00:00:00.000Z".into(),
+        )
+        .unwrap();
+        let stations = catalog["stations"].as_array().unwrap();
+        assert_eq!(stations.len(), 1);
+        assert_eq!(stations[0]["name"], "Tesla North");
+        let mut features: Vec<&str> = stations[0]["osmFeatures"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        features.sort();
+        assert_eq!(features, vec!["node/1", "way/2"]);
+        assert_eq!(catalog["attribution"], "© OpenStreetMap contributors");
+    }
+
+    fn summary(matched: &[Value]) -> Vec<Value> {
+        matched
+            .iter()
+            .map(|s| {
+                json!({
+                    "siteId": s["siteId"], "displayName": s["displayName"],
+                    "isSupercharger": s["isSupercharger"], "chargerType": s["chargerType"],
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn matches_only_charging_sites_within_250_metres_and_uses_the_catalog_name() {
+        let matched = match_charging_sites(
+            vec![
+                json!({ "siteId": "inside", "latitude": 40, "longitude": -76, "displayName": "Raw name" }),
+                json!({ "siteId": "outside", "latitude": 40.005, "longitude": -76, "displayName": "High power stop" }),
+                json!({ "siteId": "unknown", "latitude": null, "longitude": null, "displayName": "Unknown location" }),
+            ],
+            &json!({ "stations": [{
+                "stationId": "node/1", "name": "Tesla North Supercharger", "latitude": 40.002, "longitude": -76,
+            }] }),
+        );
+        assert_eq!(
+            summary(&matched),
+            vec![
+                json!({ "siteId": "inside", "displayName": "Tesla North Supercharger", "isSupercharger": true, "chargerType": "supercharger" }),
+                json!({ "siteId": "outside", "displayName": "High power stop", "isSupercharger": false, "chargerType": "other" }),
+                json!({ "siteId": "unknown", "displayName": "Unknown location", "isSupercharger": false, "chargerType": "other" }),
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_the_stall_rating_from_osm_socket_output_tags_fastest_socket_wins() {
+        let kw = |v: Value| station_power_kw(&tags(v));
+        assert_eq!(kw(json!({ "socket:nacs:output": "250" })), Some(250.0));
+        assert_eq!(kw(json!({ "socket:nacs:output": "325" })), Some(325.0));
+        assert_eq!(kw(json!({ "socket:nacs:output": "72;250" })), Some(250.0));
+        assert_eq!(kw(json!({ "socket:nacs:output": "150", "socket:type1_combo:output": "325" })), Some(325.0));
+        assert_eq!(kw(json!({ "socket:nacs:output": "250 kW" })), Some(250.0));
+        assert_eq!(kw(json!({ "socket:nacs": "12" })), None);
+        assert_eq!(kw(json!({})), None);
+        // Reject likely unit/value errors without discarding a valid sibling rating.
+        assert_eq!(kw(json!({ "socket:nacs:output": "250000" })), None);
+        assert_eq!(kw(json!({ "socket:nacs:output": "0" })), None);
+        assert_eq!(kw(json!({ "socket:nacs:output": "-5" })), None);
+        assert_eq!(kw(json!({ "socket:nacs:output": "250000;250" })), Some(250.0));
+        assert_eq!(kw(json!({ "socket:nacs:output": "1200" })), Some(1200.0));
+    }
+
+    #[test]
+    fn speed_tier_maps_ratings_to_bolt_counts_at_150_and_250_kw() {
+        for (kw, tier) in [(72.0, 1), (120.0, 1), (149.0, 1), (150.0, 2), (240.0, 2), (249.0, 2), (250.0, 3), (325.0, 3), (500.0, 3)] {
+            assert_eq!(speed_tier(Some(kw)), tier, "{kw} kW");
+        }
+        assert_eq!(speed_tier(None), 0);
+        assert_eq!(speed_tier(Some(0.0)), 0);
+        assert_eq!(speed_tier(Some(-5.0)), 0);
+        // A non-numeric powerKw reads as None (`as_f64`), as 'nope' reads as 0 bolts in JS.
+        assert_eq!(speed_tier(json!("nope").as_f64()), 0);
+    }
+
+    #[test]
+    fn matched_superchargers_carry_the_rating_and_tier_and_unmatched_sites_carry_neither() {
+        let sites = vec![
+            json!({ "siteId": "fast", "latitude": 40, "longitude": -76, "displayName": "1 Main St" }),
+            json!({ "siteId": "away", "latitude": 41, "longitude": -76, "displayName": "Home" }),
+        ];
+        let matched = match_charging_sites(
+            sites.clone(),
+            &json!({ "stations": [{ "stationId": "node/1", "name": "Tesla Supercharger", "latitude": 40, "longitude": -76, "powerKw": 325 }] }),
+        );
+        assert_eq!(matched[0]["powerKw"].as_f64(), Some(325.0));
+        assert_eq!(matched[0]["speedTier"], json!(3));
+        assert!(matched[1].get("powerKw").is_none());
+        assert_eq!(matched[1]["isSupercharger"], json!(false));
+
+        // An unrated station remains a Supercharger but displays no bolts.
+        let unrated = match_charging_sites(
+            vec![sites[0].clone()],
+            &json!({ "stations": [{ "stationId": "node/2", "name": "Tesla Supercharger", "latitude": 40, "longitude": -76 }] }),
+        );
+        assert_eq!(unrated[0]["isSupercharger"], json!(true));
+        assert_eq!(unrated[0]["powerKw"], Value::Null);
+        assert_eq!(unrated[0]["speedTier"], json!(0));
+    }
+
+    #[test]
+    fn a_catalog_name_that_only_repeats_the_brand_keeps_the_name_the_car_reported() {
+        let match_one = |site_name: &str, catalog_name: &str| {
+            match_charging_sites(
+                vec![json!({ "siteId": "s", "latitude": 40, "longitude": -76, "displayName": site_name })],
+                &json!({ "stations": [{ "stationId": "node/1", "name": catalog_name, "latitude": 40, "longitude": -76 }] }),
+            )
+            .remove(0)
+        };
+        assert_eq!(match_one("150 Anza Blvd", "Tesla Supercharger")["displayName"], "150 Anza Blvd");
+        assert_eq!(match_one("150 Anza Blvd", "tesla  supercharger")["displayName"], "150 Anza Blvd");
+        assert_eq!(match_one("150 Anza Blvd", "Mountain View Supercharger")["displayName"], "Mountain View Supercharger");
+        assert_eq!(match_one("Charging location", "Tesla Supercharger")["displayName"], "Tesla Supercharger");
+        assert_eq!(match_one("Unknown location", "Tesla Supercharger")["displayName"], "Tesla Supercharger");
+        assert_eq!(match_one("150 Anza Blvd", "")["displayName"], "150 Anza Blvd");
+        assert_eq!(match_one("150 Anza Blvd", "Tesla Supercharger")["isSupercharger"], json!(true));
+    }
+
+    /// Partial port of "manual refresh atomically replaces valid cache and
+    /// retains prior data on failure": `refresh` always goes to the network,
+    /// so only the cache-over-bundled selection and the validation that keeps
+    /// an invalid catalog from replacing a good one are covered here.
+    #[test]
+    fn load_prefers_a_valid_cache_and_falls_back_to_the_bundled_catalog() {
+        let dir = std::env::temp_dir().join(format!("sd-superchargers-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bundled = dir.join("bundled.json");
+        let cache = dir.join("cache.json");
+        let catalog = |name: &str| {
+            json!({
+                "version": 1, "generatedAt": "2026-01-01T00:00:00.000Z", "attribution": OSM_ATTRIBUTION,
+                "stations": [{ "stationId": format!("node/{name}"), "name": name, "latitude": 40, "longitude": -76 }],
+            })
+        };
+        std::fs::write(&bundled, catalog("Old station").to_string()).unwrap();
+
+        let c = Catalog::load(&bundled, &cache).unwrap();
+        assert_eq!(c.status()["source"], "bundled");
+        assert_eq!(c.data["stations"][0]["name"], "Old station");
+
+        std::fs::write(&cache, catalog("New station").to_string()).unwrap();
+        let c = Catalog::load(&bundled, &cache).unwrap();
+        assert_eq!(c.status()["source"], "refreshed");
+        assert_eq!(c.data["stations"][0]["name"], "New station");
+
+        // Invalid catalogs (and Overpass payloads) are rejected, never adopted.
+        assert!(validate(json!({ "version": 1, "stations": "invalid" })).is_err());
+        assert!(validate(json!({ "version": 1, "stations": [{ "stationId": "x", "latitude": 91, "longitude": 0 }] })).is_err());
+        std::fs::write(&cache, r#"{"elements":"invalid"}"#).unwrap();
+        let c = Catalog::load(&bundled, &cache).unwrap();
+        assert_eq!(c.status()["source"], "bundled");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

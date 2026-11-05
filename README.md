@@ -66,5 +66,20 @@ Sentry Drive is local-first: your TeslaCam footage, SEI telemetry, GPS data, tag
 
 This is a summary; the full Sentry-Six Privacy Policy is at [sentry-six.com/privacy](https://sentry-six.com/privacy).
 
+## Development
+Sentry Drive is a [Tauri 2](https://tauri.app) app: a Rust backend (`src-tauri/`) with a web UI (`src/renderer/`). You need [Node.js](https://nodejs.org) 24, [Rust](https://rustup.rs) (stable), and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS (on Linux: `libwebkit2gtk-4.1-dev`, `librsvg2-dev`, `libayatana-appindicator3-dev`, `patchelf`, `libdbus-1-dev`).
+
+```bash
+npm ci                 # Tauri CLI
+npm run dev            # run the app
+npm test               # renderer and drive-calc tests (Node)
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # backend tests
+npm run build          # release build for this machine (add -- --target universal-apple-darwin for one Mac app)
+```
+
+- `npm run update:superchargers` regenerates the bundled Supercharger catalog (`assets/tesla-superchargers.json`) from OpenStreetMap.
+- App icons are generated from `src-tauri/icons/source/sentrydrive-1024.png` with `npx tauri icon`.
+- Releases are built by `.github/workflows/build.yml` when a GitHub release is published. Besides the installers and the Tauri updater manifest (`latest.json`), it publishes `latest-mac.yml`, `latest.yml` and `latest-linux.yml` so installs of the old Electron version (1.6.x and earlier) update straight to the current version.
+
 ## Credits
 Originally created by [Scottmg1](https://github.com/Scottmg1), derived from his [Sentry USB project](https://github.com/Sentry-Six/Sentry-USB-Rusty). UI made with the help of Claude.

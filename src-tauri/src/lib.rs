@@ -18,7 +18,7 @@ pub mod logger;
 mod migrate;
 mod processing;
 mod secrets;
-mod supercharger;
+pub mod supercharger;
 mod updater;
 
 use std::path::PathBuf;

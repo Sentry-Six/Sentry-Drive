@@ -196,3 +196,107 @@ pub fn release_free_memory() {
         }
     }
 }
+
+/// Ports of `src/main/drive-loader-service.test.js`. The utility-process
+/// message protocol (`handle({ type, payload })`) is replaced by direct calls:
+/// `load`, then queries through `with_index`.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Fixture {
+        root: PathBuf,
+        source: PathBuf,
+        service: LoaderService,
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.service.close_current();
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn fixture() -> Fixture {
+        let root = std::env::temp_dir().join(format!("sd-loader-service-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("drive-data.json");
+        std::fs::write(
+            &source,
+            json!({
+                "processedFiles": ["a.mp4"],
+                "routes": [{
+                    "file": "RecentClips/2026-07-28_10-00-00-front.mp4",
+                    "date": "2026-07-28_10-00-00",
+                    "points": [[39.1, -76.7], [39.11, -76.71]],
+                    "speeds": [1, 2],
+                }],
+                "driveTags": {},
+                "telemetrySamples": [
+                    { "ts": 1_000, "lat": 40, "lng": -76, "locationName": "Charge stop" },
+                    { "ts": 1_010, "chargingState": "charging", "chargeEnergyAddedKwh": 2 },
+                    { "ts": 1_020, "chargingState": "complete" },
+                ],
+                "chargeCosts": { "1010": { "amount": 3, "currency": "$" } },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let service = LoaderService::new(root.join("cache"));
+        Fixture { root, source, service }
+    }
+
+    #[test]
+    fn loader_service_owns_a_disposable_index_and_serves_bounded_queries() {
+        let f = fixture();
+        let phases = Mutex::new(Vec::new());
+        let loaded = f.service.load(&f.source, 25, &|p: Progress| phases.lock().unwrap().push(p.phase)).unwrap();
+        assert_eq!(loaded["success"], json!(true));
+        assert_eq!(loaded["totalDriveCount"], json!(1));
+        assert_eq!(loaded["groupedDriveCount"], json!(1));
+        assert_eq!(loaded["hiddenTessieCount"], json!(0));
+        assert_eq!(loaded["hiddenTessieDrives"], json!([]));
+        assert_eq!(loaded["drives"].as_array().unwrap().len(), 1);
+        assert_eq!(loaded["chargingSessionCount"], json!(1));
+        assert_eq!(loaded["chargingSiteCount"], json!(1));
+        let phases = phases.into_inner().unwrap();
+        assert!(phases.contains(&"reading") && phases.contains(&"grouping"), "{phases:?}");
+
+        let page = f.service.with_index(|i| i.list_drive_summaries(&json!({ "offset": 0, "limit": 25 }))).unwrap();
+        assert_eq!(page["total"], json!(1));
+        assert_eq!(page["drives"].as_array().unwrap().len(), 1);
+
+        let detail = f.service.with_index(|i| i.get_drive_detail(0, 100.0)).unwrap().unwrap();
+        assert_eq!(detail["fullPointCount"], json!(2));
+
+        let sites = f.service.with_index(|i| i.list_charging_sites()).unwrap();
+        assert_eq!(sites.len(), 1);
+        let site_id = sites[0]["siteId"].as_str().unwrap().to_string();
+        let sessions = f.service.with_index(|i| i.list_charging_sessions(&site_id)).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].get("chargeRateSamples").is_none());
+        let session_id = sessions[0]["sessionId"].as_str().unwrap().to_string();
+        let charging = f.service.with_index(|i| i.get_charging_session(&session_id)).unwrap().unwrap();
+        assert_eq!(charging["chargeRateSamples"].as_array().unwrap().len(), 1);
+        assert_eq!(charging["cost"]["amount"].as_f64(), Some(3.0));
+
+        f.service.close_current();
+        assert_eq!(std::fs::read_dir(&f.service.cache_root).unwrap().count(), 0);
+        let err = f.service.with_index(|_| Ok(())).unwrap_err();
+        assert_eq!(error_json(&err)["code"], "NO_DRIVE_DATA");
+    }
+
+    #[test]
+    fn loader_service_converts_malformed_json_into_a_structured_error() {
+        let f = fixture();
+        std::fs::write(&f.source, r#"{"routes": ["#).unwrap();
+        let err = f.service.load(&f.source, 250, &|_| {}).unwrap_err();
+        let e = error_json(&err);
+        assert_eq!(e["success"], json!(false));
+        assert_eq!(e["code"], "DRIVE_DATA_INVALID");
+        let message = e["error"].as_str().unwrap().to_lowercase();
+        assert!(["parse", "json", "end"].iter().any(|w| message.contains(w)), "{message}");
+        // A failed load leaves no index directory behind.
+        assert_eq!(std::fs::read_dir(&f.service.cache_root).unwrap().count(), 0);
+    }
+}

@@ -762,3 +762,453 @@ pub fn for_each_route_window(index: &DriveIndex, mut each: impl FnMut(Vec<Route>
     }
     Ok(())
 }
+
+/// Ports of `src/main/drive-index.test.js` and
+/// `src/main/disk-drive-grouper.test.js`, against temp directories holding
+/// small drive-data.json files. Drive start times are local wall-clock
+/// strings derived from clip names, so the assertions hold in any zone.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct Fixture {
+        dir: PathBuf,
+        index: DriveIndex,
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn fixture(doc: &Value) -> Fixture {
+        let dir = std::env::temp_dir().join(format!("sd-index-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("drive-data.json");
+        std::fs::write(&source, doc.to_string()).unwrap();
+        let index = DriveIndex::create(&dir.join("index.sqlite"), &source).unwrap();
+        Fixture { dir, index }
+    }
+
+    fn no_progress() -> impl Fn(Progress) + Sync {
+        |_| {}
+    }
+
+    fn index_all(f: &Fixture) -> Counts {
+        index_drive_data(&f.index, &no_progress(), &AtomicBool::new(false)).unwrap()
+    }
+
+    fn group_all(f: &Fixture) -> Value {
+        group_indexed_drives(&f.index, &no_progress(), &AtomicBool::new(false)).unwrap()
+    }
+
+    fn total(f: &Fixture, query: Value) -> i64 {
+        f.index.list_drive_summaries(&query).unwrap()["total"].as_i64().unwrap()
+    }
+
+    // ── drive-index.test.js ─────────────────────────────────────────────────
+
+    fn index_fixture() -> Value {
+        let route = |file: &str, lat: f64| {
+            json!({
+                "file": file,
+                "date": &file[file.len() - 29..file.len() - 10],
+                "points": [[lat, -76.7], [lat + 0.001, -76.701]],
+                "speeds": [1, 2],
+            })
+        };
+        json!({
+            "driveTags": { "2026-07-28T10:00:00": ["Work", "Unicode ✓"] },
+            "routes": [
+                route("RecentClips/2026-07-28/2026-07-28_10-00-00-front.mp4", 39.1),
+                route("RecentClips\\2026-07-28\\2026-07-28_10-00-00-front.mp4", 39.2),
+                route("2026-07-28/2026-07-28_10-00-00-front.mp4", 39.25),
+                route("SavedClips/2026-07-28_10-30-00/2026-07-28_10-01-00-front.mp4", 39.3),
+                route("RecentClips/2026-07-28/2026-07-28_11-00-00-front.mp4", 39.4),
+            ],
+            "processedFiles": ["one.mp4", "two.mp4"],
+        })
+    }
+
+    #[test]
+    fn indexes_routes_with_normalized_dedup_and_bounded_time_windows() {
+        let f = fixture(&index_fixture());
+        let counts = index_all(&f);
+        assert_eq!(
+            serde_json::to_value(&counts).unwrap(),
+            json!({
+                "processedFileCount": 2, "routeCount": 3, "droppedCount": 0,
+                "duplicateCount": 2, "chargingSessionCount": 0, "chargingSiteCount": 0,
+            })
+        );
+        // Windows split at GAP_FILL_MAX_MS, not at a fillable recording gap.
+        let mut windows: Vec<Vec<String>> = Vec::new();
+        for_each_route_window(&f.index, |w| {
+            windows.push(w.into_iter().map(|r| r.file).collect());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            windows,
+            vec![
+                vec![
+                    "2026-07-28/2026-07-28_10-00-00-front.mp4".to_string(),
+                    "SavedClips/2026-07-28_10-30-00/2026-07-28_10-01-00-front.mp4".to_string(),
+                ],
+                vec!["2026-07-28/2026-07-28_11-00-00-front.mp4".to_string()],
+            ]
+        );
+        assert_eq!(Value::Object(f.index.drive_tags().unwrap()), json!({ "2026-07-28T10:00:00": ["Work", "Unicode ✓"] }));
+    }
+
+    #[test]
+    fn reports_progress_and_cancellation_without_partial_success() {
+        let f = fixture(&index_fixture());
+        let cancel = AtomicBool::new(false);
+        let calls = Mutex::new(Vec::new());
+        let progress = |p: Progress| {
+            calls.lock().unwrap().push((p.current, p.total));
+            cancel.store(true, Ordering::Relaxed);
+        };
+        let err = index_drive_data(&f.index, &progress, &cancel).err().expect("canceled");
+        assert!(format!("{err:#}").contains("ABORT_ERR"), "{err:#}");
+        assert!(!calls.lock().unwrap().is_empty());
+        // Rolled back: nothing from the partial run is visible.
+        let routes: i64 = f.index.db.query_row("SELECT COUNT(*) FROM routes", [], |r| r.get(0)).unwrap();
+        assert_eq!(routes, 0);
+        assert!(f.index.get_meta("counts").unwrap().is_none());
+    }
+
+    #[test]
+    fn indexes_charging_summaries_separately_from_detailed_curve_samples() {
+        let f = fixture(&json!({
+            "processedFiles": [],
+            "routes": [],
+            "driveTags": {},
+            "telemetrySamples": [
+                { "ts": 1_000, "lat": 40, "lng": -76, "locationName": "North charger", "batteryPct": 10 },
+                { "ts": 1_010, "chargingState": "charging", "chargeEnergyAddedKwh": 0.1 },
+                { "ts": 1_020, "chargerPowerKw": 50, "chargeRateMph": 220, "chargeEnergyAddedKwh": 2, "batteryPct": 25 },
+                { "ts": 1_030, "chargingState": "complete", "batteryPct": 30 },
+                { "ts": 2_000, "lat": 40.0006, "lng": -76.0004, "locationName": "North charger" },
+                { "ts": 2_010, "chargingState": "charging", "chargeEnergyAddedKwh": 1 },
+                { "ts": 2_020, "chargingState": "stopped" },
+                { "ts": 3_000, "chargingState": "charging", "chargeEnergyAddedKwh": 3 },
+                { "ts": 3_010, "chargingState": "complete" },
+            ],
+            "chargeCosts": { "1010": { "amount": 4.5, "currency": "$" } },
+        }));
+        let counts = index_all(&f);
+        assert_eq!(counts.charging_session_count, 3);
+        assert_eq!(counts.charging_site_count, 2);
+
+        let sites: Vec<(String, i64)> = f
+            .index
+            .list_charging_sites()
+            .unwrap()
+            .iter()
+            .map(|s| (s["siteId"].as_str().unwrap().to_string(), s["visitCount"].as_i64().unwrap()))
+            .collect();
+        assert_eq!(sites, vec![("site-charge-1010-1".to_string(), 2), ("unknown".to_string(), 1)]);
+
+        let summaries = f.index.list_charging_sessions("site-charge-1010-1").unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0]["sessionId"], "charge-2010-2");
+        assert!(summaries[0].get("chargeRateSamples").is_none());
+
+        let detail = f.index.get_charging_session("charge-1010-1").unwrap().unwrap();
+        assert_eq!(detail["cost"]["amount"].as_f64(), Some(4.5));
+        assert_eq!(detail["chargeRateSamples"].as_array().unwrap().len(), 2);
+        assert!(f.index.get_charging_session("missing").unwrap().is_none());
+    }
+
+    /// drive-index.cjs `putDrive`: the synthetic Summon tag lives only in the
+    /// filter column. (Rust inserts drives inline in group_indexed_drives.)
+    fn put_drive(index: &DriveIndex, id: i64, start_time: &str, tags: &[&str], summon: bool) {
+        let tags: Vec<Value> = tags.iter().map(|t| json!(t)).collect();
+        let mut filter = tags.clone();
+        let mut summary = json!({ "id": id, "startTime": start_time, "source": "sei", "tags": tags });
+        if summon {
+            filter.push(json!("summon"));
+            summary["summon"] = json!(true);
+        }
+        index
+            .db
+            .execute(
+                "INSERT INTO drives(id, start_time, source, tags, summary, detail) VALUES (?1, ?2, 'sei', ?3, ?4, ?5)",
+                params![id, start_time, encode_tag_set(&filter), summary.to_string(), br#"{"points":[]}"#.to_vec()],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn list_drive_summaries_filters_by_tag_and_inclusive_date_range() {
+        let f = fixture(&json!({}));
+        put_drive(&f.index, 1, "2026-07-10T08:00:00", &["Home"], false);
+        put_drive(&f.index, 2, "2026-07-15T09:30:00", &["Work", "Road Trip"], false);
+        put_drive(&f.index, 3, "2026-07-15T18:00:00", &[], false);
+        put_drive(&f.index, 4, "2026-07-20T12:00:00", &["home"], false);
+
+        assert_eq!(total(&f, json!({})), 4);
+        // Whole-tag matching is case-insensitive and rejects substrings.
+        assert_eq!(total(&f, json!({ "tag": "Home" })), 2);
+        assert_eq!(total(&f, json!({ "tag": "work" })), 1);
+        assert_eq!(total(&f, json!({ "tag": "Road Trip" })), 1);
+        assert_eq!(total(&f, json!({ "tag": "o" })), 0);
+
+        assert_eq!(total(&f, json!({ "startDate": "2026-07-15" })), 3);
+        assert_eq!(total(&f, json!({ "endDate": "2026-07-15" })), 3);
+        assert_eq!(total(&f, json!({ "startDate": "2026-07-15", "endDate": "2026-07-15" })), 2);
+        assert_eq!(total(&f, json!({ "startDate": "2026-07-16", "endDate": "2026-07-19" })), 0);
+
+        let combo = f.index.list_drive_summaries(&json!({ "tag": "home", "startDate": "2026-07-11" })).unwrap();
+        assert_eq!(combo["total"], json!(1));
+        assert_eq!(combo["drives"][0]["id"], json!(4));
+    }
+
+    #[test]
+    fn set_drive_tags_keeps_tag_filtering_truthful_after_an_edit() {
+        let f = fixture(&json!({}));
+        put_drive(&f.index, 1, "2026-07-15T09:30:00", &[], false);
+        assert_eq!(total(&f, json!({ "tag": "errand" })), 0);
+
+        f.index.set_drive_tags("2026-07-15T09:30:00", &[json!("Errand")]).unwrap();
+        assert_eq!(total(&f, json!({ "tag": "errand" })), 1);
+        assert_eq!(Value::Object(f.index.drive_tags().unwrap()), json!({ "2026-07-15T09:30:00": ["Errand"] }));
+
+        f.index.set_drive_tags("2026-07-15T09:30:00", &[]).unwrap();
+        assert_eq!(total(&f, json!({ "tag": "errand" })), 0);
+        assert!(f.index.drive_tags().unwrap().is_empty());
+    }
+
+    #[test]
+    fn summon_drives_filter_via_the_synthetic_tag_and_survive_tag_edits() {
+        let f = fixture(&json!({}));
+        put_drive(&f.index, 1, "2026-07-15T20:49:56", &[], true);
+        put_drive(&f.index, 2, "2026-07-15T21:00:00", &["Work"], false);
+
+        let page = f.index.list_drive_summaries(&json!({ "tag": "summon" })).unwrap();
+        assert_eq!(page["total"], json!(1));
+        assert_eq!(page["drives"][0]["id"], json!(1));
+        assert_eq!(page["drives"][0]["tags"], json!([]));
+
+        f.index.set_drive_tags("2026-07-15T20:49:56", &[json!("Errand")]).unwrap();
+        assert_eq!(total(&f, json!({ "tag": "summon" })), 1);
+        assert_eq!(total(&f, json!({ "tag": "Errand" })), 1);
+
+        f.index.set_drive_tags("2026-07-15T21:00:00", &[]).unwrap();
+        assert_eq!(total(&f, json!({ "tag": "summon" })), 1);
+    }
+
+    // ── disk-drive-grouper.test.js ──────────────────────────────────────────
+
+    fn route(file: &str, lat: f64, extra: Value) -> Value {
+        let date = regex::Regex::new(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}").unwrap().find(file).map(|m| m.as_str().to_string());
+        let mut r = json!({
+            "file": file,
+            "points": [[lat, -76.7], [lat + 0.001, -76.701], [lat + 0.002, -76.702]],
+            "speeds": [1, 2, 3],
+        });
+        if let Some(d) = date {
+            r["date"] = json!(d);
+        }
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            r[k] = v;
+        }
+        r
+    }
+
+    fn doc(routes: &[Value], drive_tags: Value) -> Value {
+        json!({ "processedFiles": [], "routes": routes, "driveTags": drive_tags })
+    }
+
+    /// What the in-memory grouper produces for the same routes. The routes go
+    /// through JSON text first, as the indexed copy does: without serde_json's
+    /// `float_roundtrip` feature a 17-digit literal such as 39.102000000000004
+    /// can parse one ULP away from the f64 that produced it (JSON.parse is
+    /// exact), so comparing against the in-memory values would differ there.
+    fn expected_drives(routes: &[Value]) -> Vec<super::super::grouper::GroupedDrive> {
+        let parsed = routes
+            .iter()
+            .map(|r| serde_json::from_str::<RouteJson>(&r.to_string()).unwrap().into_route())
+            .collect();
+        group_into_drives(parsed).drives
+    }
+
+    fn listed(f: &Fixture) -> Value {
+        f.index.list_drive_summaries(&json!({ "offset": 0, "limit": 10 })).unwrap()
+    }
+
+    #[test]
+    fn disk_grouping_preserves_grouper_summaries_and_stores_detail_separately() {
+        let routes = vec![
+            route("RecentClips/2026-07-28_10-00-00-front.mp4", 39.1, json!({})),
+            route("RecentClips/2026-07-28_10-01-00-front.mp4", 39.2, json!({})),
+            route("RecentClips/2026-07-28_11-00-00-front.mp4", 39.4, json!({})),
+        ];
+        let expected = expected_drives(&routes);
+        let f = fixture(&doc(&routes, json!({ expected[0].start_time.clone(): ["Morning"] })));
+        index_all(&f);
+        let result = group_all(&f);
+        let page = listed(&f);
+
+        assert_eq!(result["totalDriveCount"], json!(expected.len()));
+        assert_eq!(page["total"], json!(expected.len()));
+        let mut by_id = page["drives"].as_array().unwrap().clone();
+        by_id.sort_by_key(|d| d["id"].as_i64().unwrap());
+        for (i, (got, want)) in by_id.iter().zip(&expected).enumerate() {
+            let mut got = got.as_object().unwrap().clone();
+            assert_eq!(got.remove("id"), Some(json!(i)));
+            for k in ["overviewPoints", "tags", "bridged"] {
+                got.remove(k);
+            }
+            assert_eq!(Value::Object(got), Value::Object(want.fields.clone()), "drive {i}");
+        }
+        assert_eq!(by_id[0]["tags"], json!(["Morning"]));
+        assert!(by_id.iter().all(|d| d["overviewPoints"].as_array().unwrap().len() <= 120));
+
+        let detail = f.index.get_drive_detail(0, 1000.0).unwrap().unwrap();
+        assert_eq!(detail["points"], json!(expected[0].points));
+        assert_eq!(detail["downsampled"], json!(false));
+        assert_eq!(detail["fullPointCount"], json!(expected[0].points.len()));
+    }
+
+    #[test]
+    fn disk_grouping_preserves_driving_savedclips_that_fill_a_manual_save_gap() {
+        let mut routes = vec![route("2026-07-27/2026-07-27_14-01-02-front.mp4", 39.0, json!({}))];
+        let saved = [
+            "14-02-02", "14-03-02", "14-04-03", "14-05-03", "14-06-03", "14-07-03", "14-08-04", "14-09-04", "14-10-04",
+            "14-11-04", "14-12-05",
+        ];
+        for (i, time) in saved.iter().enumerate() {
+            routes.push(route(
+                &format!("SavedClips/2026-07-27_14-12-29/2026-07-27_{time}-front.mp4"),
+                39.001 + i as f64 * 0.001,
+                json!({}),
+            ));
+        }
+        routes.push(route("2026-07-27/2026-07-27_14-12-26-front.mp4", 39.013, json!({})));
+        let f = fixture(&doc(&routes, json!({})));
+        index_all(&f);
+        let result = group_all(&f);
+        let page = listed(&f);
+
+        assert_eq!(result["totalRoutes"], json!(13));
+        assert_eq!(result["routeCount"], json!(13));
+        assert_eq!(result["totalDriveCount"], json!(1));
+        assert_eq!(page["total"], json!(1));
+        let files = page["drives"][0]["routeFiles"].as_array().unwrap();
+        assert_eq!(files.len(), 13);
+        assert_eq!(files.iter().filter(|f| f.as_str().unwrap().starts_with("SavedClips/")).count(), 11);
+    }
+
+    #[test]
+    fn disk_grouping_hides_imported_drives_overlapping_sei_while_keeping_stable_ids() {
+        let routes = vec![
+            route("RecentClips/2026-07-28_10-00-00-front.mp4", 39.1, json!({})),
+            route(
+                "Imported/2026-07-28_10-00-00-front.mp4",
+                39.2,
+                json!({
+                    "source": "tessie", "externalSignature": "tessie:overlap",
+                    "points": [[39.2, -76.7], [39.2, -76.7]], "speeds": [1, 1],
+                }),
+            ),
+            route(
+                "Imported/2026-07-28_10-01-00-front.mp4",
+                39.3,
+                json!({ "source": "teslascope", "externalSignature": "teslascope:touching" }),
+            ),
+            route(
+                "Imported/2026-07-28_11-00-00-front.mp4",
+                39.4,
+                json!({ "source": "tessie", "externalSignature": "tessie:later" }),
+            ),
+        ];
+        let f = fixture(&doc(&routes, json!({})));
+        index_all(&f);
+        let result = group_all(&f);
+        let page = listed(&f);
+
+        assert_eq!(result["groupedDriveCount"], json!(4));
+        assert_eq!(result["totalDriveCount"], json!(3));
+        assert_eq!(result["hiddenTessieCount"], json!(1));
+        assert_eq!(result["aggregates"]["totalDriveCount"], json!(4));
+        assert_eq!(page["total"], json!(3));
+        let mut ids: Vec<i64> = page["drives"].as_array().unwrap().iter().map(|d| d["id"].as_i64().unwrap()).collect();
+        ids.sort();
+        assert_eq!(ids, vec![0, 2, 3]);
+        assert!(f.index.get_drive_detail(1, 1000.0).unwrap().is_none());
+        assert!(f.index.get_drive_detail(2, 1000.0).unwrap().is_some());
+
+        let hidden = result["hiddenTessieDrives"].as_array().unwrap();
+        assert_eq!(hidden.len(), 1);
+        assert_eq!(hidden[0]["startTime"], "2026-07-28T10:00:00");
+        assert_eq!(hidden[0]["endTime"], "2026-07-28T10:01:00");
+        assert_eq!(hidden[0]["distanceMi"].as_f64(), Some(0.0));
+        assert_eq!(hidden[0]["source"], "tessie");
+    }
+
+    #[test]
+    fn detail_query_enforces_a_point_budget_and_keeps_state_arrays_aligned() {
+        let points: Vec<Value> = (0..101).map(|i| json!([39.0 + i as f64 / 1000.0, -76.0])).collect();
+        let routes = vec![route(
+            "RecentClips/2026-07-28_10-00-00-front.mp4",
+            39.0,
+            json!({
+                "points": points,
+                "gearStates": (0..101).map(|i| i % 2).collect::<Vec<_>>(),
+                "autopilotStates": (0..101).map(|i| i % 4).collect::<Vec<_>>(),
+                "speeds": vec![2; 101],
+            }),
+        )];
+        let expected = expected_drives(&routes);
+        let f = fixture(&doc(&routes, json!({})));
+        index_all(&f);
+        group_all(&f);
+
+        let detail = f.index.get_drive_detail(0, 12.0).unwrap().unwrap();
+        assert_eq!(detail["downsampled"], json!(true));
+        assert_eq!(detail["fullPointCount"], json!(101));
+        let pts = detail["points"].as_array().unwrap();
+        assert_eq!(pts.len(), 12);
+        let full = &expected[0].points;
+        assert_eq!(pts[0], json!(full[0]));
+        assert_eq!(pts[11], json!(full[full.len() - 1]));
+        assert_eq!(detail["gearStates"].as_array().unwrap().len(), 12);
+        assert_eq!(detail["fsdStates"].as_array().unwrap().len(), 12);
+    }
+
+    #[test]
+    fn summon_drives_count_in_totals_but_are_excluded_from_fsd_aggregates() {
+        let n = 100;
+        let summon_route = json!({
+            "file": "RecentClips/2026-07-28_12-00-00-front.mp4",
+            "date": "2026-07-28_12-00-00",
+            "points": (0..n).map(|i| json!([39.1 + i as f64 * 1e-6, -76.7])).collect::<Vec<_>>(),
+            "speeds": vec![1.5; n],
+            "gearRuns": [{ "gear": 0, "frames": 90 }, { "gear": 1, "frames": 300 }, { "gear": 0, "frames": 60 }],
+            "rawFrameCount": 450,
+            "rawParkCount": 150,
+            "flagRuns": [{ "flags": 3, "frames": 120 }, { "flags": 0, "frames": 240 }, { "flags": 3, "frames": 90 }],
+        });
+        let routes = vec![summon_route, route("RecentClips/2026-07-28_13-00-00-front.mp4", 39.4, json!({}))];
+        let f = fixture(&doc(&routes, json!({})));
+        index_all(&f);
+        let result = group_all(&f);
+        let page = listed(&f);
+        let drives = page["drives"].as_array().unwrap();
+        let summon = drives.iter().find(|d| d["summon"] == json!(true)).expect("summon drive must exist and be tagged");
+        let normal = drives.iter().find(|d| d.get("summon").is_none()).expect("normal drive must exist");
+
+        let num = |v: &Value| v.as_f64().unwrap_or(0.0);
+        let agg = &result["aggregates"];
+        assert_eq!(agg["summonDriveCount"], json!(1));
+        assert_eq!(agg["seiDriveCount"], json!(1));
+        assert_eq!(num(&agg["seiDistanceM"]), num(&normal["distanceKm"]) * 1000.0);
+        assert_eq!(num(&agg["fsdPercentSum"]), num(&normal["fsdPercent"]));
+        assert_eq!(num(&agg["totalDistanceMi"]), num(&summon["distanceMi"]) + num(&normal["distanceMi"]));
+    }
+}

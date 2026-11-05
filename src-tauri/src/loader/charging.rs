@@ -418,3 +418,323 @@ pub fn group_charging_sites(mut sessions: Vec<Session>) -> ChargingHistory {
     sessions.sort_by(|a, b| b.start_timestamp.partial_cmp(&a.start_timestamp).unwrap_or(std::cmp::Ordering::Equal));
     ChargingHistory { sites: summaries, sessions }
 }
+
+/// Ports of `src/shared/charging-history.test.js`. Timestamps are epoch
+/// seconds rendered in UTC, so nothing here depends on the local zone.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn collect_with(samples: &[Value], costs: Value, tags: Value) -> Vec<Session> {
+        let mut builder = ChargingSessionBuilder::new();
+        for s in samples {
+            builder.add(s);
+        }
+        builder.finish(&costs, &tags)
+    }
+
+    fn collect(samples: &[Value], costs: Value) -> Vec<Session> {
+        collect_with(samples, costs, json!({}))
+    }
+
+    fn get<'a>(s: &'a Session, key: &str) -> &'a Value {
+        s.fields.get(key).unwrap_or_else(|| panic!("session has no {key}"))
+    }
+
+    fn reasons(sessions: &[Session]) -> Vec<&str> {
+        sessions.iter().map(|s| get(s, "endReason").as_str().unwrap()).collect()
+    }
+
+    #[test]
+    fn builds_a_sparse_charging_session_and_matches_its_exact_start_cost() {
+        let sessions = collect(
+            &[
+                json!({ "ts": 1_000, "batteryPct": 20, "lat": 39, "lng": -77, "locationName": "Old place" }),
+                json!({ "ts": 1_060, "chargingState": "starting" }),
+                json!({ "ts": 1_070, "chargerPowerKw": 5, "chargeEnergyAddedKwh": 0.2 }),
+                json!({
+                    "ts": 1_080, "lat": 40.1, "lng": -76.2, "locationName": "Market Street",
+                    "chargerPowerKw": 25, "chargeRateMph": 110, "batteryPct": 25, "chargeEnergyAddedKwh": 1.5,
+                }),
+                json!({
+                    "ts": 1_120, "lat": 40.1004, "lng": -76.2003, "chargerPowerKw": 48,
+                    "batteryPct": 35, "chargeEnergyAddedKwh": 4.25,
+                }),
+                json!({ "ts": 1_180, "chargingState": "complete", "batteryPct": 41 }),
+            ],
+            json!({ "1060": { "amount": 8.75, "currency": "$" }, "1059": { "amount": 99, "currency": "$" } }),
+        );
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            Value::Object(sessions[0].fields.clone()),
+            json!({
+                "sessionId": "charge-1060-1",
+                "startTimestamp": 1060.0,
+                "endTimestamp": 1180.0,
+                "startTime": "1970-01-01T00:17:40.000Z",
+                "endTime": "1970-01-01T00:19:40.000Z",
+                "durationSeconds": 120.0,
+                "startBatteryPct": 20.0,
+                "endBatteryPct": 41.0,
+                "energyAddedKwh": 4.25,
+                "peakPowerKw": 48.0,
+                "latitude": 40.1004,
+                "longitude": -76.2003,
+                "locationName": "Market Street",
+                "endReason": "complete",
+                "cost": { "amount": 8.75, "currency": "$" },
+                "tags": [],
+                "chargeRateSamples": [
+                    { "timestamp": 1070.0, "powerKw": 5.0, "energyAddedKwh": 0.2, "batteryPct": 20.0 },
+                    { "timestamp": 1080.0, "powerKw": 25.0, "chargeRateMph": 110.0, "energyAddedKwh": 1.5, "batteryPct": 25.0 },
+                    { "timestamp": 1120.0, "powerKw": 48.0, "energyAddedKwh": 4.25, "batteryPct": 35.0 },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_a_short_false_start_without_energy_or_sustained_power() {
+        let sessions = collect(
+            &[
+                json!({ "ts": 2_000, "chargingState": "starting" }),
+                json!({ "ts": 2_010, "chargingState": "charging", "chargerPowerKw": 3 }),
+                json!({ "ts": 2_025, "chargingState": "stopped", "chargerPowerKw": 0 }),
+            ],
+            json!({}),
+        );
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn counts_sustained_nonzero_power_even_when_cumulative_energy_is_absent() {
+        let sessions = collect(
+            &[
+                json!({ "ts": 3_000, "chargingState": "charging", "chargerPowerKw": 7 }),
+                json!({ "ts": 3_061, "chargingState": "charging", "chargerPowerKw": 6 }),
+                json!({ "ts": 3_080, "chargingState": "disconnected" }),
+            ],
+            json!({}),
+        );
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(get(&sessions[0], "energyAddedKwh"), &Value::Null);
+        assert_eq!(reasons(&sessions), vec!["disconnected"]);
+    }
+
+    #[test]
+    fn requires_one_uninterrupted_nonzero_power_streak() {
+        let sessions = collect(
+            &[
+                json!({ "ts": 3_500, "chargingState": "charging", "chargerPowerKw": 7 }),
+                json!({ "ts": 3_540, "chargingState": "charging", "chargerPowerKw": 0 }),
+                json!({ "ts": 3_570, "chargingState": "charging", "chargerPowerKw": 6 }),
+                json!({ "ts": 3_590, "chargingState": "stopped", "chargerPowerKw": 0 }),
+            ],
+            json!({}),
+        );
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn matches_a_millisecond_timestamp_cost_without_changing_its_lookup_key() {
+        let start_ms: i64 = 12_000_000_000;
+        let sessions = collect(
+            &[
+                json!({ "ts": start_ms, "chargingState": "charging", "chargeEnergyAddedKwh": 1 }),
+                json!({ "ts": start_ms + 60_000, "chargingState": "complete" }),
+            ],
+            json!({ start_ms.to_string(): { "amount": 3.25, "currency": "$" } }),
+        );
+        assert_eq!(get(&sessions[0], "startTimestamp").as_f64(), Some(start_ms as f64 / 1000.0));
+        assert_eq!(get(&sessions[0], "cost"), &json!({ "amount": 3.25, "currency": "$" }));
+    }
+
+    #[test]
+    fn closes_sessions_at_a_30_minute_gap_and_at_end_of_file() {
+        let sessions = collect(
+            &[
+                json!({ "ts": 4_000, "chargingState": "charging", "chargeEnergyAddedKwh": 1 }),
+                json!({ "ts": 5_801, "chargingState": "charging", "chargeEnergyAddedKwh": 2 }),
+            ],
+            json!({}),
+        );
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(get(&sessions[0], "endTimestamp").as_f64(), Some(4_000.0));
+        assert_eq!(get(&sessions[1], "endTimestamp").as_f64(), Some(5_801.0));
+        assert_eq!(reasons(&sessions), vec!["data-gap", "end-of-file"]);
+    }
+
+    #[test]
+    fn uses_only_a_coordinate_fallback_observed_within_15_minutes_before_charging() {
+        let sessions = collect(
+            &[
+                json!({ "ts": 5_000, "lat": 38, "lng": -75, "locationName": "Too old" }),
+                json!({ "ts": 5_901, "chargingState": "charging", "chargeEnergyAddedKwh": 1 }),
+                json!({ "ts": 5_920, "chargingState": "complete" }),
+                json!({ "ts": 7_000, "lat": 39, "lng": -76, "locationName": "Fresh place" }),
+                json!({ "ts": 7_899, "chargingState": "charging", "chargeEnergyAddedKwh": 2 }),
+                json!({ "ts": 7_920, "chargingState": "nopower" }),
+            ],
+            json!({}),
+        );
+        assert_eq!(get(&sessions[0], "latitude"), &Value::Null);
+        assert_eq!(get(&sessions[0], "longitude"), &Value::Null);
+        assert_eq!(get(&sessions[1], "latitude").as_f64(), Some(39.0));
+        assert_eq!(get(&sessions[1], "longitude").as_f64(), Some(-76.0));
+        assert_eq!(get(&sessions[1], "locationName"), "Fresh place");
+    }
+
+    #[test]
+    fn ignores_malformed_timestamps_and_ends_on_every_terminal_charging_state() {
+        let sessions = collect(
+            &[
+                json!({ "ts": "bad", "chargingState": "charging", "chargeEnergyAddedKwh": 99 }),
+                json!({ "ts": 8_000, "chargingState": "charging", "chargeEnergyAddedKwh": 1 }),
+                json!({ "ts": 8_010, "chargingState": "stopped" }),
+                json!({ "ts": 9_000, "chargingState": "charging", "chargeEnergyAddedKwh": 1 }),
+                json!({ "ts": 9_010, "chargingState": "disconnected" }),
+                json!({ "ts": 10_000, "chargingState": "charging", "chargeEnergyAddedKwh": 1 }),
+                json!({ "ts": 10_010, "chargingState": "no-power" }),
+            ],
+            json!({}),
+        );
+        assert_eq!(reasons(&sessions), vec!["stopped", "disconnected", "nopower"]);
+    }
+
+    fn make_session(
+        id: &str,
+        start: f64,
+        coords: Option<(f64, f64)>,
+        name: Option<&str>,
+        peak_power_kw: Option<f64>,
+    ) -> Session {
+        let start_time = iso_timestamp(start);
+        let mut fields = Map::new();
+        fields.insert("sessionId".into(), json!(id));
+        fields.insert("startTimestamp".into(), json!(start));
+        fields.insert("startTime".into(), json!(start_time));
+        fields.insert("endTimestamp".into(), json!(start + 60.0));
+        Session {
+            fields,
+            cost_key: String::new(),
+            start_timestamp: start,
+            latitude: coords.map(|c| c.0),
+            longitude: coords.map(|c| c.1),
+            location_name: name.map(String::from),
+            peak_power_kw,
+            start_time,
+            tags: Vec::new(),
+            site_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn groups_repeated_visits_within_150_metres_and_keeps_unknown_sessions_listable() {
+        let grouped = group_charging_sites(vec![
+            make_session("a", 100.0, Some((40.0, -76.0)), Some("First label"), None),
+            make_session("b", 300.0, Some((40.0007, -76.0004)), Some("New label"), None),
+            make_session("c", 200.0, Some((40.003, -76.0)), Some("Nearby but distinct"), None),
+            make_session("d", 400.0, None, Some("Garage"), None),
+        ]);
+        let summary: Vec<Value> = grouped
+            .sites
+            .iter()
+            .map(|s| {
+                json!({
+                    "siteId": s["siteId"], "displayName": s["displayName"], "visitCount": s["visitCount"],
+                    "latestVisit": s["latestVisit"], "latitude": s["latitude"],
+                })
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                json!({
+                    "siteId": "site-a", "displayName": "New label", "visitCount": 2,
+                    "latestVisit": "1970-01-01T00:05:00.000Z", "latitude": 40.00035,
+                }),
+                json!({
+                    "siteId": "unknown", "displayName": "Unknown location", "visitCount": 1,
+                    "latestVisit": "1970-01-01T00:06:40.000Z", "latitude": null,
+                }),
+                json!({
+                    "siteId": "site-c", "displayName": "Nearby but distinct", "visitCount": 1,
+                    "latestVisit": "1970-01-01T00:03:20.000Z", "latitude": 40.003,
+                }),
+            ]
+        );
+        let site_a: Vec<&str> = grouped
+            .sessions
+            .iter()
+            .filter(|s| s.site_id == "site-a")
+            .map(|s| get(s, "sessionId").as_str().unwrap())
+            .collect();
+        assert_eq!(site_a, vec!["b", "a"]);
+    }
+
+    #[test]
+    fn charge_tags_attach_by_session_start_key_and_mark_a_site_as_home() {
+        let sessions = collect_with(
+            &[
+                json!({ "ts": 1_000, "lat": 40, "lng": -76, "locationName": "Driveway", "batteryPct": 20 }),
+                json!({ "ts": 1_010, "chargingState": "charging", "chargerPowerKw": 7, "chargeEnergyAddedKwh": 0.5 }),
+                json!({ "ts": 1_120, "chargingState": "complete", "batteryPct": 40 }),
+                json!({ "ts": 9_000, "lat": 40, "lng": -76, "locationName": "Driveway", "batteryPct": 30 }),
+                json!({ "ts": 9_010, "chargingState": "charging", "chargerPowerKw": 7, "chargeEnergyAddedKwh": 0.5 }),
+                json!({ "ts": 9_120, "chargingState": "complete", "batteryPct": 50 }),
+                json!({ "ts": 90_000, "lat": 41, "lng": -77, "locationName": "Supercharger", "batteryPct": 20 }),
+                json!({ "ts": 90_010, "chargingState": "charging", "chargerPowerKw": 150, "chargeEnergyAddedKwh": 5 }),
+                json!({ "ts": 90_120, "chargingState": "complete", "batteryPct": 60 }),
+            ],
+            json!({}),
+            json!({ "1010": ["HOME"], "90010": ["Road Trip"] }),
+        );
+        let mut tags: Vec<Value> = sessions.iter().map(|s| get(s, "tags").clone()).collect();
+        // Array.prototype.sort compares String(array): "", "HOME", "Road Trip".
+        tags.sort_by_key(|t| t.as_array().unwrap().iter().map(|v| v.as_str().unwrap_or("")).collect::<Vec<_>>().join(","));
+        assert_eq!(tags, vec![json!([]), json!(["HOME"]), json!(["Road Trip"])]);
+
+        let ChargingHistory { sites, .. } = group_charging_sites(sessions);
+        let driveway = sites.iter().find(|s| s["displayName"] == "Driveway").unwrap();
+        let away = sites.iter().find(|s| s["displayName"] == "Supercharger").unwrap();
+        assert_eq!(driveway["visitCount"], json!(2));
+        assert_eq!(driveway["tags"], json!(["HOME"]));
+        assert_eq!(driveway["isHome"], json!(true));
+        assert_eq!(away["tags"], json!(["Road Trip"]));
+        assert_eq!(away["isHome"], json!(false));
+    }
+
+    #[test]
+    fn a_scalar_charge_tag_is_accepted_and_no_tags_means_no_home_flag() {
+        let build = |tag_map: Value| {
+            let sessions = collect_with(
+                &[
+                    json!({ "ts": 1_000, "lat": 40, "lng": -76, "locationName": "Spot", "batteryPct": 20 }),
+                    json!({ "ts": 1_010, "chargingState": "charging", "chargerPowerKw": 7, "chargeEnergyAddedKwh": 0.5 }),
+                    json!({ "ts": 1_120, "chargingState": "complete", "batteryPct": 40 }),
+                ],
+                json!({}),
+                tag_map,
+            );
+            group_charging_sites(sessions).sites.remove(0)
+        };
+        assert_eq!(build(json!({ "1010": "Home" }))["isHome"], json!(true));
+        assert_eq!(build(json!({ "1010": ["  home  "] }))["isHome"], json!(true));
+        assert_eq!(build(json!({}))["isHome"], json!(false));
+        assert_eq!(build(json!({}))["tags"], json!([]));
+        assert_eq!(build(json!({ "5555": ["Home"] }))["isHome"], json!(false));
+    }
+
+    #[test]
+    fn site_summary_carries_the_fastest_charge_recorded_there() {
+        let s = |id: &str, start: f64, peak: Option<f64>| make_session(id, start, Some((40.0, -76.0)), Some("Spot"), peak);
+        let sites = group_charging_sites(vec![s("a", 100.0, Some(7.0)), s("b", 200.0, Some(142.0)), s("c", 300.0, Some(48.0))]).sites;
+        assert_eq!(sites[0]["peakPowerKw"].as_f64(), Some(142.0));
+
+        let partial = group_charging_sites(vec![s("a", 100.0, None), s("b", 200.0, Some(11.0))]).sites;
+        assert_eq!(partial[0]["peakPowerKw"].as_f64(), Some(11.0));
+
+        let none = group_charging_sites(vec![s("a", 100.0, None)]).sites;
+        assert_eq!(none[0]["peakPowerKw"], Value::Null);
+    }
+}

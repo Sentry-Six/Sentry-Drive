@@ -824,6 +824,110 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    // ── process-result.test.js, end to end ──────────────────────────────────
+    // `buildProcessedRoute` is inlined into run_main here, so its cases are
+    // exercised through `run` on a synthetic TeslaCam tree of SEI clips.
+
+    /// One SEI NAL carrying gear (field 2), speed (4), accel (5), autopilot
+    /// state (10), latitude (11) and longitude (12), as in extract.rs tests.
+    fn sei_frame(lat: f64, lon: f64, gear: u8, speed: f32) -> Vec<u8> {
+        let mut p = vec![0x10, gear, 0x25];
+        p.extend_from_slice(&speed.to_le_bytes());
+        p.push(0x2d);
+        p.extend_from_slice(&0f32.to_le_bytes());
+        p.extend_from_slice(&[0x50, 0x00]);
+        p.push(0x59);
+        p.extend_from_slice(&lat.to_le_bytes());
+        p.push(0x61);
+        p.extend_from_slice(&lon.to_le_bytes());
+        let mut nal = vec![0x06, 0x05, 0x10, 0x42, 0x42, 0x42, 0x69];
+        nal.extend_from_slice(&p);
+        nal.push(0x80);
+        nal
+    }
+
+    fn mp4(nals: &[Vec<u8>]) -> Vec<u8> {
+        let mut mdat = Vec::new();
+        for n in nals {
+            mdat.extend_from_slice(&(n.len() as u32).to_be_bytes());
+            mdat.extend_from_slice(n);
+        }
+        let mut file = Vec::new();
+        file.extend_from_slice(&16u32.to_be_bytes());
+        file.extend_from_slice(b"ftypisom\0\0\0\0");
+        file.extend_from_slice(&((mdat.len() + 8) as u32).to_be_bytes());
+        file.extend_from_slice(b"mdat");
+        file.extend_from_slice(&mdat);
+        file
+    }
+
+    fn driving_clip(lat: f64) -> Vec<u8> {
+        mp4(&(0..3).map(|i| sei_frame(lat + i as f64 * 0.001, -76.0, 1, 4.0)).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn processed_routes_follow_process_result_rules() {
+        let root = std::env::temp_dir().join(format!("sd-processing-result-{}", uuid::Uuid::new_v4()));
+        let clips = root.join("TeslaCam");
+        let write = |rel: &str, bytes: &[u8]| {
+            let p = clips.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, bytes).unwrap();
+        };
+        let mut truncated = driving_clip(39.5);
+        truncated[16..20].copy_from_slice(&100_000u32.to_be_bytes());
+        // RecentClips minutes with fillable holes between them.
+        write("RecentClips/2026-07-27/2026-07-27_14-01-02-front.mp4", &driving_clip(39.0));
+        write("RecentClips/2026-07-27/2026-07-27_14-03-02-front.mp4", &driving_clip(39.1));
+        write("RecentClips/2026-07-27/2026-07-27_14-05-02-front.mp4", b""); // no GPS
+        write("RecentClips/2026-07-27/2026-07-27_14-06-02-front.mp4", &truncated); // extraction error
+        // Event clips in the holes: one parked, one driving.
+        let parked = mp4(&(0..3).map(|_| sei_frame(39.05, -76.0, 0, 0.0)).collect::<Vec<_>>());
+        write("SavedClips/2026-07-27_14-02-30/2026-07-27_14-02-02-front.mp4", &parked);
+        write("SavedClips/2026-07-27_14-04-30/2026-07-27_14-04-02-front.mp4", &driving_clip(39.2));
+
+        let out_path = root.join("drive-data.json");
+        let opts = Options { clips_dir: clips.clone(), output_path: out_path.clone(), workers: 1, reprocess_all: false };
+        let log = Mutex::new(String::new());
+        let sink = |_s: Stream, t: &str| log.lock().unwrap().push_str(t);
+        assert_eq!(run(&opts, &AtomicBool::new(false), &sink), Some(0), "{}", log.lock().unwrap());
+
+        let v: Value = serde_json::from_slice(&std::fs::read(&out_path).unwrap()).unwrap();
+        let mut processed: Vec<&str> = v["processedFiles"].as_array().unwrap().iter().map(|f| f.as_str().unwrap()).collect();
+        processed.sort();
+        // Parked events and GPS-less clips are processed without routes; a
+        // failed extraction is left unprocessed so the next run retries it
+        // (process.js ignores buildProcessedRoute's path for errors).
+        assert_eq!(
+            processed,
+            vec![
+                "2026-07-27/2026-07-27_14-01-02-front.mp4",
+                "2026-07-27/2026-07-27_14-03-02-front.mp4",
+                "2026-07-27/2026-07-27_14-05-02-front.mp4",
+                "SavedClips/2026-07-27_14-02-30/2026-07-27_14-02-02-front.mp4",
+                "SavedClips/2026-07-27_14-04-30/2026-07-27_14-04-02-front.mp4",
+            ]
+        );
+        let routes = v["routes"].as_array().unwrap();
+        let mut files: Vec<&str> = routes.iter().map(|r| r["file"].as_str().unwrap()).collect();
+        files.sort();
+        // One canonical path per normal clip; the driving event keeps its real path.
+        assert_eq!(
+            files,
+            vec![
+                "2026-07-27/2026-07-27_14-01-02-front.mp4",
+                "2026-07-27/2026-07-27_14-03-02-front.mp4",
+                "SavedClips/2026-07-27_14-04-30/2026-07-27_14-04-02-front.mp4",
+            ]
+        );
+        let event = routes.iter().find(|r| r["file"].as_str().unwrap().starts_with("SavedClips/")).unwrap();
+        assert_eq!(event["points"], json!([[39.2, -76], [39.201, -76], [39.202, -76]]));
+        // Summon evidence survives into the stored route.
+        assert_eq!(event["flagRuns"], json!([{ "flags": 0, "frames": 3, "maxMps": 4 }]));
+        assert_eq!(event["apRuns"], json!([{ "ap": 0, "frames": 3 }]));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Parity harness (see the processing port notes): run against a sample
     /// TeslaCam tree and compare with `node src/processing/process.js`.
     ///

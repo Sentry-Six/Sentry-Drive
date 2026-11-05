@@ -511,4 +511,258 @@ mod tests {
         assert!(parse_clip_timestamp_ms("nope.mp4").is_none());
         assert!(parse_clip_timestamp_ms("2026-13-05_15-54-00-front.mp4").is_none());
     }
+
+    // ── Ports of clip-path.test.js, event-gap-fill.test.js and the gap-fill
+    // section of grouper.test.js. Expected epochs come from `parse_local_iso`,
+    // the same local-zone rule as `new Date("YYYY-MM-DDTHH:MM:SS")`, so these
+    // assertions hold in any time zone.
+
+    use serde_json::json;
+
+    fn ms(s: &str) -> i64 {
+        parse_local_iso(s).expect("valid local time")
+    }
+
+    fn route_json(v: Value) -> Route {
+        serde_json::from_value::<RouteJson>(v).expect("route json").into_route()
+    }
+
+    fn cand(ts: &str, file: &str, driving: bool) -> GapCandidate {
+        GapCandidate { timestamp_ms: ms(ts), file: file.into(), driving }
+    }
+
+    #[test]
+    fn normalize_clip_path_canonicalizes_only_a_leading_recentclips_component() {
+        assert_eq!(
+            normalize_clip_path("RecentClips\\2026-07-27\\2026-07-27_14-01-02-front.mp4"),
+            "2026-07-27/2026-07-27_14-01-02-front.mp4"
+        );
+        assert_eq!(
+            normalize_clip_path("2026-07-27/2026-07-27_14-01-02-front.mp4"),
+            "2026-07-27/2026-07-27_14-01-02-front.mp4"
+        );
+        assert_eq!(
+            normalize_clip_path("SavedClips/2026-07-27_14-12-29/clip-front.mp4"),
+            "SavedClips/2026-07-27_14-12-29/clip-front.mp4"
+        );
+        assert_eq!(normalize_clip_path("MyRecentClips/clip-front.mp4"), "MyRecentClips/clip-front.mp4");
+        assert_eq!(normalize_clip_path("RecentClips/"), "RecentClips/");
+    }
+
+    #[test]
+    fn clip_timestamp_parsing_uses_the_final_filename_component() {
+        assert_eq!(
+            parse_clip_timestamp_ms("SavedClips/2026-07-27_14-12-29/2026-07-27_14-02-02-front.mp4"),
+            Some(ms("2026-07-27T14:02:02"))
+        );
+        assert_eq!(parse_clip_timestamp_ms("2026-07-27/2026-07-27_14-01-02-front.mp4"), Some(ms("2026-07-27T14:01:02")));
+        assert_eq!(parse_clip_timestamp_ms("SavedClips/no-time/front.mp4"), None);
+        assert_eq!(parse_clip_timestamp_ms("SavedClips/no-timestamp/front.mp4"), None);
+        // grouper.test.js parseClipTimestamp: the event folder's own (later)
+        // timestamp is ignored.
+        assert_eq!(
+            parse_clip_timestamp_ms("SentryClips/2026-05-17_18-46-39/2026-05-17_18-35-39-front.mp4"),
+            Some(ms("2026-05-17T18:35:39"))
+        );
+        assert_eq!(
+            parse_clip_timestamp_ms("SavedClips\\2026-05-17_18-47-59\\2026-05-17_18-47-34-front.mp4"),
+            Some(ms("2026-05-17T18:47:34"))
+        );
+        assert_eq!(
+            parse_clip_timestamp_ms("RecentClips/2026-05-17/2026-05-17_18-47-34-front.mp4"),
+            Some(ms("2026-05-17T18:47:34"))
+        );
+        assert_eq!(parse_clip_timestamp_ms("SentryClips/2026-05-17_18-46-39/event.json"), None);
+    }
+
+    #[test]
+    fn event_folder_recognition_is_top_level_only_and_survives_normalization() {
+        // clip-path.test.js / event-gap-fill.test.js
+        assert!(is_event_folder_path("SavedClips\\event\\clip-front.mp4"));
+        assert!(is_event_folder_path("SentryClips/event/clip-front.mp4"));
+        assert!(!is_event_folder_path("RecentClips/event/clip-front.mp4"));
+        assert!(is_event_folder_path("SavedClips/event/clip.mp4"));
+        assert!(is_event_folder_path("SentryClips\\event\\clip.mp4"));
+        assert!(!is_event_folder_path("foo/SavedClips/event/clip.mp4"));
+        assert!(!is_event_folder_path("RecentClips/clip.mp4"));
+        // grouper.test.js isEventFolderPath
+        assert!(is_event_folder_path("SavedClips/2026-05-17_18-47-59/2026-05-17_18-47-34-front.mp4"));
+        assert!(is_event_folder_path("SentryClips/2026-05-17_18-46-39/2026-05-17_18-35-39-front.mp4"));
+        assert!(is_event_folder_path("SavedClips\\2026-05-17_18-47-59\\2026-05-17_18-47-34-front.mp4"));
+        assert!(is_event_folder_path("SentryClips\\foo\\bar-front.mp4"));
+        assert!(!is_event_folder_path("RecentClips/2026-05-17/2026-05-17_18-47-34-front.mp4"));
+        assert!(!is_event_folder_path("2026-05-17/2026-05-17_18-47-34-front.mp4"));
+        assert!(!is_event_folder_path("2026-05-17\\2026-05-17_18-47-34-front.mp4"));
+        assert!(!is_event_folder_path(""));
+        assert!(!is_event_folder_path("foo/SavedClips/x.mp4"));
+        assert!(!is_event_folder_path("MySavedClips/x.mp4"));
+    }
+
+    #[test]
+    fn telemetry_has_driving_requires_gear_legacy_frame_or_speed_evidence() {
+        // event-gap-fill.test.js
+        assert!(telemetry_has_driving(&route_json(json!({ "gearRuns": [{ "gear": 1, "frames": 60 }] }))));
+        // Go's base64 []uint8 encoding of [0, 1].
+        assert!(telemetry_has_driving(&route_json(json!({ "gearStates": "AAE=" }))));
+        assert!(!telemetry_has_driving(&route_json(json!({
+            "gearRuns": [{ "gear": 0, "frames": 60 }],
+            "gearStates": [0, 0],
+            "speeds": [0, 0.2],
+            "rawParkCount": 60,
+            "rawFrameCount": 60,
+        }))));
+        assert!(telemetry_has_driving(&route_json(json!({ "speeds": [-2] }))));
+        assert!(telemetry_has_driving(&route_json(json!({ "rawParkCount": 40, "rawFrameCount": 60 }))));
+        assert!(!telemetry_has_driving(&route_json(json!({}))));
+
+        // grouper.test.js
+        assert!(telemetry_has_driving(&route_json(json!({
+            "gearRuns": [{ "gear": 0, "frames": 30 }, { "gear": 1, "frames": 30 }],
+        }))));
+        assert!(!telemetry_has_driving(&route_json(json!({
+            "gearRuns": [{ "gear": 0, "frames": 30 }],
+            "gearStates": vec![0; 60],
+            "speeds": vec![0; 60],
+            "rawParkCount": 60,
+            "rawFrameCount": 60,
+        }))));
+        assert!(telemetry_has_driving(&route_json(json!({
+            "gearRuns": [{ "gear": 0, "frames": 30 }],
+            "speeds": [-2.0],
+        }))));
+        assert!(!telemetry_has_driving(&route_json(json!({ "speeds": [0.2] }))));
+        // rawFrameCount alone does not establish driving telemetry.
+        assert!(!telemetry_has_driving(&route_json(json!({ "rawFrameCount": 60 }))));
+    }
+
+    #[test]
+    fn fillable_holes_are_over_90s_and_at_most_30min_with_strict_interiors() {
+        let seq = [
+            ms("2026-06-01T10:00:00"),
+            ms("2026-06-01T10:01:00"),
+            ms("2026-06-01T10:04:00"),
+            ms("2026-06-01T10:05:00"),
+            ms("2026-06-01T10:11:00"),
+            ms("2026-06-01T10:46:00"),
+        ];
+        assert_eq!(
+            fillable_holes(&seq),
+            vec![
+                (ms("2026-06-01T10:01:00"), ms("2026-06-01T10:04:00")),
+                (ms("2026-06-01T10:05:00"), ms("2026-06-01T10:11:00")),
+            ]
+        );
+
+        // grouper.js `tsInHoles` is inlined into select_gap_fill here. Check
+        // membership through it with a 20-minute hole, which adjacency
+        // chaining (3-minute hops) cannot bridge on its own.
+        let recent = [ms("2026-06-01T10:00:00"), ms("2026-06-01T10:20:00")];
+        let inside = [cand("2026-06-01T10:10:00", "SentryClips/e/a-front.mp4", true)];
+        assert_eq!(select_gap_fill(&recent, &inside), vec![0]);
+        let outside = [cand("2026-06-01T10:30:00", "SentryClips/e/a-front.mp4", true)];
+        assert!(select_gap_fill(&recent, &outside).is_empty());
+        // A 35-minute gap is not a hole.
+        let long_gap = [ms("2026-06-01T10:11:00"), ms("2026-06-01T10:46:00")];
+        let in_long_gap = [cand("2026-06-01T10:30:00", "SentryClips/e/a-front.mp4", true)];
+        assert!(select_gap_fill(&long_gap, &in_long_gap).is_empty());
+    }
+
+    #[test]
+    fn select_gap_fill_admits_an_interior_minute_and_suppresses_occupied_and_twin_rows() {
+        let recent = [ms("2026-06-01T10:00:00"), ms("2026-06-01T10:02:00")];
+        let candidates = [
+            cand("2026-06-01T10:01:00", "SavedClips/event/2026-06-01_10-01-00-front.mp4", true),
+            cand("2026-06-01T10:01:01", "SentryClips/event/2026-06-01_10-01-01-front.mp4", true),
+            cand("2026-06-01T10:02:05", "SavedClips/event/2026-06-01_10-02-05-front.mp4", true),
+            cand("2026-06-01T10:01:30", "SavedClips/event/2026-06-01_10-01-30-front.mp4", false),
+        ];
+        assert_eq!(select_gap_fill(&recent, &candidates), vec![0]);
+    }
+
+    #[test]
+    fn select_gap_fill_admits_anchored_leading_and_trailing_chains() {
+        let recent = [ms("2026-06-01T10:00:00")];
+        let candidates = [
+            cand("2026-06-01T09:58:10", "SavedClips/event/2026-06-01_09-58-10-front.mp4", true),
+            cand("2026-06-01T09:59:10", "SavedClips/event/2026-06-01_09-59-10-front.mp4", true),
+            cand("2026-06-01T10:01:01", "SavedClips/event/2026-06-01_10-01-01-front.mp4", true),
+            cand("2026-06-01T10:02:02", "SavedClips/event/2026-06-01_10-02-02-front.mp4", true),
+        ];
+        assert_eq!(select_gap_fill(&recent, &candidates), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn select_gap_fill_rejects_parked_candidates_and_isolated_driving_clusters() {
+        let recent = [ms("2026-06-01T10:00:00")];
+        let candidates = [
+            cand("2026-06-01T10:01:00", "SentryClips/event/2026-06-01_10-01-00-front.mp4", false),
+            cand("2026-06-01T14:00:00", "SavedClips/event/2026-06-01_14-00-00-front.mp4", true),
+            cand("2026-06-01T14:01:00", "SavedClips/event/2026-06-01_14-01-00-front.mp4", true),
+        ];
+        assert!(select_gap_fill(&recent, &candidates).is_empty());
+    }
+
+    #[test]
+    fn select_gap_fill_twin_dedup_keeps_lowest_path_and_rejects_outside_holes() {
+        // grouper.test.js selectGapFillEvents: candidates without telemetry
+        // (`driving: null`) are eligible, i.e. `driving: true` here.
+        let recent = [ms("2026-06-01T10:00:00"), ms("2026-06-01T10:03:00")];
+        let candidates = [
+            cand("2026-06-01T10:01:00", "SentryClips/2026-06-01_10-02-30/2026-06-01_10-01-00-front.mp4", true),
+            cand("2026-06-01T10:01:00", "SavedClips/2026-06-01_10-02-30/2026-06-01_10-01-00-front.mp4", true),
+            cand("2026-06-01T10:02:00", "SentryClips/2026-06-01_10-02-30/2026-06-01_10-02-00-front.mp4", true),
+            cand("2026-06-01T09:30:00", "SentryClips/2026-06-01_09-31-00/2026-06-01_09-30-00-front.mp4", true),
+        ];
+        let mut picked: Vec<&str> =
+            select_gap_fill(&recent, &candidates).into_iter().map(|i| candidates[i].file.as_str()).collect();
+        picked.sort();
+        assert_eq!(
+            picked,
+            vec![
+                "SavedClips/2026-06-01_10-02-30/2026-06-01_10-01-00-front.mp4",
+                "SentryClips/2026-06-01_10-02-30/2026-06-01_10-02-00-front.mp4",
+            ]
+        );
+    }
+
+    #[test]
+    fn select_gap_fill_chain_hop_window_and_30min_cap() {
+        let recent = [ms("2026-06-01T10:00:00")];
+        let chain = [
+            cand("2026-06-01T10:01:01", "SentryClips/e/a-front.mp4", true),
+            cand("2026-06-01T10:02:02", "SentryClips/e/b-front.mp4", true),
+            cand("2026-06-01T10:04:34", "SentryClips/e/c-front.mp4", true),
+            cand("2026-06-01T10:07:00", "SentryClips/e/d-front.mp4", true),
+            cand("2026-06-01T10:12:00", "SentryClips/e/e-front.mp4", true),
+        ];
+        assert_eq!(select_gap_fill(&recent, &chain), vec![0, 1, 2, 3]);
+
+        // The 30-minute cap is measured from the chain anchor.
+        let long: Vec<GapCandidate> = (0..35)
+            .map(|k| GapCandidate {
+                timestamp_ms: recent[0] + (k + 1) * 61_000,
+                file: format!("SentryClips/e/clip{k:02}-front.mp4"),
+                driving: true,
+            })
+            .collect();
+        let picked = select_gap_fill(&recent, &long);
+        assert!(!picked.is_empty() && picked.len() < long.len());
+        for i in picked {
+            assert!(long[i].timestamp_ms - recent[0] <= 30 * 60 * 1000, "{} exceeds the cap", long[i].file);
+        }
+    }
+
+    #[test]
+    fn select_gap_fill_rejects_occupied_slot_twins_overlap_dups_and_parked() {
+        let recent = [ms("2026-07-04T20:43:50"), ms("2026-07-04T20:44:50")];
+        let candidates = [
+            cand("2026-07-04T20:44:51", "SentryClips/e/2026-07-04_20-44-51-front.mp4", true),
+            cand("2026-07-04T20:45:51", "SentryClips/e/2026-07-04_20-45-51-front.mp4", true),
+            cand("2026-07-04T20:46:11", "SavedClips/e2/2026-07-04_20-46-11-front.mp4", true),
+        ];
+        assert_eq!(select_gap_fill(&recent, &candidates), vec![1]);
+
+        let parked = [cand("2026-07-04T20:45:51", "SentryClips/e/2026-07-04_20-45-51-front.mp4", false)];
+        assert!(select_gap_fill(&recent, &parked).is_empty());
+    }
 }
