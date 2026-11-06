@@ -1,8 +1,6 @@
-//! The processing run itself (port of src/processing/process.js, worker.js
-//! and process-result.cjs), independent of Tauri so it can be driven from
-//! tests. Output is the same text process.js printed to stdout/stderr; the
-//! caller forwards it to the renderer, which parses `SCAN N/M`, `(N%)` and
-//! `SUMMARY:` exactly as before.
+//! The processing run itself, independent of Tauri so it can be driven from
+//! tests. The caller forwards its output text to the renderer, which parses
+//! `SCAN N/M`, `(N%)` and `SUMMARY:`.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -27,8 +25,8 @@ use crate::loader::route::{is_event_folder_path, normalize_clip_path, telemetry_
 /// Only process clips on or after this date (YYYY-MM-DD, inclusive).
 pub const CUTOFF_DATE: &str = "2025-12-01";
 const CHECKPOINT_MS: u64 = 60_000;
-/// Progress lines are coalesced to this rate (Electron's stdout pipe batched
-/// them the same way); the renderer only shows the latest one anyway.
+/// Progress lines are coalesced to this rate; the renderer only shows the
+/// latest one anyway.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,7 +45,7 @@ pub struct Options {
     pub reprocess_all: bool,
 }
 
-/// `os.cpus().length - 1`, at least 1 (process.js's default worker count).
+/// Default worker count: CPU count minus one, at least 1.
 pub fn default_workers() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).saturating_sub(1).max(1)
 }
@@ -147,11 +145,11 @@ fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-// ── worker.js ───────────────────────────────────────────────────────────────
+// ── Per-clip work ───────────────────────────────────────────────────────────
 
 struct NewRoute {
     route: Route,
-    /// The route exactly as process.js writes it (routeForDisk + JSON.stringify).
+    /// The route exactly as it is written to drive-data.json.
     json: Vec<u8>,
 }
 
@@ -271,7 +269,7 @@ struct Existing {
     /// Parsed routes in file order (incremental mode only).
     routes: Vec<Route>,
     route_count: usize,
-    /// Existing routes that process.js would rewrite on save (non-canonical
+    /// Existing routes that are rewritten on save (non-canonical
     /// `file`, or byte fields still stored as number arrays), keyed by the
     /// normalized file, in file order.
     rewrites: Vec<(String, Vec<u8>)>,
@@ -279,8 +277,8 @@ struct Existing {
     has_drive_tags: bool,
 }
 
-/// The `{...r, file, gearStates, autopilotStates}` rewrite process.js applies
-/// to every existing route on save, or None when it would not change it.
+/// The `{...r, file, gearStates, autopilotStates}` rewrite applied to every
+/// existing route on save, or None when it would not change it.
 fn canonical_route_bytes(v: &mut Value) -> Result<Option<(String, Vec<u8>)>> {
     let Some(obj) = v.as_object_mut() else { return Err(anyhow!("route is not an object")) };
     let raw_file = obj.get("file").map(js_string_or_empty).unwrap_or_default();
@@ -429,10 +427,10 @@ impl RouteMap {
     }
 }
 
-// ── process.js main ─────────────────────────────────────────────────────────
+// ── Processing run ──────────────────────────────────────────────────────────
 
-/// Run one processing pass. Returns the exit code process.js would have
-/// produced, or None when cancelled (the Electron child was SIGTERM'd).
+/// Run one processing pass. Returns the exit code (0 on success), or None
+/// when cancelled.
 pub fn run(opts: &Options, cancel: &AtomicBool, sink: Sink) -> Option<i32> {
     let con = Console::new(sink);
     let code = match run_main(opts, cancel, &con) {
@@ -610,7 +608,7 @@ fn run_main(opts: &Options, cancel: &AtomicBool, con: &Console) -> Result<Option
                     rewrites: &rewrites,
                     new_routes: &new_routes,
                 };
-                // Checkpoint failures are ignored, as in process.js.
+                // Checkpoint failures are ignored.
                 if let Ok(true) = save(output_path, &input, cancel) {
                     con.log(&format!("\n  Checkpoint saved ({total_done} files)"));
                 }
@@ -734,7 +732,7 @@ mod tests {
         }
     }
 
-    // process-result.test.js: parked event clips are processed without routes.
+    // Parked event clips are processed without routes.
     #[test]
     fn parked_event_detection_matches_process_result() {
         let mut parked = base_route("SavedClips/event/2026-07-27_14-02-02-front.mp4");
@@ -824,9 +822,8 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    // ── process-result.test.js, end to end ──────────────────────────────────
-    // `buildProcessedRoute` is inlined into run_main here, so its cases are
-    // exercised through `run` on a synthetic TeslaCam tree of SEI clips.
+    // ── Processed-route cases, end to end: exercised through `run` on a
+    // synthetic TeslaCam tree of SEI clips.
 
     /// One SEI NAL carrying gear (field 2), speed (4), accel (5), autopilot
     /// state (10), latitude (11) and longitude (12), as in extract.rs tests.
@@ -896,8 +893,7 @@ mod tests {
         let mut processed: Vec<&str> = v["processedFiles"].as_array().unwrap().iter().map(|f| f.as_str().unwrap()).collect();
         processed.sort();
         // Parked events and GPS-less clips are processed without routes; a
-        // failed extraction is left unprocessed so the next run retries it
-        // (process.js ignores buildProcessedRoute's path for errors).
+        // failed extraction is left unprocessed so the next run retries it.
         assert_eq!(
             processed,
             vec![

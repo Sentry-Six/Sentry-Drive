@@ -1,5 +1,5 @@
 //! Known places: manual corrections, privacy-zone names, and learned Tesla
-//! labels (port of src/processing/known-places.cjs).
+//! labels.
 
 use std::path::PathBuf;
 

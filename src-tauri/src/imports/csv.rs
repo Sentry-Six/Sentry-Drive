@@ -1,5 +1,4 @@
-//! Tessie CSV exports (port of the parsing half of
-//! `src/processing/tessie-import.cjs`).
+//! Tessie CSV export parsing.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;

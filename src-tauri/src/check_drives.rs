@@ -1,11 +1,10 @@
-//! Check Drives: the `repair-gps` (bridge short recording gaps) and
-//! `check-summon` (backfill per-frame Summon evidence) handlers from
-//! electron-main.cjs.
+//! Check Drives: `repair-gps` (bridge short recording gaps) and
+//! `check-summon` (backfill per-frame Summon evidence).
 //!
 //! Both stream drive-data.json instead of holding it in memory: GPS repair
 //! needs only a few fields per route, and the Summon check groups drives one
 //! time window at a time from a temporary loader index, which gives the same
-//! drives as Electron's whole-file `groupIntoDrives`.
+//! drives as grouping the whole file at once.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -561,9 +560,9 @@ pub fn check_summon_core(path: &Path, clips_dir: Option<&str>, cache_root: &Path
                             return Ok(None);
                         };
                         let norm = normalize_clip_path(&file);
-                        // One update per path. With duplicate paths Electron
-                        // updates the last copy; this updates the first, which
-                        // is the copy the loader index evaluated.
+                        // One update per path. With duplicate paths this
+                        // updates the first copy, the one the loader index
+                        // evaluated.
                         let Some(fields) = updates.remove(&norm) else { return Ok(None) };
                         let mut v: Map<String, Value> = serde_json::from_slice(el)?;
                         for (k, val) in fields {

@@ -1,7 +1,6 @@
-//! Tesla MP4 SEI metadata extraction (port of src/processing/extract.js) plus
-//! the per-file worker step (worker.js) and the run-length helpers from
-//! src/shared/drive-calc.cjs (computeGearRuns / computeFlagRuns /
-//! computeApRuns).
+//! Tesla MP4 SEI metadata extraction, the per-file worker step, and the
+//! run-length helpers shared with src/shared/drive-calc.cjs (computeGearRuns /
+//! computeFlagRuns / computeApRuns).
 //!
 //! The byte walk mirrors the JavaScript exactly, including its quirks: the
 //! varint decoder uses 32-bit JS bit operations, and reads past the end of a

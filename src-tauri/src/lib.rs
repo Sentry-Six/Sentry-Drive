@@ -1,10 +1,9 @@
 //! Sentry Drive — Tauri shell.
 //!
-//! Replaces Electron's main process (`src/main/electron-main.cjs`) and preload
-//! (`electron-preload.cjs`). The renderer (`src/renderer/*`) is unchanged: an
-//! initialization script installs the same `window.electronAPI`,
-//! `window.driveCalc` and `window.driveTelemetryView` objects the preload
-//! exposed, backed by the Tauri commands registered here.
+//! The renderer (`src/renderer/*`) talks to this backend through
+//! `window.electronAPI`, plus the `window.driveCalc` and
+//! `window.driveTelemetryView` helpers. An initialization script installs all
+//! three, backed by the Tauri commands registered here.
 
 
 // Comparisons such as `!(a > b)` mirror the JavaScript they were ported from,
@@ -200,8 +199,8 @@ pub fn run() {
         .expect("error while building Sentry Drive");
 
     app.run(|handle, event| match event {
-        // macOS convention (and the Electron build): closing the window keeps
-        // the app in the Dock; clicking the Dock icon reopens it.
+        // macOS convention: closing the window keeps the app in the Dock;
+        // clicking the Dock icon reopens it.
         #[cfg(target_os = "macos")]
         RunEvent::ExitRequested { api, code: None, .. } => {
             api.prevent_exit();

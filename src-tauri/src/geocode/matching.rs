@@ -1,5 +1,5 @@
 //! Pure label selection, provider settings normalization, and cache-record
-//! rules (port of the pure half of src/processing/geocode.cjs).
+//! rules.
 
 use std::sync::OnceLock;
 

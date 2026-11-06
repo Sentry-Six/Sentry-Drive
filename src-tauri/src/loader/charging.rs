@@ -1,5 +1,4 @@
-//! Port of `src/shared/charging-history.cjs`: charging sessions from BLE
-//! telemetry samples, grouped into charging sites.
+//! Charging sessions from BLE telemetry samples, grouped into charging sites.
 
 use serde_json::{json, Map, Value};
 
@@ -419,7 +418,7 @@ pub fn group_charging_sites(mut sessions: Vec<Session>) -> ChargingHistory {
     ChargingHistory { sites: summaries, sessions }
 }
 
-/// Ports of `src/shared/charging-history.test.js`. Timestamps are epoch
+/// Charging-history tests. Timestamps are epoch
 /// seconds rendered in UTC, so nothing here depends on the local zone.
 #[cfg(test)]
 mod tests {

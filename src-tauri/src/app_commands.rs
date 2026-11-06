@@ -1,5 +1,5 @@
 //! General IPC handlers: logging, dialogs, paths, changelog, drive loading and
-//! charging history (electron-main.cjs equivalents).
+//! charging history.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -230,8 +230,7 @@ pub fn toggle_devtools(app: AppHandle) {
 
 // ── Drive loading ───────────────────────────────────────────────────────────
 
-/// Index cache location: the app's cache directory (the Electron build uses
-/// a folder next to the executable when writable, else system temp).
+/// Index cache location: the app's cache directory.
 pub fn resolve_loader_cache_root(app: &AppHandle) -> PathBuf {
     app.path()
         .app_cache_dir()

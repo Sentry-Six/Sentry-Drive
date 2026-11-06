@@ -1,11 +1,9 @@
-//! Port of `src/main/drive-data-writer.cjs`: rewrite drive-data.json section
-//! by section. Untouched top-level sections are byte-copied from the one open
+//! Rewrite drive-data.json section by section. Untouched top-level sections are byte-copied from the one open
 //! source handle (so an external atomic replace can't splice offsets), and
 //! the result is written to a temp file, integrity-checked, fsynced and
 //! renamed into place.
 //!
-//! Unlike the Electron build, a filtered `routes`/`processedFiles` section is
-//! also streamed: each array element is copied verbatim or dropped, so removing
+//! A filtered `routes`/`processedFiles` section is also streamed: each array element is copied verbatim or dropped, so removing
 //! a drive from a 1 GB file never materialises the whole document.
 
 use std::fs::File;
@@ -455,7 +453,7 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    // ── Ports of drive-data-reader.test.js and drive-data-writer.test.js ────
+    // ── Reader and writer tests ────────────────────────────────────────────
     //
     // The Rust build has one streaming reader (scan_sections +
     // for_each_array_element + read_top_level_values) instead of the JS

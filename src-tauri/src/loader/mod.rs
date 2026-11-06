@@ -1,5 +1,5 @@
-//! Drive loader: the Rust replacement for Electron's drive-loader utility
-//! process (`drive-loader-service.cjs` + `drive-loader-client.cjs`).
+//! Drive loader: loads drive-data.json into the index and serves drive
+//! summaries, details and charging history from it.
 
 pub mod calc;
 pub mod charging;
@@ -197,9 +197,7 @@ pub fn release_free_memory() {
     }
 }
 
-/// Ports of `src/main/drive-loader-service.test.js`. The utility-process
-/// message protocol (`handle({ type, payload })`) is replaced by direct calls:
-/// `load`, then queries through `with_index`.
+/// Loader service tests: `load`, then queries through `with_index`.
 #[cfg(test)]
 mod tests {
     use super::*;

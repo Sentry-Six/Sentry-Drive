@@ -1,5 +1,5 @@
-//! Synthetic 60-second clips from Tessie / Teslascope drives (port of the
-//! clip-building and overlap half of `src/processing/tessie-import.cjs`).
+//! Synthetic 60-second clips from Tessie / Teslascope drives, and the overlap
+//! checks against existing drives.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;

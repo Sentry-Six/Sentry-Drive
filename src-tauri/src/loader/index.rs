@@ -1,9 +1,9 @@
-//! Port of `src/main/drive-index.cjs` and `src/main/disk-drive-grouper.cjs`.
+//! The drive index.
 //!
 //! drive-data.json is streamed once (it can exceed 1 GB) into a throwaway
 //! SQLite index: routes are parsed straight into compact typed records, never
 //! materialised as a whole document. Drives are then grouped window by window
-//! from the index, exactly as the Electron utility process does.
+//! from the index.
 
 use std::fs::File;
 
@@ -487,7 +487,7 @@ fn put_charging_history(index: &DriveIndex, h: &super::charging::ChargingHistory
     Ok(())
 }
 
-// ── disk-drive-grouper.cjs ──────────────────────────────────────────────────
+// ── Windowed grouping ───────────────────────────────────────────────────────
 
 fn downsample_overview(points: &[[f64; 4]], max: usize) -> Vec<[f64; 2]> {
     if points.is_empty() {
@@ -763,8 +763,7 @@ pub fn for_each_route_window(index: &DriveIndex, mut each: impl FnMut(Vec<Route>
     Ok(())
 }
 
-/// Ports of `src/main/drive-index.test.js` and
-/// `src/main/disk-drive-grouper.test.js`, against temp directories holding
+/// Index and windowed-grouping tests, against temp directories holding
 /// small drive-data.json files. Drive start times are local wall-clock
 /// strings derived from clip names, so the assertions hold in any zone.
 #[cfg(test)]
@@ -808,7 +807,7 @@ mod tests {
         f.index.list_drive_summaries(&query).unwrap()["total"].as_i64().unwrap()
     }
 
-    // ── drive-index.test.js ─────────────────────────────────────────────────
+    // ── Index ───────────────────────────────────────────────────────────────
 
     fn index_fixture() -> Value {
         let route = |file: &str, lat: f64| {
@@ -924,8 +923,8 @@ mod tests {
         assert!(f.index.get_charging_session("missing").unwrap().is_none());
     }
 
-    /// drive-index.cjs `putDrive`: the synthetic Summon tag lives only in the
-    /// filter column. (Rust inserts drives inline in group_indexed_drives.)
+    /// Insert one drive row directly: the synthetic Summon tag lives only in
+    /// the filter column (group_indexed_drives does the same inline).
     fn put_drive(index: &DriveIndex, id: i64, start_time: &str, tags: &[&str], summon: bool) {
         let tags: Vec<Value> = tags.iter().map(|t| json!(t)).collect();
         let mut filter = tags.clone();
@@ -1002,7 +1001,7 @@ mod tests {
         assert_eq!(total(&f, json!({ "tag": "summon" })), 1);
     }
 
-    // ── disk-drive-grouper.test.js ──────────────────────────────────────────
+    // ── Windowed grouping ───────────────────────────────────────────────────
 
     fn route(file: &str, lat: f64, extra: Value) -> Value {
         let date = regex::Regex::new(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}").unwrap().find(file).map(|m| m.as_str().to_string());

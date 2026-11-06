@@ -1,5 +1,5 @@
-//! JavaScript coercion helpers so provider JSON and renderer input are read
-//! exactly the way geocode.cjs / known-places.cjs read them.
+//! JavaScript coercion helpers, so provider JSON and renderer input are read
+//! exactly the way the JavaScript version read them.
 
 use std::sync::OnceLock;
 

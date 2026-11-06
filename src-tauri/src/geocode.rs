@@ -1,5 +1,4 @@
-//! Reverse geocoding + known places (port of src/processing/geocode.cjs and
-//! known-places.cjs).
+//! Reverse geocoding + known places.
 //!
 //! Nominatim client with policy-compliant identification, one request per
 //! 1.1 s across the app, request coalescing, and a debounced disk cache keyed
@@ -45,8 +44,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 // ------------------------------------------------------------------ state
 
-/// Managed state. The service (and its disk cache) loads on first use, like
-/// the Electron main process.
+/// Managed state. The service (and its disk cache) loads on first use.
 pub struct GeocodeState {
     inner: Arc<LazyService>,
 }
@@ -68,7 +66,7 @@ impl GeocodeState {
     }
 }
 
-/// Equivalent of Electron's `app.getLocale()` (e.g. `en-US`).
+/// The system locale (e.g. `en-US`).
 fn system_locale() -> String {
     sys_locale::get_locale()
         .or_else(|| {
@@ -401,7 +399,7 @@ impl Service {
 // --------------------------------------------------------------- commands
 
 /// Run `f` against the (lazily initialized) service off the async runtime;
-/// a panic yields `fallback`, mirroring the Electron handlers' try/catch.
+/// a panic yields `fallback` instead of failing the command.
 async fn with_service<T: Send + 'static>(
     app: &AppHandle,
     fallback: T,

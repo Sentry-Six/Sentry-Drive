@@ -1,7 +1,7 @@
 //! Port of `src/shared/drive-calc.cjs` — the shared calculation contract.
 //!
 //! Every constant and formula mirrors the JavaScript module line for line so the
-//! Tauri build groups and measures drives exactly like the Electron build. JS
+//! backend and the renderer group and measure drives identically. JS
 //! number semantics that matter for parity (Math.round's half-up rule, integer
 //! Date truncation) are reproduced by the helpers at the bottom.
 
@@ -50,7 +50,7 @@ const WGS84_F: f64 = 1.0 / 298.257223563;
 
 /// V8's Math.sin/cos/tan/atan/atan2 are fdlibm ports; so is the `libm`
 /// crate. Using it (instead of the platform libm behind f64::sin etc.) keeps
-/// distances bit-identical to the Electron build.
+/// distances bit-identical to the JavaScript in the renderer.
 mod m {
     pub fn sin(x: f64) -> f64 {
         libm::sin(x)

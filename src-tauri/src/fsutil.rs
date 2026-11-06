@@ -1,5 +1,5 @@
-//! Atomic-replace helpers (port of `src/shared/atomic-write.cjs` and
-//! `renameWithRetry` from drive-data-writer.cjs).
+//! Atomic-replace helpers: temp file, integrity check, fsync, rename (with
+//! retries for Windows sharing violations).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -86,7 +86,7 @@ pub fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
-/// Ports of `src/shared/atomic-write.test.js`, against real temporary files.
+/// Atomic-write tests, against real temporary files.
 #[cfg(test)]
 mod tests {
     use super::*;

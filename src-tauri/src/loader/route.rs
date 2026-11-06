@@ -1,7 +1,5 @@
 //! Route (one dashcam clip) model, clip-path helpers and the event-folder
-//! gap-fill selection. Ports `src/shared/clip-path.cjs`,
-//! `src/shared/event-gap-fill.cjs` and the route-shape handling the grouper
-//! relies on.
+//! gap-fill selection the grouper relies on.
 //!
 //! A route is parsed leniently from drive-data.json (`RouteJson`, which accepts
 //! anything the JavaScript build tolerated) into a compact typed `Route` that is
@@ -35,7 +33,7 @@ pub struct Route {
     pub telemetry: Telemetry,
 }
 
-/// BLE telemetry fields carried on a route (drive-telemetry.cjs inputs).
+/// BLE telemetry fields carried on a route (inputs to the telemetry roll-up).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Telemetry {
     pub battery_pct_start: Option<f64>,
@@ -272,7 +270,7 @@ fn lenient_bytes<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::
     })
 }
 
-// ── clip-path.cjs ───────────────────────────────────────────────────────────
+// ── Clip paths ──────────────────────────────────────────────────────────────
 
 pub fn normalize_clip_path(file: &str) -> String {
     let normalized = file.replace('\\', "/");
@@ -347,7 +345,7 @@ pub fn local_naive_to_ms(naive: NaiveDateTime) -> i64 {
     }
 }
 
-/// grouper.js `formatISO`: local wall clock, second precision, no zone.
+/// `formatISO`: local wall clock, second precision, no zone.
 pub fn format_local_iso(ms: i64) -> String {
     match Local.timestamp_millis_opt(ms) {
         LocalResult::Single(t) | LocalResult::Ambiguous(t, _) => t.format("%Y-%m-%dT%H:%M:%S").to_string(),
@@ -361,7 +359,7 @@ pub fn parse_local_iso(s: &str) -> Option<i64> {
     Some(local_naive_to_ms(naive))
 }
 
-// ── event-gap-fill.cjs ──────────────────────────────────────────────────────
+// ── Event-folder gap fill ───────────────────────────────────────────────────
 
 pub fn telemetry_has_driving(route: &Route) -> bool {
     if let Some(runs) = &route.gear_runs {
@@ -512,8 +510,7 @@ mod tests {
         assert!(parse_clip_timestamp_ms("2026-13-05_15-54-00-front.mp4").is_none());
     }
 
-    // ── Ports of clip-path.test.js, event-gap-fill.test.js and the gap-fill
-    // section of grouper.test.js. Expected epochs come from `parse_local_iso`,
+    // ── Clip-path and gap-fill tests. Expected epochs come from `parse_local_iso`,
     // the same local-zone rule as `new Date("YYYY-MM-DDTHH:MM:SS")`, so these
     // assertions hold in any time zone.
 
@@ -558,8 +555,7 @@ mod tests {
         assert_eq!(parse_clip_timestamp_ms("2026-07-27/2026-07-27_14-01-02-front.mp4"), Some(ms("2026-07-27T14:01:02")));
         assert_eq!(parse_clip_timestamp_ms("SavedClips/no-time/front.mp4"), None);
         assert_eq!(parse_clip_timestamp_ms("SavedClips/no-timestamp/front.mp4"), None);
-        // grouper.test.js parseClipTimestamp: the event folder's own (later)
-        // timestamp is ignored.
+        // The event folder's own (later) timestamp is ignored.
         assert_eq!(
             parse_clip_timestamp_ms("SentryClips/2026-05-17_18-46-39/2026-05-17_18-35-39-front.mp4"),
             Some(ms("2026-05-17T18:35:39"))
@@ -577,7 +573,6 @@ mod tests {
 
     #[test]
     fn event_folder_recognition_is_top_level_only_and_survives_normalization() {
-        // clip-path.test.js / event-gap-fill.test.js
         assert!(is_event_folder_path("SavedClips\\event\\clip-front.mp4"));
         assert!(is_event_folder_path("SentryClips/event/clip-front.mp4"));
         assert!(!is_event_folder_path("RecentClips/event/clip-front.mp4"));
@@ -585,7 +580,6 @@ mod tests {
         assert!(is_event_folder_path("SentryClips\\event\\clip.mp4"));
         assert!(!is_event_folder_path("foo/SavedClips/event/clip.mp4"));
         assert!(!is_event_folder_path("RecentClips/clip.mp4"));
-        // grouper.test.js isEventFolderPath
         assert!(is_event_folder_path("SavedClips/2026-05-17_18-47-59/2026-05-17_18-47-34-front.mp4"));
         assert!(is_event_folder_path("SentryClips/2026-05-17_18-46-39/2026-05-17_18-35-39-front.mp4"));
         assert!(is_event_folder_path("SavedClips\\2026-05-17_18-47-59\\2026-05-17_18-47-34-front.mp4"));
@@ -600,7 +594,6 @@ mod tests {
 
     #[test]
     fn telemetry_has_driving_requires_gear_legacy_frame_or_speed_evidence() {
-        // event-gap-fill.test.js
         assert!(telemetry_has_driving(&route_json(json!({ "gearRuns": [{ "gear": 1, "frames": 60 }] }))));
         // Go's base64 []uint8 encoding of [0, 1].
         assert!(telemetry_has_driving(&route_json(json!({ "gearStates": "AAE=" }))));
@@ -615,7 +608,6 @@ mod tests {
         assert!(telemetry_has_driving(&route_json(json!({ "rawParkCount": 40, "rawFrameCount": 60 }))));
         assert!(!telemetry_has_driving(&route_json(json!({}))));
 
-        // grouper.test.js
         assert!(telemetry_has_driving(&route_json(json!({
             "gearRuns": [{ "gear": 0, "frames": 30 }, { "gear": 1, "frames": 30 }],
         }))));
@@ -653,8 +645,8 @@ mod tests {
             ]
         );
 
-        // grouper.js `tsInHoles` is inlined into select_gap_fill here. Check
-        // membership through it with a 20-minute hole, which adjacency
+        // Hole membership is inlined into select_gap_fill. Check it with a
+        // 20-minute hole, which adjacency
         // chaining (3-minute hops) cannot bridge on its own.
         let recent = [ms("2026-06-01T10:00:00"), ms("2026-06-01T10:20:00")];
         let inside = [cand("2026-06-01T10:10:00", "SentryClips/e/a-front.mp4", true)];
@@ -704,8 +696,7 @@ mod tests {
 
     #[test]
     fn select_gap_fill_twin_dedup_keeps_lowest_path_and_rejects_outside_holes() {
-        // grouper.test.js selectGapFillEvents: candidates without telemetry
-        // (`driving: null`) are eligible, i.e. `driving: true` here.
+        // Candidates without telemetry are eligible (`driving: true` here).
         let recent = [ms("2026-06-01T10:00:00"), ms("2026-06-01T10:03:00")];
         let candidates = [
             cand("2026-06-01T10:01:00", "SentryClips/2026-06-01_10-02-30/2026-06-01_10-01-00-front.mp4", true),

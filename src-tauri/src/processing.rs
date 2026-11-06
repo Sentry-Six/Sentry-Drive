@@ -1,8 +1,6 @@
-//! Clip processing: native port of src/processing/process.js, worker.js,
-//! extract.js, clip-discovery.js and process-result.cjs, run in-process on
-//! background threads instead of a Node child process. The commands mirror
-//! electron-main.cjs's `start-processing` / `stop-processing` handlers and
-//! stream the same `processing-output` events.
+//! Clip processing, run in-process on background threads. The
+//! `start-processing` / `stop-processing` commands stream `processing-output`
+//! events to the renderer.
 
 mod discovery;
 pub mod extract;
@@ -21,8 +19,8 @@ use crate::logger;
 use pipeline::{Options, Stream};
 
 const SCOPE: &str = "processing";
-/// How long stop waits for the run to wind down (Electron: SIGTERM, then
-/// SIGKILL after 5 s). Workers finish the clip they are reading first.
+/// How long stop waits for the run to wind down. Workers finish the clip they
+/// are reading first.
 const STOP_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
@@ -136,8 +134,8 @@ pub async fn start_processing(app: AppHandle, args: Value) -> Value {
         };
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| pipeline::run(&opts, &run.cancel, &sink)));
 
-        // Release the slot before announcing completion, as the Electron
-        // close handler did, so a stop or a new start sees it free.
+        // Release the slot before announcing completion, so a stop or a new
+        // start sees it free.
         {
             let state = app.state::<ProcessingState>();
             let mut active = lock_active(&state);

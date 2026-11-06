@@ -1,6 +1,6 @@
-//! Port of `src/processing/grouper.js` `groupIntoDrives` and its helpers, plus
-//! `src/shared/drive-telemetry.cjs`. Follows the JavaScript control flow line
-//! for line; comments only note where JS semantics needed care.
+//! Groups routes (clips) into drives, with per-drive stats and the BLE
+//! telemetry roll-up. Ported line for line from the JavaScript version;
+//! comments note where JS semantics needed care.
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,7 +32,7 @@ pub struct GroupedDrive {
     pub source: String,
     pub summon: bool,
     pub route_files: Vec<String>,
-    /// Summary fields in grouper.js order, without points/fsdStates/gearStates/fsdEvents.
+    /// Summary fields in display order, without points/fsdStates/gearStates/fsdEvents.
     pub fields: Map<String, Value>,
     /// Detail: [lat, lng, timeMs, speed] per point.
     pub points: Vec<[f64; 4]>,
@@ -915,10 +915,9 @@ fn filter_gps_outliers(points: &mut Vec<Pt>) {
     });
 }
 
-/// Ports of `src/processing/grouper.test.js` (grouping, rollups, geocode
-/// endpoints, end-time convention, clip spans, Summon, park splitting) and
-/// `src/shared/drive-telemetry.test.js`. The clip-path and gap-fill tests from
-/// grouper.test.js live with their implementations in `route.rs`.
+/// Grouping tests (rollups, geocode endpoints, end-time convention, clip
+/// spans, Summon, park splitting) and telemetry roll-up tests. The clip-path
+/// and gap-fill tests live with their implementations in `route.rs`.
 ///
 /// Clip timestamps are parsed in the machine's local zone, as in the JS build;
 /// every assertion here compares durations, orderings or counts derived from
@@ -1728,7 +1727,7 @@ mod tests {
         }
     }
 
-    // ── drive-telemetry.test.js (rollUpDriveTelemetry) ──────────────────────
+    // ── Telemetry roll-up ───────────────────────────────────────────────────
 
     fn roll_up(routes: Vec<Value>) -> Value {
         let clips: Vec<Clip> = routes

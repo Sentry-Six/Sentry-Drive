@@ -1,11 +1,10 @@
-//! Tessie (CSV export and REST API) and Teslascope imports: port of the
-//! `tessie-*` / `teslascope-*` handlers in `src/main/electron-main.cjs`.
+//! Tessie (CSV export and REST API) and Teslascope imports.
 //!
-//! Each handler is a plain function over its JSON args (`*_core`) so the
-//! parity harness can run it without a Tauri app; the commands at the bottom
-//! add the drive-data lock, progress events and the own-write watcher note.
-//! Like Electron, nothing here touches the loader index: the renderer
-//! reloads the file after an import or removal.
+//! Each handler is a plain function over its JSON args (`*_core`) so tests can
+//! run it without a Tauri app; the commands at the bottom add the drive-data
+//! lock, progress events and the own-write watcher note. Nothing here touches
+//! the loader index: the renderer reloads the file after an import or
+//! removal.
 
 pub mod clips;
 pub mod csv;
@@ -81,9 +80,8 @@ fn keep_all() -> Keep {
     Box::new(|_: &[u8]| Ok(true))
 }
 
-/// Append clips to `routes` and their files to `processedFiles` (the
-/// read-push-write of saveImportedClips / tessie-import), rewriting
-/// `driveTags` as Electron's writer does.
+/// Append clips to `routes` and their files to `processedFiles`, rewriting
+/// `driveTags`.
 pub fn append_clips(path: &Path, clips: &[Value]) -> anyhow::Result<()> {
     let routes = clips.iter().map(serde_json::to_vec).collect::<Result<Vec<_>, _>>()?;
     let files = clips.iter().map(|c| serde_json::to_vec(&c["file"])).collect::<Result<Vec<_>, _>>()?;
@@ -284,7 +282,7 @@ pub fn tessie_preview_core(args: &Value) -> Value {
     run().unwrap_or_else(fail)
 }
 
-/// tessie-import (CSV). Runs under the drive-data lock; returns the result
+/// Tessie CSV import. Runs under the drive-data lock; returns the result
 /// and the path written (for the watcher), if any.
 pub fn tessie_import_core(args: &Value, cancel: &AtomicBool, emit: Emit) -> (Value, Option<PathBuf>) {
     cancel.store(false, Ordering::SeqCst);
@@ -522,7 +520,7 @@ impl FetchOutcome {
     }
 }
 
-/// saveImportedClips: re-read under the lock after the API fetch so
+/// Save imported clips: re-read under the lock after the API fetch so
 /// intervening edits survive.
 pub fn save_imported_clips(path: Option<&str>, clips: &[Value], emit: Emit) -> Result<PathBuf, String> {
     logger::info("import", format!("saving {} imported clip(s) → {}", clips.len(), path.unwrap_or("undefined")));

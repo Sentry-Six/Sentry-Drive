@@ -1,6 +1,5 @@
-//! Port of `src/main/logger.cjs`: terminal, memory-ring and capped
-//! session-file logging with the same line format, plus the redacted export
-//! used by "Download logs".
+//! Terminal, memory-ring and capped session-file logging, plus the redacted
+//! export used by "Download logs".
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -119,7 +118,7 @@ pub fn error(scope: &str, text: impl AsRef<str>) {
     log("error", scope, text.as_ref());
 }
 
-/// Same scrubbing as logger.cjs `redact`.
+/// Scrub paths, tokens and other personal details from exported logs.
 fn redact(text: &str) -> String {
     text.lines().map(redact_line).collect::<Vec<_>>().join("\n")
 }

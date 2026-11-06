@@ -1,5 +1,5 @@
-//! Port of `src/main/supercharger-catalog.cjs`: bundled/refreshed OpenStreetMap
-//! Supercharger catalog, charging-site matching and Overpass refresh.
+//! Bundled/refreshed OpenStreetMap Supercharger catalog, charging-site
+//! matching and Overpass refresh.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -29,7 +29,7 @@ pub struct Catalog {
     cache_path: PathBuf,
 }
 
-/// Loaded on first use (like the Electron build), so parsing the 1 MB bundled
+/// Loaded on first use, so parsing the 1 MB bundled
 /// catalog never delays the first window.
 pub struct SuperchargerCatalog {
     inner: Mutex<Option<Catalog>>,
@@ -385,7 +385,7 @@ pub fn refresh(state: &SuperchargerCatalog) -> Value {
     }
 }
 
-/// Ports of `src/main/supercharger-catalog.test.js` (no network).
+/// Catalog tests (no network).
 #[cfg(test)]
 mod tests {
     use super::*;

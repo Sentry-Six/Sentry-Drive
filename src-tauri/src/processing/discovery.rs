@@ -1,6 +1,5 @@
-//! Port of src/processing/clip-discovery.js: find RecentClips front-camera
-//! clips plus the SavedClips/SentryClips event clips that fill RecentClips
-//! holes.
+//! Clip discovery: find RecentClips front-camera clips plus the
+//! SavedClips/SentryClips event clips that fill RecentClips holes.
 
 use std::collections::HashSet;
 use std::io;
@@ -178,7 +177,6 @@ mod tests {
         dir
     }
 
-    // Ports of clip-discovery.test.js.
     #[test]
     fn discovers_the_same_bounded_gap_fill_from_recentclips_and_teslacam_roots() {
         let root = scratch("a");

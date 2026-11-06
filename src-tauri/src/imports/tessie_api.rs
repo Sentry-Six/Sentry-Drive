@@ -1,5 +1,4 @@
-//! Tessie REST client (port of `src/processing/tessie-api.cjs`) plus the
-//! handler-level `normalizeApiDrive`.
+//! Tessie REST client, plus `normalize_api_drive` for its drive records.
 
 use serde_json::Value;
 
@@ -18,7 +17,7 @@ pub fn request_headers(token: &str) -> Vec<(&'static str, String)> {
     ]
 }
 
-/// Status/body → parsed JSON or the Electron error message.
+/// Status/body → parsed JSON or a user-facing error message.
 pub fn handle_response(status: u16, body: &str) -> Result<Value, String> {
     match status {
         200..=299 => serde_json::from_str(body).map_err(|e| format!("Parse error: {e}")),
@@ -182,7 +181,7 @@ pub fn overlap_key(d: &Value) -> Result<(f64, f64, Odo), String> {
     ))
 }
 
-/// tessie-api-validate's vehicle mapping.
+/// Vehicle list for token validation: VIN and display name.
 pub fn vehicle_summaries(vehicles: &[Value]) -> Result<Vec<Value>, String> {
     let mut out = Vec::new();
     for v in vehicles {

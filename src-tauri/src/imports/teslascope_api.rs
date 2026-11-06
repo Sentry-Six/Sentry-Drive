@@ -1,6 +1,5 @@
-//! Teslascope REST client (port of `src/processing/teslascope-api.cjs`). The
-//! per-drive schema is unpublished, so normalization accepts the same field
-//! variants the JavaScript did.
+//! Teslascope REST client. The per-drive schema is unpublished, so
+//! normalization accepts several field variants.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;

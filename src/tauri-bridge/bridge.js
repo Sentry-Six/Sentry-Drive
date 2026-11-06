@@ -105,7 +105,7 @@
     onTeslascopeProgress: on('teslascope-progress'),
   };
 
-  // Electron's before-input-event shortcuts: DevTools and reload.
+  // Keyboard shortcuts: DevTools and reload.
   window.addEventListener('keydown', (e) => {
     const key = (e.key || '').toLowerCase();
     if (key === 'f12' || (e.ctrlKey && e.shiftKey && key === 'i')) {

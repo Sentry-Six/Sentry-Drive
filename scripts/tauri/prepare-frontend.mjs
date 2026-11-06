@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// Assemble the Tauri frontend (tauri-dist/) from the unchanged Electron
-// renderer. Paths keep their repo layout (src/renderer/index.html still
+// Assemble the Tauri frontend (tauri-dist/) from src/renderer. Paths keep their repo layout (src/renderer/index.html still
 // reaches ../../assets/...), tests are left out, and the HTML's CSP <meta> is
 // removed because the Tauri build sets the same policy from tauri.conf.json —
 // where Tauri can add its IPC origin to connect-src.
