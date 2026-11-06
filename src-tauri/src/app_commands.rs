@@ -13,7 +13,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::loader::{error_json, LoaderService};
 use crate::supercharger::{self, SuperchargerCatalog};
-use crate::{logger, AppPaths, BenchConfig, MAIN_WINDOW};
+use crate::{logger, AppPaths, MAIN_WINDOW};
 
 fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl std::future::Future<Output = T> {
     async move { tauri::async_runtime::spawn_blocking(f).await.expect("blocking task panicked") }
@@ -225,13 +225,6 @@ pub fn toggle_devtools(app: AppHandle) {
         } else {
             w.open_devtools();
         }
-    }
-}
-
-#[tauri::command]
-pub fn bench_report(app: AppHandle, results: Value) {
-    if let Some(Some(cfg)) = app.try_state::<Option<BenchConfig>>().as_deref() {
-        let _ = crate::fsutil::atomic_write(&cfg.out, results.to_string().as_bytes());
     }
 }
 

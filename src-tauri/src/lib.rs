@@ -27,50 +27,9 @@ use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 pub const MAIN_WINDOW: &str = "main";
 
-/// Benchmark mode (scripts/bench): set by SENTRY_DRIVE_BENCH_* env vars.
-pub struct BenchConfig {
-    pub out: PathBuf,
-    pub mode: String,
-    pub file: String,
-    pub idle_ms: u64,
-}
-
-/// UI test hooks exist only in builds made with SENTRY_DRIVE_TEST_HOOKS set:
-/// SENTRY_DRIVE_UI_TEST names a script to run in the window, and
-/// `ui_test_report` appends its results to SENTRY_DRIVE_UI_TEST_OUT.
-const TEST_HOOKS: bool = option_env!("SENTRY_DRIVE_TEST_HOOKS").is_some();
-
-#[tauri::command]
-fn ui_test_report(line: serde_json::Value) {
-    if !TEST_HOOKS {
-        return;
-    }
-    if let Some(out) = std::env::var_os("SENTRY_DRIVE_UI_TEST_OUT") {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(out) {
-            let _ = writeln!(f, "{line}");
-        }
-    }
-}
-
 pub struct AppPaths {
     pub user_data: PathBuf,
     pub resources: PathBuf,
-}
-
-/// Test builds only, like the UI test hook: a shipped app never injects the
-/// probe or writes results because of an environment variable.
-fn bench_config() -> Option<BenchConfig> {
-    if !TEST_HOOKS {
-        return None;
-    }
-    let out = std::env::var_os("SENTRY_DRIVE_BENCH_OUT")?;
-    Some(BenchConfig {
-        out: PathBuf::from(out),
-        mode: std::env::var("SENTRY_DRIVE_BENCH_MODE").unwrap_or_else(|_| "drive".into()),
-        file: std::env::var("SENTRY_DRIVE_BENCH_FILE").unwrap_or_default(),
-        idle_ms: std::env::var("SENTRY_DRIVE_BENCH_IDLE_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(80_000),
-    })
 }
 
 /// Wrap a CommonJS module so it can run as a classic page script and publish
@@ -81,42 +40,18 @@ fn cjs_global(global: &str, source: &str) -> String {
     )
 }
 
-fn init_script(app_version: &str, bench: Option<&BenchConfig>) -> String {
+fn init_script() -> String {
     let mut js = String::new();
     js.push_str(&cjs_global("driveCalc", include_str!("../../src/shared/drive-calc.cjs")));
     js.push_str(&cjs_global("driveTelemetryView", include_str!("../../src/renderer/drive-telemetry-view.cjs")));
     js.push_str(include_str!("../../src/tauri-bridge/bridge.js"));
-    if let Some(b) = bench {
-        let cfg = serde_json::json!({ "mode": b.mode, "file": b.file, "idleMs": b.idle_ms, "version": app_version });
-        js.push_str(&format!(
-            "\n;(function () {{ const B = {cfg};
-              try {{
-                localStorage.setItem('lastSeenVersion', B.version);
-                localStorage.setItem('autoLoadDriveData', String(B.mode === 'drive'));
-                if (B.mode === 'drive') localStorage.setItem('lastDriveDataPath', B.file);
-                else localStorage.removeItem('lastDriveDataPath');
-              }} catch (e) {{}}
-              window.__SENTRY_BENCH__ = B; }})();\n"
-        ));
-        js.push_str(include_str!("../../scripts/bench/probe.js"));
-        js.push_str(
-            "\n;window.addEventListener('DOMContentLoaded', () => { const B = window.__SENTRY_BENCH__; window.__benchStart({ mode: B.mode, idleMs: B.idleMs, file: B.file }); });\n",
-        );
-    }
     js
 }
 
 pub fn create_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let version = app.package_info().version.to_string();
-    let bench = app.try_state::<Option<BenchConfig>>();
-    let mut script = init_script(&version, bench.as_ref().and_then(|b| b.inner().as_ref()));
+    let mut script = init_script();
     if let Some(p) = app.try_state::<AppPaths>() {
         script.push_str(&migrate::local_storage_script(&migrate::pending_local_storage(&p.user_data)));
-    }
-    if TEST_HOOKS {
-        if let Some(test) = std::env::var_os("SENTRY_DRIVE_UI_TEST") {
-            script.push_str(&std::fs::read_to_string(test).unwrap_or_default());
-        }
     }
     let window_state = migrate::load_window_state(app);
     let mut builder = WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::App("src/renderer/index.html".into()))
@@ -175,7 +110,6 @@ pub fn run() {
             app.manage(updater::UpdaterState::default());
             app.manage(geocode::GeocodeState::new(&user_data));
             app.manage(processing::ProcessingState::default());
-            app.manage(bench_config());
             app.manage(AppPaths { user_data, resources });
 
             create_main_window(app.handle())?;
@@ -213,7 +147,6 @@ pub fn run() {
             app_commands::get_supercharger_catalog_status,
             app_commands::refresh_supercharger_catalog,
             app_commands::toggle_devtools,
-            app_commands::bench_report,
             drive_edit::set_drive_tags,
             drive_edit::remove_drive,
             drive_edit::remove_drives,
@@ -242,7 +175,6 @@ pub fn run() {
             imports::teslascope_remove_hidden,
             imports::teslascope_remove_all,
             migrate::electron_storage_imported,
-            ui_test_report,
             drive_edit::import_drive_data_file_preview,
             drive_edit::import_drive_data_file,
             updater::set_allow_prerelease,
