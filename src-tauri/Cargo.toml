@@ -42,7 +42,7 @@ libm = "0.2"
 rusty-leveldb = "4"
 
 [target.'cfg(windows)'.dependencies]
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }
 
 [profile.release]
