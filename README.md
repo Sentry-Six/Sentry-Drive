@@ -17,7 +17,7 @@ Sentry Drive by Sentry Six is a desktop app for visualizing and analyzing your d
 
 Sentry Drive is one of the free tools from the [Sentry Six](https://sentry-six.com) project, alongside [Sentry Studio](https://github.com/Sentry-Six/Sentry-Six) (desktop TeslaCam viewer), [Sentry USB](https://github.com/Sentry-Six/Sentry-USB-Rusty) (Raspberry Pi smart dashcam drive), [Dash USB](https://github.com/Sentry-Six/Dash-USB) (Raspberry Pi USB drive for GM vehicles), and [Sentry Connect](https://sentry-six.com/sentry-connect/) (iPhone companion app for Sentry USB). Not affiliated with Tesla, Inc. Unrelated to the Sentry (sentry.io) error-monitoring service.
 
-<img width="2560" height="1369" alt="electron_HWfDb2Px9G" src="https://github.com/user-attachments/assets/ed8af61f-33b4-4b83-82c3-413977013d15" />
+<img width="2560" height="1369" alt="Sentry Drive showing drives on a map" src="https://github.com/user-attachments/assets/ed8af61f-33b4-4b83-82c3-413977013d15" />
 
 ## How It Works
 Sentry Drive works by taking advantage of the SEI data embedded in TeslaCam files! By reading that data, we extract and process that data so that your drives are overlaid on top of a map. The data shares information such as GPS data, self-driving state, speed, pedal presses, and more. Your drive data is processed and stored locally on your computer and is never uploaded to us. A few optional, clearly-labeled features do contact third-party services when you use them — see [Privacy & Data](#privacy--data) below.
@@ -50,7 +50,7 @@ This application is available for Windows 10 or later, macOS 13 or later, and Li
 
 - Windows: `Sentry-Drive-Setup-<version>.exe`
 - macOS: `Sentry-Drive-<version>-universal.dmg`
-- Linux: `Sentry-Drive-<version>.AppImage` or `Sentry-Drive-<version>.deb`
+- Linux: `Sentry-Drive-<version>.AppImage` or `sentry-drive_<version>_amd64.deb`
 
 The Mac version is one universal download that runs natively on Apple silicon and Intel Macs. It is signed and notarized by Apple, so it opens normally.
 
