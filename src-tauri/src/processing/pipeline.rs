@@ -81,7 +81,7 @@ impl<'a> Console<'a> {
     /// A `\r`-overwritten progress write; only the latest one per interval is sent.
     fn progress(&self, text: String) {
         *self.pending.borrow_mut() = Some(text);
-        if self.last_flush.get().map_or(true, |t| t.elapsed() >= PROGRESS_INTERVAL) {
+        if self.last_flush.get().is_none_or(|t| t.elapsed() >= PROGRESS_INTERVAL) {
             self.flush();
         }
     }

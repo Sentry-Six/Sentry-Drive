@@ -259,20 +259,25 @@ pub fn for_each_array_element(f: &mut File, s: &Section, mut each: impl FnMut(&[
     Err(anyhow!("unterminated array in drive-data section \"{}\"", s.key))
 }
 
+/// Keeps (true) or drops (false) one raw array element.
+pub type KeepFn = Box<dyn FnMut(&[u8]) -> Result<bool> + Send>;
+/// Returns replacement bytes for one raw array element, or None to keep it.
+pub type EditFn = Box<dyn FnMut(&[u8]) -> Result<Option<Vec<u8>>> + Send>;
+
 pub enum Replacement {
     /// JSON.stringify(value).
     Value(Value),
     /// Keep the existing array's elements for which the predicate holds,
     /// then append `extra` raw elements. `pretty` selects the routes layout.
     Filter {
-        keep: Box<dyn FnMut(&[u8]) -> Result<bool> + Send>,
+        keep: KeepFn,
         extra: Vec<Vec<u8>>,
         pretty: bool,
     },
     /// Rewrite elements in place: `edit` returns replacement bytes for an
     /// element, or None to keep it unchanged.
     Map {
-        edit: Box<dyn FnMut(&[u8]) -> Result<Option<Vec<u8>>> + Send>,
+        edit: EditFn,
         pretty: bool,
     },
 }

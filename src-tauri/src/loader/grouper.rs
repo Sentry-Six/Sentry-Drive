@@ -862,7 +862,7 @@ fn snap_geocode_endpoint(pts: &[Pt], from_end: bool) -> Option<Endpoint> {
             hi = hi.max(p.time_ms);
         }
         let enough_time = hi - lo >= 2000.0;
-        if cluster.len() >= 3 && enough_time && best.as_ref().map_or(true, |b| cluster.len() > b.len()) {
+        if cluster.len() >= 3 && enough_time && best.as_ref().is_none_or(|b| cluster.len() > b.len()) {
             best = Some(cluster);
         }
     }

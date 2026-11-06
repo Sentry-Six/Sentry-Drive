@@ -293,7 +293,7 @@ impl Service {
                 "lng": q.lng,
                 "label": q.tesla_label,
                 "source": "tesla",
-                "radiusM": (q.accuracy_m + 10.0).max(25.0).min(50.0),
+                "radiusM": (q.accuracy_m + 10.0).clamp(25.0, 50.0),
             }));
         }
         if let Some(place) = core.known.find(q.lat, q.lng) {

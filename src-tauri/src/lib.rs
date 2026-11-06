@@ -6,6 +6,11 @@
 //! `window.driveCalc` and `window.driveTelemetryView` objects the preload
 //! exposed, backed by the Tauri commands registered here.
 
+
+// Comparisons such as `!(a > b)` mirror the JavaScript they were ported from,
+// including how NaN behaves; rewriting them with partial_cmp would obscure that.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+
 mod app_commands;
 pub mod check_drives;
 pub mod drive_data;
@@ -202,10 +207,8 @@ pub fn run() {
             api.prevent_exit();
         }
         #[cfg(target_os = "macos")]
-        RunEvent::Reopen { has_visible_windows: false, .. } => {
-            if handle.get_webview_window(MAIN_WINDOW).is_none() {
-                let _ = create_main_window(handle);
-            }
+        RunEvent::Reopen { has_visible_windows: false, .. } if handle.get_webview_window(MAIN_WINDOW).is_none() => {
+            let _ = create_main_window(handle);
         }
         RunEvent::Exit => {
             updater::install_on_quit(handle);

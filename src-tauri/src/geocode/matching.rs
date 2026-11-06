@@ -225,7 +225,7 @@ fn feature_is_trusted(j: &Value, lat: f64, lng: f64, point_limit_m: f64, query_a
         if geometry_contains_point(j.get("geojson"), lat, lng) {
             return true;
         }
-        let entrance_limit = ENTRANCE_TRUST_M + query_accuracy_m.max(0.0).min(10.0);
+        let entrance_limit = ENTRANCE_TRUST_M + query_accuracy_m.clamp(0.0, 10.0);
         return closest_entrance_distance_m(j, lat, lng) <= entrance_limit;
     }
     result_distance_m(j, lat, lng) <= point_limit_m

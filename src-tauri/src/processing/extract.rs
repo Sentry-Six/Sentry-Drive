@@ -302,8 +302,8 @@ pub fn compute_flag_runs(flags: &[i64], speeds: &[f64]) -> Vec<FlagRun> {
     let mut current = flags[0];
     let mut count = 1usize;
     let mut max_abs = speed_at(0);
-    for i in 1..flags.len() {
-        if flags[i] == current {
+    for (i, &flag) in flags.iter().enumerate().skip(1) {
+        if flag == current {
             count += 1;
             let a = speed_at(i);
             if a > max_abs {
@@ -311,7 +311,7 @@ pub fn compute_flag_runs(flags: &[i64], speeds: &[f64]) -> Vec<FlagRun> {
             }
         } else {
             runs.push(FlagRun { flags: current, frames: count as f64, max_mps: Some(r1(max_abs)) });
-            current = flags[i];
+            current = flag;
             count = 1;
             max_abs = speed_at(i);
         }

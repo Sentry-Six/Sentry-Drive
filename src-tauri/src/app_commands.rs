@@ -15,8 +15,8 @@ use crate::loader::{error_json, LoaderService};
 use crate::supercharger::{self, SuperchargerCatalog};
 use crate::{logger, AppPaths, MAIN_WINDOW};
 
-fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl std::future::Future<Output = T> {
-    async move { tauri::async_runtime::spawn_blocking(f).await.expect("blocking task panicked") }
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    tauri::async_runtime::spawn_blocking(f).await.expect("blocking task panicked")
 }
 
 #[derive(Deserialize)]

@@ -484,7 +484,7 @@ pub fn remove_all_core(path: Option<&str>, source: &'static str) -> (Value, bool
                 (
                     "routes",
                     Replacement::Filter {
-                        keep: Box::new(move |el: &[u8]| Ok(route_tag(el).map_or(true, |t| t.source.as_str() != Some(source)))),
+                        keep: Box::new(move |el: &[u8]| Ok(route_tag(el).is_none_or(|t| t.source.as_str() != Some(source)))),
                         extra: Vec::new(),
                         pretty: true,
                     },

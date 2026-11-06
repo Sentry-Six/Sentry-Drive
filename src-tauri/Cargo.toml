@@ -5,7 +5,7 @@ description = "Sentry Drive (Tauri preview)"
 authors = ["Sentry-Six"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.82"
 
 [lib]
 name = "sentry_drive_lib"

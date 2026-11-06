@@ -225,7 +225,7 @@ impl KnownPlaceStore {
                 continue;
             }
             let d = geodesic_m(lat, lng, e.lat, e.lng);
-            if d <= max_distance_m && best.map_or(true, |(_, bd)| d < bd) {
+            if d <= max_distance_m && best.is_none_or(|(_, bd)| d < bd) {
                 best = Some((i, d));
             }
         }

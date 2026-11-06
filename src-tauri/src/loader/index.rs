@@ -580,7 +580,7 @@ pub fn group_indexed_drives(index: &DriveIndex, progress: ProgressFn, cancel: &A
             if cancel.load(Ordering::Relaxed) {
                 return Err(canceled());
             }
-            for r in parallel_map(pending, &prepare_window) {
+            for r in parallel_map(pending, prepare_window) {
                 let (tg, rc, dc, drives) = r?;
                 time_group_count += tg;
                 route_count += rc;

@@ -373,7 +373,7 @@ pub fn telemetry_has_driving(route: &Route) -> bool {
     if gear_states.iter().any(|&g| g as i64 != calc::GEAR_PARK) {
         return true;
     }
-    let runs_empty = route.gear_runs.as_ref().map_or(true, |r| r.is_empty());
+    let runs_empty = route.gear_runs.as_ref().is_none_or(|r| r.is_empty());
     if runs_empty && gear_states.is_empty() {
         if let Some(frames) = route.raw_frame_count {
             // Number(undefined) is NaN, and NaN < frames is false.
@@ -501,7 +501,7 @@ mod tests {
     fn normalizes_recentclips_prefix_and_backslashes() {
         assert_eq!(normalize_clip_path("RecentClips\\2026-05-05\\a.mp4"), "2026-05-05/a.mp4");
         assert_eq!(normalize_clip_path("RecentClips/"), "RecentClips/");
-        assert!(is_event_folder_path("RecentClips/SavedClips/x/2026-05-05_15-54-00-front.mp4") == true);
+        assert!(is_event_folder_path("RecentClips/SavedClips/x/2026-05-05_15-54-00-front.mp4"));
     }
 
     #[test]
