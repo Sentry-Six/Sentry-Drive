@@ -1066,10 +1066,6 @@ function initFooter() {
   if (logsBtn) {
     logsBtn.addEventListener('click', async () => {
       try {
-        if (typeof window.electronAPI?.downloadLogs !== 'function') {
-          alert('Log export requires a full app restart to activate.');
-          return;
-        }
         const r = await window.electronAPI.downloadLogs();
         if (r && r.success) {
           logsBtn.textContent = 'Saved ✓';
@@ -1441,22 +1437,14 @@ function hideLoading() {
 }
 
 // ─── Processing Tab ───────────────────────────────────────────────────────────
-// Electron app.asar paths are read-only.
-const isAsarPath = (p) => /\.asar([\\/]|$)/i.test(p || '');
-
 function initProcessingTab() {
   const clipsDirInput = document.getElementById('clips-dir');
 
   const savedClipsDir = localStorage.getItem('lastClipsDir');
   if (savedClipsDir) clipsDirInput.value = savedClipsDir;
 
-  // Discard persisted paths that point into app.asar.
   const savedOutputDir = localStorage.getItem('lastOutputDir');
-  if (isAsarPath(savedOutputDir)) {
-    localStorage.removeItem('lastOutputDir');
-  } else if (savedOutputDir) {
-    document.getElementById('output-path').value = savedOutputDir;
-  }
+  if (savedOutputDir) document.getElementById('output-path').value = savedOutputDir;
 
   document.getElementById('browse-clips').addEventListener('click', async () => {
     const dir = await window.electronAPI.selectDirectory({
@@ -1647,18 +1635,10 @@ async function autoLoadDriveData(filePath) {
 
 async function startProcessing({ reprocessAll = false } = {}) {
   const clipsDir   = document.getElementById('clips-dir').value.trim();
-  let outputDir    = document.getElementById('output-path').value.trim();
+  const outputDir    = document.getElementById('output-path').value.trim();
 
   if (!clipsDir)  { alert('Please select a clips directory.'); return; }
   if (!outputDir) { alert('Please select an output directory.'); return; }
-
-  // Reject app.asar paths before the final save can fail.
-  if (isAsarPath(outputDir)) {
-    alert('The output folder points inside the app installation (app.asar), which is read-only.\nPlease choose a different output folder.');
-    outputDir = await window.electronAPI.selectDirectory({});
-    if (!outputDir || isAsarPath(outputDir)) return;
-    document.getElementById('output-path').value = outputDir;
-  }
 
   localStorage.setItem('lastClipsDir', clipsDir);
   localStorage.setItem('lastOutputDir', outputDir);
@@ -2479,7 +2459,7 @@ function initTessieImport() {
       lines.push('');
       lines.push('Click OK to delete these hidden drives from the file (recoverable from .bak).');
       lines.push('Click Cancel to keep them stored (they will stay hidden as long as SEI covers the same time).');
-      // await: the Tauri build's confirm() is asynchronous (a no-op in Electron).
+      // await: confirm() is asynchronous in the Tauri webview.
       if (await confirm(lines.join('\n'))) {
         // Cover the full-file rewrite with the spinner.
         showLoading('Removing hidden imported drives…');
@@ -2706,7 +2686,7 @@ async function repairGPS() {
     let useRouting = isOnline;
 
     if (!isOnline) {
-      // await: the Tauri build's confirm() is asynchronous (a no-op in Electron).
+      // await: confirm() is asynchronous in the Tauri webview.
       const proceed = await confirm(
         'You are offline. Gap bridging will use straight lines instead of road-following routes.\n\n' +
         'You can re-run Check Drives later when online to replace straight lines with road routes.\n\n' +
@@ -2790,11 +2770,6 @@ async function repairGPS() {
 async function checkSummon() {
   if (!loadedFilePath) {
     showCheckResult('Check for Summon', 'Load a drive-data.json first — Check for Summon works on the loaded drive data.');
-    return;
-  }
-  // A renderer-only reload may not have the matching main-process handler.
-  if (typeof window.electronAPI.checkSummon !== 'function') {
-    showCheckResult('Check for Summon', 'Check for Summon needs a full app restart to finish installing.\n\nQuit Sentry Drive completely and relaunch it, then run the check again.');
     return;
   }
 

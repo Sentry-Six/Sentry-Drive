@@ -3,7 +3,8 @@
 Bundled locally so the app works offline and makes no third-party requests at
 launch (see the CSP in `src/renderer/index.html`). All licenses permit
 redistribution bundled with this application; the license texts below ship in
-the packaged app (`build.files` includes `assets/**`).
+the packaged app (`scripts/tauri/prepare-frontend.mjs` copies `assets/vendor`
+into the app's frontend).
 
 | Component | Version | License | Text |
 |---|---|---|---|

@@ -1,5 +1,4 @@
-# Group routine updates weekly. Keep major updates separate, and review Electron
-# minor updates as runtime changes because they may include a new Chromium.
+# Group routine updates weekly. Keep major updates separate.
 
 version: 2
 
@@ -20,6 +19,26 @@ updates:
       include: "scope"
     groups:
       npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Edmonton"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rust"
+    commit-message:
+      prefix: "deps(cargo)"
+      include: "scope"
+    groups:
+      cargo-minor-and-patch:
         update-types:
           - "minor"
           - "patch"

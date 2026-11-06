@@ -78,7 +78,6 @@ npm run build          # release build for this machine (add -- --target univers
 ```
 
 - `npm run update:superchargers` regenerates the bundled Supercharger catalog (`assets/tesla-superchargers.json`) from OpenStreetMap.
-- App icons are generated from `src-tauri/icons/source/sentrydrive-1024.png` with `npx tauri icon`.
 - Releases are built by `.github/workflows/build.yml` when a GitHub release is published. Besides the installers and the Tauri updater manifest (`latest.json`), it publishes `latest-mac.yml`, `latest.yml` and `latest-linux.yml` so installs of the old Electron version (1.6.x and earlier) update straight to the current version.
 
 ## Credits

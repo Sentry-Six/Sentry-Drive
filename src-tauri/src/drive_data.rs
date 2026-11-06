@@ -282,26 +282,6 @@ pub enum Replacement {
     },
 }
 
-fn write_array<W: Write>(out: &mut W, items: &mut dyn Iterator<Item = Result<Vec<u8>>>, pretty: bool) -> Result<()> {
-    out.write_all(b"[")?;
-    let mut any = false;
-    for item in items {
-        let item = item?;
-        if pretty {
-            out.write_all(if any { b",\n    " } else { b"\n    " })?;
-        } else if any {
-            out.write_all(b",")?;
-        }
-        out.write_all(&item)?;
-        any = true;
-    }
-    if pretty && any {
-        out.write_all(b"\n  ")?;
-    }
-    out.write_all(b"]")?;
-    Ok(())
-}
-
 /// writeDriveDataJSON. `commit` is consulted after the temp file is complete:
 /// returning false discards it and leaves the original untouched.
 pub fn write_drive_data(
@@ -434,12 +414,6 @@ pub fn write_drive_data(
         let _ = std::fs::remove_file(&tmp);
     }
     result
-}
-
-// Kept for API symmetry with the JS writer (used by tests).
-#[allow(dead_code)]
-pub fn write_array_to<W: Write>(out: &mut W, items: Vec<Vec<u8>>, pretty: bool) -> Result<()> {
-    write_array(out, &mut items.into_iter().map(Ok), pretty)
 }
 
 #[cfg(test)]

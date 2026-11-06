@@ -1,10 +1,10 @@
-// Tauri replacement for src/main/electron-preload.cjs.
+// Bridge between the renderer and the Rust backend.
 //
-// Injected as an initialization script before any page script runs, so the
-// unchanged renderer finds the same `window.electronAPI` surface it uses under
-// Electron. Every method maps to a Rust command (src-tauri/src/*); event
-// subscriptions map to Tauri events with the same names the Electron main
-// process sent on.
+// Injected as an initialization script before any page script runs. It
+// installs `window.electronAPI` (the name dates from the Electron build and is
+// kept so the renderer is unchanged). Every method maps to a Rust command
+// (src-tauri/src/*), and every on… subscription to a Tauri event of the same
+// name.
 (function () {
   'use strict';
   if (window.electronAPI) return;
@@ -23,12 +23,6 @@
       if (unlisten) { unlisten(); unlisten = null; }
     };
   };
-
-  // Features the Tauri preview has not ported yet resolve the way the
-  // Electron handlers report failures, so the UI shows a message instead of
-  // throwing.
-  const NOT_YET = 'Not available in the Tauri preview yet.';
-  const notYet = (extra = {}) => () => Promise.resolve({ success: false, error: NOT_YET, ...extra });
 
   window.electronAPI = {
     appLog: (entry) => { invoke('app_log', { entry: entry ?? {} }).catch(() => {}); },
