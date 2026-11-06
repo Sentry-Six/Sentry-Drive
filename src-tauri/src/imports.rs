@@ -991,8 +991,7 @@ mod tests {
         serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap()
     }
 
-    // Time-zone independent checks of the write path; the full JS-vs-Rust
-    // comparison is scripts/tauri/imports-parity.mjs (TZ=America/Denver).
+    // Time-zone independent checks of the write path.
     #[test]
     fn remove_all_drops_routes_files_and_keeps_other_sections() {
         let dir = scratch("remove-all");

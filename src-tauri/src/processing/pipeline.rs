@@ -927,24 +927,4 @@ mod tests {
         assert_eq!(event["apRuns"], json!([{ "ap": 0, "frames": 3 }]));
         let _ = std::fs::remove_dir_all(&root);
     }
-
-    /// Parity harness (see the processing port notes): run against a sample
-    /// TeslaCam tree and compare with `node src/processing/process.js`.
-    ///
-    ///   PARITY_CLIPS=<dir> PARITY_OUT=<out.json> cargo test --release --lib \
-    ///     processing::pipeline::tests::parity_run -- --ignored --nocapture
-    #[test]
-    #[ignore]
-    fn parity_run() {
-        let clips = std::env::var("PARITY_CLIPS").expect("PARITY_CLIPS");
-        let out = std::env::var("PARITY_OUT").expect("PARITY_OUT");
-        let workers = std::env::var("PARITY_WORKERS").ok().and_then(|w| w.parse().ok()).unwrap_or(2);
-        let reprocess_all = std::env::var("PARITY_REPROCESS_ALL").is_ok();
-        let sink = |s: Stream, t: &str| match s {
-            Stream::Stdout => print!("{t}"),
-            Stream::Stderr => eprint!("{t}"),
-        };
-        let opts = Options { clips_dir: clips.into(), output_path: out.into(), workers, reprocess_all };
-        assert_eq!(run(&opts, &AtomicBool::new(false), &sink), Some(0));
-    }
 }

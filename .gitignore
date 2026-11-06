@@ -6,7 +6,6 @@ drive-data.json
 !scripts/tauri/fixtures/**/drive-data.json
 *.bak
 *.psd
-temp/
 *.tmp
 # Local notes stay untracked; the Tauri benchmark write-up is tracked.
 docs/*
