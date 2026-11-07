@@ -34,16 +34,20 @@ tokio = { version = "1", features = ["sync"] }
 sys-locale = "0.3.2"
 mimalloc = "0.1.52"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
-aes = "0.8"
-cbc = { version = "0.1", features = ["alloc"] }
+aes = "0.9"
+cbc = { version = "0.2", features = ["alloc"] }
 pbkdf2 = "0.12"
 sha1 = "0.10"
 libm = "0.2"
 rusty-leveldb = "4"
 
 [target.'cfg(windows)'.dependencies]
-aes-gcm = "0.10"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }
+aes-gcm = "0.11"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }
+
+# The Windows token migration's AES-GCM step is also tested on macOS and Linux.
+[dev-dependencies]
+aes-gcm = "0.11"
 
 [profile.release]
 lto = true

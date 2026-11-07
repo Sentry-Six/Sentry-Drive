@@ -44,3 +44,44 @@ jobs:
 
       - name: Packaging smoke test
         run: npx tauri build --bundles deb
+
+  # Windows-only and macOS-only code (token migration, DPAPI, Keychain) is not
+  # compiled on Linux, so Dependabot updates need these to be checked at all.
+  platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # tauri::generate_context! reads the frontend bundle at compile time.
+      - name: Prepare frontend
+        run: node scripts/tauri/prepare-frontend.mjs
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --lib --tests -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib

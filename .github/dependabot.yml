@@ -37,6 +37,11 @@ updates:
     commit-message:
       prefix: "deps(cargo)"
       include: "scope"
+    ignore:
+      # bincode 3.0.0 is an empty "unmaintained" release; 2.x changes the API.
+      # Stay on 1.3 until we move to a maintained bincode-compatible crate.
+      - dependency-name: "bincode"
+        update-types: ["version-update:semver-major"]
     groups:
       cargo-minor-and-patch:
         update-types:

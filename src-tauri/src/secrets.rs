@@ -112,12 +112,12 @@ pub fn decode_legacy(user_data: &Path, buf: &[u8]) -> Result<String> {
 
 #[allow(dead_code)]
 fn cbc_decrypt(password: &[u8], iterations: u32, data: &[u8]) -> Result<Vec<u8>> {
-    use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    use aes::cipher::{block_padding::Pkcs7, BlockModeDecrypt, KeyIvInit};
     let mut key = [0u8; 16];
     pbkdf2::pbkdf2_hmac::<sha1::Sha1>(password, b"saltysalt", iterations, &mut key);
     let iv = [b' '; 16];
     cbc::Decryptor::<aes::Aes128>::new(&key.into(), &iv.into())
-        .decrypt_padded_vec_mut::<Pkcs7>(data)
+        .decrypt_padded_vec::<Pkcs7>(data)
         .map_err(|_| anyhow!("wrong key or corrupt data"))
 }
 
@@ -152,7 +152,6 @@ fn os_crypt_decrypt(_user_data: &Path, buf: &[u8]) -> Result<Vec<u8>> {
 
 #[cfg(windows)]
 fn os_crypt_decrypt(user_data: &Path, buf: &[u8]) -> Result<Vec<u8>> {
-    use aes_gcm::aead::{Aead, KeyInit};
     use base64::Engine;
     let data = buf.strip_prefix(b"v10").ok_or_else(|| anyhow!("unknown safeStorage format"))?;
     if data.len() < 12 + 16 {
@@ -169,9 +168,22 @@ fn os_crypt_decrypt(user_data: &Path, buf: &[u8]) -> Result<Vec<u8>> {
     let state: LocalState = serde_json::from_slice(&std::fs::read(user_data.join("Local State"))?)?;
     let wrapped = base64::engine::general_purpose::STANDARD.decode(state.os_crypt.encrypted_key)?;
     let key = dpapi_unprotect(wrapped.strip_prefix(b"DPAPI").ok_or_else(|| anyhow!("unexpected key format"))?)?;
-    let cipher = aes_gcm::Aes256Gcm::new_from_slice(&key).map_err(|_| anyhow!("bad key length"))?;
+    gcm_decrypt(&key, data)
+}
+
+/// AES-256-GCM as Chromium's os_crypt "v10" uses it on Windows: a 12-byte
+/// nonce, then the ciphertext and tag. Kept off the Windows-only path so the
+/// tests exercise it on every platform.
+#[cfg(any(windows, test))]
+fn gcm_decrypt(key: &[u8], data: &[u8]) -> Result<Vec<u8>> {
+    use aes_gcm::aead::{Aead, KeyInit};
+    if data.len() < 12 + 16 {
+        bail!("token data too short");
+    }
+    let cipher = aes_gcm::Aes256Gcm::new_from_slice(key).map_err(|_| anyhow!("bad key length"))?;
     let (nonce, ct) = data.split_at(12);
-    cipher.decrypt(nonce.into(), ct).map_err(|_| anyhow!("wrong key or corrupt data"))
+    let nonce: [u8; 12] = nonce.try_into()?;
+    cipher.decrypt(&nonce.into(), ct).map_err(|_| anyhow!("wrong key or corrupt data"))
 }
 
 #[cfg(windows)]
@@ -255,5 +267,18 @@ mod tests {
         let linux = cbc_decrypt(b"peanuts", 1, &unhex("2dacb4fea394581493628d52544026b9")).unwrap();
         assert_eq!(String::from_utf8(linux).unwrap(), "linux-tok");
         assert!(cbc_decrypt(b"wrong", 1003, &unhex("ed5629833b75bf415234f95d8ed79b05")).is_err());
+    }
+
+    /// Chromium's os_crypt "v10" on Windows (AES-256-GCM). The vector was made
+    /// with Python's `cryptography` package, independently of aes-gcm.
+    #[test]
+    fn os_crypt_gcm_matches_reference() {
+        let key: Vec<u8> = (0..32).collect();
+        let data = unhex("6465666768696a6b6c6d6e6f3c7ead15108c7bea51093a86f75458ce5e7a347263a1d08a63a563c4dca9ec56");
+        assert_eq!(gcm_decrypt(&key, &data).unwrap(), b"tessie-token-123");
+        let mut tampered = data.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        assert!(gcm_decrypt(&key, &tampered).is_err());
+        assert!(gcm_decrypt(&key, &data[..20]).is_err());
     }
 }
