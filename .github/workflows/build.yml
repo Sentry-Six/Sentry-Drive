@@ -95,7 +95,7 @@ jobs:
 
       - name: Azure login (Windows signing)
         if: env.HAS_WIN_SIGNING == 'true'
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
