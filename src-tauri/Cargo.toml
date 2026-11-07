@@ -37,7 +37,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 aes = "0.9"
 cbc = { version = "0.2", features = ["alloc"] }
 pbkdf2 = "0.12"
-sha1 = "0.10"
+sha1 = "0.11"
 libm = "0.2"
 rusty-leveldb = "4"
 
