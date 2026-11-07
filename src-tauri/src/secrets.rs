@@ -190,12 +190,12 @@ fn gcm_decrypt(key: &[u8], data: &[u8]) -> Result<Vec<u8>> {
 fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
-    let mut input = CRYPT_INTEGER_BLOB { cbData: data.len() as u32, pbData: data.as_ptr() as *mut u8 };
+    let input = CRYPT_INTEGER_BLOB { cbData: data.len() as u32, pbData: data.as_ptr() as *mut u8 };
     let mut output = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
     // SAFETY: input points at `data` for the call; output is allocated by the
     // system and released with LocalFree after copying.
     unsafe {
-        if CryptUnprotectData(&mut input, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), 0, &mut output) == 0 {
+        if CryptUnprotectData(&input, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), 0, &mut output) == 0 {
             bail!("DPAPI could not unwrap the key");
         }
         let out = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
