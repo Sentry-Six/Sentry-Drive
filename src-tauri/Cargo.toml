@@ -36,7 +36,7 @@ mimalloc = "0.1.52"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 aes = "0.9"
 cbc = { version = "0.2", features = ["alloc"] }
-pbkdf2 = "0.12"
+pbkdf2 = "0.13"
 sha1 = "0.10"
 libm = "0.2"
 rusty-leveldb = "4"
