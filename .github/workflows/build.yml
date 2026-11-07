@@ -11,6 +11,14 @@ name: Build and Release
 # Variables:
 #   TAURI_UPDATER_PUBKEY  the matching public key (not secret)
 # Without them the build still runs, but produces no updater artifacts.
+#
+# Windows code signing (Microsoft Artifact Signing, no stored secret): the
+# Windows job logs in to Azure with GitHub's OIDC token, which Azure trusts only
+# for jobs in the `windows-signing` environment of this repository. That
+# environment requires an approver before the job starts. Variables:
+#   AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   ARTIFACT_SIGNING_ENDPOINT, ARTIFACT_SIGNING_ACCOUNT, ARTIFACT_SIGNING_PROFILE
+# Without them the Windows build runs unsigned.
 
 on:
   workflow_dispatch:
@@ -33,12 +41,19 @@ jobs:
         include:
           - os: windows-latest
             bundles: nsis
+            environment: windows-signing
           - os: ubuntu-22.04
             bundles: appimage,deb
     runs-on: ${{ matrix.os }}
+    # Only the Windows leg signs; an empty name means no environment.
+    environment: ${{ matrix.environment }}
+    permissions:
+      contents: write
+      id-token: write
     env:
       HAS_MAC_SIGNING: ${{ secrets.MAC_CERTIFICATE_P12 != '' && secrets.APPLE_API_KEY != '' }}
       HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && vars.TAURI_UPDATER_PUBKEY != '' }}
+      HAS_WIN_SIGNING: ${{ matrix.os == 'windows-latest' && vars.AZURE_CLIENT_ID != '' && vars.ARTIFACT_SIGNING_ACCOUNT != '' }}
 
     steps:
       - name: Checkout code
@@ -78,6 +93,19 @@ jobs:
       - name: JS tests
         run: npm test
 
+      - name: Azure login (Windows signing)
+        if: env.HAS_WIN_SIGNING == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install the Artifact Signing module
+        if: env.HAS_WIN_SIGNING == 'true'
+        shell: pwsh
+        run: Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser
+
       # The updater key turns on updater artifacts (.sig files); the public
       # key is built into the app so it can verify downloads.
       - name: Build
@@ -86,14 +114,44 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_UPDATER_PUBKEY: ${{ vars.TAURI_UPDATER_PUBKEY }}
+          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
         run: |
-          overlay='{}'
-          if [ "$HAS_UPDATER_KEY" = true ]; then
-            overlay=$(node -e 'console.log(JSON.stringify({bundle:{createUpdaterArtifacts:true},plugins:{updater:{pubkey:process.env.TAURI_UPDATER_PUBKEY}}}))')
-          else
-            echo "::warning::Updater key not set; this build can't update itself."
-          fi
+          [ "$HAS_UPDATER_KEY" = true ] || echo "::warning::Updater key not set; this build can't update itself."
+          [ "$RUNNER_OS" != Windows ] || [ "$HAS_WIN_SIGNING" = true ] || echo "::warning::Azure signing not configured; the Windows build is unsigned."
+          # Tauri runs signCommand for the app, the uninstaller and the installer,
+          # before it computes the updater signatures.
+          overlay=$(node -e '
+            const o = {}
+            if (process.env.HAS_UPDATER_KEY === "true") {
+              o.bundle = { createUpdaterArtifacts: true }
+              o.plugins = { updater: { pubkey: process.env.TAURI_UPDATER_PUBKEY } }
+            }
+            if (process.env.HAS_WIN_SIGNING === "true") {
+              const script = require("path").win32.join(process.env.GITHUB_WORKSPACE, "scripts", "sign-windows.ps1")
+              o.bundle = { ...o.bundle, windows: { signCommand: { cmd: "pwsh", args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "%1"] } } }
+            }
+            console.log(JSON.stringify(o))')
           npx tauri build --bundles ${{ matrix.bundles }} --config "$overlay"
+
+      # The installer, the app inside it and its uninstaller must all carry a
+      # valid signature from the expected publisher before anything is kept.
+      - name: Verify Windows signatures
+        if: env.HAS_WIN_SIGNING == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          & $setup.FullName /S | Out-Null
+          $dir = Join-Path $env:LOCALAPPDATA 'Sentry Drive'
+          $files = @($setup.FullName, (Join-Path $dir 'Sentry Drive.exe'), (Join-Path $dir 'uninstall.exe'))
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature -LiteralPath $f
+            Write-Host "$(Split-Path -Leaf $f): $($s.Status) $($s.SignerCertificate.Subject)"
+            if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'CN=Scott Vandereems') { throw "$f is not signed by Scott Vandereems" }
+            if (-not $s.TimeStamperCertificate) { throw "$f has no timestamp" }
+          }
 
       - name: Collect artifacts
         shell: bash
