@@ -1,6 +1,21 @@
 {
   "versions": [
     {
+      "version": "2.0.1",
+      "date": "2026-11-07",
+      "title": "Signed for Windows",
+      "changes": [
+        {
+          "type": "improvement",
+          "description": "Windows: the installer and app are now signed, so Windows shows a verified publisher instead of an unknown one."
+        },
+        {
+          "type": "improvement",
+          "description": "Updated dependencies."
+        }
+      ]
+    },
+    {
       "version": "2.0.0",
       "date": "2026-11-04",
       "title": "A Faster, Lighter Sentry Drive",
