@@ -340,7 +340,7 @@ fn prepare_route(el: &[u8]) -> Result<Parsed> {
     }
     let Some(ts) = parse_clip_timestamp_ms(&normalized) else { return Ok(Parsed::Dropped) };
     route.file = normalized.clone();
-    Ok(Parsed::Route { normalized, ts, payload: bincode::serialize(&route)? })
+    Ok(Parsed::Route { normalized, ts, payload: postcard::to_stdvec(&route)? })
 }
 
 /// Stream drive-data.json into the index. Mirrors `indexDriveData`.
@@ -529,7 +529,7 @@ pub fn group_indexed_drives(index: &DriveIndex, progress: ProgressFn, cancel: &A
     // Windows are independent: group and encode them on all cores, then assign
     // ids and insert in time order.
     let prepare_window = |payloads: Vec<Vec<u8>>| -> Result<(usize, usize, usize, Vec<Prepared>)> {
-        let routes = payloads.iter().map(|p| bincode::deserialize(p)).collect::<Result<Vec<Route>, _>>()?;
+        let routes = payloads.iter().map(|p| postcard::from_bytes(p)).collect::<Result<Vec<Route>, _>>()?;
         drop(payloads);
         let grouped = group_into_drives(routes);
         let mut out = Vec::with_capacity(grouped.drives.len());
@@ -754,7 +754,7 @@ pub fn for_each_route_window(index: &DriveIndex, mut each: impl FnMut(Vec<Route>
             each(std::mem::take(&mut window))?;
         }
         let payload: Vec<u8> = row.get(1)?;
-        window.push(bincode::deserialize(&payload)?);
+        window.push(postcard::from_bytes(&payload)?);
         previous = Some(ts);
     }
     if !window.is_empty() {

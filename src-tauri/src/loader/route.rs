@@ -3,7 +3,7 @@
 //!
 //! A route is parsed leniently from drive-data.json (`RouteJson`, which accepts
 //! anything the JavaScript build tolerated) into a compact typed `Route` that is
-//! stored in the SQLite index with bincode.
+//! stored in the SQLite index with postcard.
 
 use base64::Engine;
 use chrono::{Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone};

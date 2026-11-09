@@ -72,7 +72,11 @@ impl LoaderService {
         }
     }
 
-    /// Remove load directories left by a crashed session.
+    /// Remove load directories left by a crashed session. Indexes never
+    /// outlive the session that built them (each load creates a new directory,
+    /// and a normal quit deletes it), so the route payload encoding can change
+    /// between app versions without any migration: an older build's leftover
+    /// index is deleted here, never opened.
     pub fn sweep_stale(&self) -> (usize, u64) {
         let (mut removed, mut bytes) = (0, 0);
         if let Ok(entries) = std::fs::read_dir(&self.cache_root) {
@@ -282,6 +286,23 @@ mod tests {
         assert_eq!(std::fs::read_dir(&f.service.cache_root).unwrap().count(), 0);
         let err = f.service.with_index(|_| Ok(())).unwrap_err();
         assert_eq!(error_json(&err)["code"], "NO_DRIVE_DATA");
+    }
+
+    #[test]
+    fn leftover_index_from_an_earlier_build_is_swept_not_read() {
+        let f = fixture();
+        // A crashed session of an older version left its index behind, in an
+        // encoding this build can't read.
+        let stale = f.service.cache_root.join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("drive-index.sqlite"), b"not an index this build can read").unwrap();
+        assert_eq!(f.service.sweep_stale(), (1, 32));
+        assert!(!stale.exists());
+
+        let loaded = f.service.load(&f.source, 25, &|_| {}).unwrap();
+        assert_eq!(loaded["totalDriveCount"], json!(1));
+        let detail = f.service.with_index(|i| i.get_drive_detail(0, 100.0)).unwrap().unwrap();
+        assert_eq!(detail["fullPointCount"], json!(2));
     }
 
     #[test]
