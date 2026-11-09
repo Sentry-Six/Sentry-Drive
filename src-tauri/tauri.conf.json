@@ -44,6 +44,7 @@
     ],
     "resources": {
       "../changelog.json": "changelog.json",
+      "../THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt",
       "../assets/tesla-superchargers.json": "assets/tesla-superchargers.json"
     },
     "macOS": {
@@ -55,7 +56,7 @@
     },
     "createUpdaterArtifacts": false,
     "publisher": "Sentry-Six",
-    "copyright": "Sentry-Six",
+    "copyright": "Copyright (c) 2026 JeffFromTheIRS, Scott Vandereems and Jhoan Romero",
     "shortDescription": "Tesla dashcam drives viewer",
     "longDescription": "Standalone Tesla dashcam drives processor - replicates Sentry USB drives processing",
     "windows": {

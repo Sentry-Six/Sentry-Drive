@@ -174,6 +174,19 @@ pub fn open_external(app: AppHandle, url: String) -> Result<(), String> {
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Open THIRD-PARTY-NOTICES.txt (Sentry Drive's licence, then those of the
+/// libraries, fonts, map data and crates it's built with) from the app's
+/// resources, or the copy for this version on GitHub if it's missing.
+#[tauri::command]
+pub fn open_licenses(app: AppHandle) -> Result<(), String> {
+    let local = app.state::<AppPaths>().resources.join("THIRD-PARTY-NOTICES.txt");
+    if local.is_file() {
+        return app.opener().open_path(local.to_string_lossy(), None::<&str>).map_err(|e| e.to_string());
+    }
+    let url = format!("https://github.com/Sentry-Six/Sentry-Drive/blob/v{}/THIRD-PARTY-NOTICES.txt", app.package_info().version);
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn get_app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()

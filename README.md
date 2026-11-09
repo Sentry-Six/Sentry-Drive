@@ -77,8 +77,9 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib   # backend tests
 npm run build          # release build for this machine (add -- --target universal-apple-darwin for one Mac app)
 ```
 
+- `THIRD-PARTY-NOTICES.txt` holds Sentry Drive's license and those of the libraries, fonts, map data and Rust crates it's built with. It ships with every package and opens from Settings › Support › Licenses. After changing dependencies, run `python3 -I scripts/third-party-notices.py` (CI checks it's current).
 - `npm run update:superchargers` regenerates the bundled Supercharger catalog (`assets/tesla-superchargers.json`) from OpenStreetMap.
 - Releases are built by `.github/workflows/build.yml` when a GitHub release is published. Besides the installers and the Tauri updater manifest (`latest.json`), it publishes `latest-mac.yml`, `latest.yml` and `latest-linux.yml` so installs of the old Electron version (1.6.x and earlier) update straight to the current version.
 
 ## Credits
-Originally created by [Scottmg1](https://github.com/Scottmg1), derived from his [Sentry USB project](https://github.com/Sentry-Six/Sentry-USB-Rusty). UI made with the help of Claude.
+Originally created by [JeffFromTheIRS](https://github.com/JeffFromTheIRS), derived from the [Sentry USB project](https://github.com/Sentry-Six/Sentry-USB-Rusty). UI made with the help of Claude.

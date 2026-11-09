@@ -53,6 +53,7 @@
 
     setDriveTags: (args) => invoke('set_drive_tags', { args }),
     openExternal: (url) => invoke('open_external', { url }),
+    openLicenses: () => invoke('open_licenses'),
     reverseGeocode: (args) => invoke('reverse_geocode', { args: args ?? null }),
     getGeocodeSettings: () => invoke('get_geocode_settings'),
     setGeocodeSettings: (settings) => invoke('set_geocode_settings', { settings: settings ?? null }),

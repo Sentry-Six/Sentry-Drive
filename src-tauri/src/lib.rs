@@ -138,6 +138,7 @@ pub fn run() {
             app_commands::check_drive_data,
             app_commands::get_cpu_count,
             app_commands::open_external,
+            app_commands::open_licenses,
             app_commands::get_app_version,
             app_commands::get_changelog,
             app_commands::fetch_remote_changelog,

@@ -1062,6 +1062,10 @@ function initFooter() {
     updatePrivacyZoneLayer();
   });
 
+  document.getElementById('btn-open-licenses')?.addEventListener('click', () => {
+    window.electronAPI.openLicenses().catch((err) => alert(`Couldn't open the licenses: ${err}`));
+  });
+
   const logsBtn = document.getElementById('btn-download-logs');
   if (logsBtn) {
     logsBtn.addEventListener('click', async () => {
