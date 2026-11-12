@@ -3864,7 +3864,7 @@ dependencies = [
 
 [[package]]
 name = "sentry-drive"
-version = "2.0.1"
+version = "2026.46.1"
 dependencies = [
  "aes 0.9.4",
  "aes-gcm",

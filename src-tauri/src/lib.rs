@@ -145,6 +145,7 @@ pub fn run() {
             app_commands::check_online,
             app_commands::load_and_group_drives,
             app_commands::list_drive_summaries,
+            app_commands::list_drive_overview,
             app_commands::get_drive_detail,
             app_commands::list_charging_sites,
             app_commands::list_charging_sessions,

@@ -1,11 +1,11 @@
 {
   "name": "sentry-drive",
-  "version": "2.0.1",
+  "version": "2026.46.1",
   "type": "module",
   "description": "Standalone Tesla dashcam drives processor - replicates Sentry USB drives processing",
   "author": "Sentry-Six",
   "scripts": {
-    "test": "node --test src/shared/drive-calc.test.js src/renderer/drive-page-model.test.js src/renderer/drive-telemetry-view.test.js src/renderer/replay-bearing.test.js src/renderer/charging-view.test.js src/renderer/charging-ui.test.js src/renderer/map-style.test.js src/renderer/map-camera.test.js",
+    "test": "node --test src/shared/drive-calc.test.js src/renderer/drive-page-model.test.js src/renderer/drive-overview.test.js src/renderer/drive-telemetry-view.test.js src/renderer/replay-bearing.test.js src/renderer/charging-view.test.js src/renderer/charging-ui.test.js src/renderer/map-style.test.js src/renderer/map-camera.test.js",
     "update:superchargers": "cargo run --manifest-path src-tauri/Cargo.toml --example update_superchargers --",
     "dev": "tauri dev",
     "build": "tauri build"

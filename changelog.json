@@ -1,6 +1,37 @@
 {
   "versions": [
     {
+      "version": "2026.46.1",
+      "date": "2026-11-11",
+      "title": "Drive Map and Pagination",
+      "changes": [
+        {
+          "type": "fix",
+          "description": "The map shows all routes that match your date and tag filters. Clicking a route opens its page and selects the drive."
+        },
+        {
+          "type": "feature",
+          "description": "Jump directly to any drive list page. The number of cards adjusts to the window height and keeps the selected drive visible during resizing."
+        },
+        {
+          "type": "fix",
+          "description": "Tag edits stay current across pages. The filter keeps options from the whole library and matches tag names literally, including punctuation."
+        },
+        {
+          "type": "improvement",
+          "description": "The tag filter uses a compact dropdown, and a drive card's +N button opens its full tag list."
+        },
+        {
+          "type": "fix",
+          "description": "Deleting drives refreshes page counts and reveals imports previously hidden by overlapping footage. Import and removal controls use library-wide counts."
+        },
+        {
+          "type": "improvement",
+          "description": "Process New Drives appears first in the Processing tab. Both processing buttons have tooltips."
+        }
+      ]
+    },
+    {
       "version": "2.0.1",
       "date": "2026-11-07",
       "title": "Signed for Windows",
