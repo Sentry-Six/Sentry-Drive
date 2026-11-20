@@ -308,13 +308,31 @@ fn merge_success(v: Value) -> Value {
 
 #[tauri::command]
 pub async fn list_drive_summaries(app: AppHandle, query: Option<Value>) -> Value {
+    drive_list_query(app, query, crate::loader::index::DriveIndex::list_drive_summaries).await
+}
+
+#[tauri::command]
+pub async fn list_drive_overview(app: AppHandle, query: Option<Value>) -> Value {
+    drive_list_query(app, query, crate::loader::index::DriveIndex::list_drive_overview).await
+}
+
+async fn drive_list_query(
+    app: AppHandle,
+    query: Option<Value>,
+    read: fn(&crate::loader::index::DriveIndex, &Value) -> anyhow::Result<Value>,
+) -> Value {
     blocking(move || {
         let loader = app.state::<LoaderService>();
         let query = query.unwrap_or(json!({}));
-        if loader.is_stale(query.get("gen").and_then(Value::as_u64)) {
+        let gen = query.get("gen").and_then(Value::as_u64);
+        if loader.is_stale(gen) {
             return stale();
         }
-        match loader.with_index(|ix| ix.list_drive_summaries(&query)) {
+        let result = loader.with_index(|ix| read(ix, &query));
+        if loader.is_stale(gen) {
+            return stale();
+        }
+        match result {
             Ok(v) => merge_success(v),
             Err(e) => error_json(&e),
         }
@@ -334,7 +352,11 @@ pub async fn get_drive_detail(app: AppHandle, arg: Value) -> Value {
             return stale();
         }
         let Some(id) = id else { return json!({ "success": false, "error": "Drive not found" }) };
-        match loader.with_index(|ix| ix.get_drive_detail(id, 200_000.0)) {
+        let result = loader.with_index(|ix| ix.get_drive_detail(id, 200_000.0));
+        if loader.is_stale(gen) {
+            return stale();
+        }
+        match result {
             Ok(Some(v)) => merge_success(v),
             Ok(None) => json!({ "success": false, "error": "Drive not found" }),
             Err(e) => error_json(&e),

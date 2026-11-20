@@ -35,6 +35,7 @@
     getCpuCount: () => invoke('get_cpu_count'),
     loadAndGroupDrives: (filePath) => invoke('load_and_group_drives', { filePath }),
     listDriveSummaries: (query) => invoke('list_drive_summaries', { query: query ?? null }),
+    listDriveOverview: (query) => invoke('list_drive_overview', { query: query ?? null }),
     getDriveDetail: (driveId, gen) => invoke('get_drive_detail', { arg: { driveId, gen: gen ?? null } }),
     listChargingSites: (args) => invoke('list_charging_sites', { args: args ?? null }),
     listChargingSessions: (args) => invoke('list_charging_sessions', { args: args ?? null }),

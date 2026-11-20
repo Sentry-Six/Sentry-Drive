@@ -10,8 +10,14 @@ let selectedMarkers = [];
 let drives = [];
 let driveCacheGen = null;
 let drivePageModel = null;
-let drivePageState = { offset: 0, limit: 250, total: 0, drives: [] };
+let drivePageState = { offset: 0, limit: 3, total: 0, drives: [] };
+let drivePageRowHeight = 200;
+let drivePageResizeFrame = null;
+let drivePageResizing = false;
 let overviewRoutes = [];
+let driveViewSequence = 0;
+let driveViewLoading = false;
+let overviewSelectionSequence = 0;
 let loadedFilePath = null;
 let pendingExternalReload = false;
 let selectedDriveId = null;
@@ -19,6 +25,8 @@ let removeOutputListener = null;
 let processingStartTime = null;
 let cpuCount = 1;
 let allTags = [];
+let driveTagsByStartTime = {};
+let driveTagWriteChain = Promise.resolve();
 let hasSummonDrives = false;
 // Filters must run in the loader because the renderer holds only one page.
 let driveFilters = { tag: '', startDate: '', endDate: '' };
@@ -521,9 +529,8 @@ function initMap() {
       layers: ['selected-solid', 'selected-dashed', 'overview-native', 'overview-imported', 'overview-dim'],
     });
     for (const f of feats) {
-      const drive = drives.find((d) => d.id === f.properties.driveId);
-      if (drive) {
-        selectDrive(drive);
+      if (f.properties.driveId != null) {
+        selectOverviewDrive(Number(f.properties.driveId));
         return;
       }
     }
@@ -1534,44 +1541,71 @@ async function loadDefaultPaths() {
 function updateDrivePager() {
   const pager = document.getElementById('drive-pager');
   if (!pager) return;
-  const { offset, limit, total } = drivePageState;
+  const { offset, limit, total, drives: pageDrives } = drivePageState;
   const pages = Math.max(1, Math.ceil(total / limit));
   const page = Math.min(pages, Math.floor(offset / limit) + 1);
+  const first = total > 0 ? offset + 1 : 0;
+  const last = Math.min(total, offset + pageDrives.length);
   document.getElementById('drive-page-label').textContent =
-    `Page ${fmt(page)} of ${fmt(pages)} · ${fmt(total)} drives`;
+    `${fmt(first)}–${fmt(last)} of ${fmt(total)} drives`;
   document.getElementById('drive-page-prev').disabled = offset <= 0;
   document.getElementById('drive-page-next').disabled = offset + limit >= total;
+  const pageNumber = document.getElementById('drive-page-number');
+  pageNumber.max = pages;
+  pageNumber.value = page;
+  document.getElementById('drive-page-count').textContent = `of ${fmt(pages)}`;
   pager.classList.toggle('hidden', total <= limit);
 }
 
-async function applyDrivePageState(state) {
+async function applyDrivePageState(state, { overviewChanged = false, preserveSelection = false } = {}) {
+  const sequence = overviewSelectionSequence;
+  for (const drive of state.drives) {
+    drive.tags = [...(driveTagsByStartTime[drive.startTime] ?? drive.tags ?? [])];
+  }
+  const selected = preserveSelection ? drives.find((drive) => drive.id === selectedDriveId) : null;
+  const nextSelected = selected && state.drives.find((drive) => drive.id === selected.id);
+  if (nextSelected) {
+    for (const field of ['points', 'fsdStates', 'gearStates', 'fsdEvents']) {
+      if (selected[field]) nextSelected[field] = selected[field];
+    }
+  }
   for (const drive of drives) {
+    if (drive === selected && nextSelected) continue;
     delete drive.points;
     delete drive.fsdStates;
     delete drive.gearStates;
     delete drive.fsdEvents;
   }
-  // renderOverviewOnMap fits the new page; skip deselect's fit.
-  if (selectedDriveId !== null) deselectDrive({ skipFit: true });
+  if (selectedDriveId !== null && !nextSelected) deselectDrive({ skipFit: true });
   drivePageState = state;
   drives = state.drives;
   updateDrivePager();
   await renderDriveList(drives);
-  renderOverviewOnMap();
+  if (state !== drivePageState) return;
+  if (overviewChanged) renderOverviewOnMap({ preserveSelection: Boolean(nextSelected) });
+  updateTessieButtonStates();
+  if (nextSelected && !nextSelected.points && selectedDriveId === nextSelected.id
+      && sequence === overviewSelectionSequence) {
+    await loadSelectedDriveDetail(nextSelected, sequence);
+  }
 }
 
 async function changeDrivePage(direction) {
-  if (!drivePageModel) return;
+  if (!drivePageModel || driveViewLoading || drivePageResizing) return;
+  const sequence = ++overviewSelectionSequence;
+  const gen = driveCacheGen;
   const pager = document.getElementById('drive-pager');
   pager?.classList.add('is-loading');
   try {
-    const state = direction === 'previous'
-      ? await drivePageModel.previous()
-      : await drivePageModel.next();
-    await applyDrivePageState(state);
+    const state = typeof direction === 'number'
+      ? await drivePageModel.goToPage(direction)
+      : direction === 'previous'
+        ? await drivePageModel.previous()
+        : await drivePageModel.next();
+    if (sequence !== overviewSelectionSequence || gen !== driveCacheGen) return;
+    if (state !== drivePageState) await applyDrivePageState(state);
   } catch (error) {
-    // A stale generation means the data was (or is being) reloaded — the
-    // reload repaints the list, so recover silently instead of alerting.
+    if (sequence !== overviewSelectionSequence || gen !== driveCacheGen) return;
     if (error.code === 'STALE_DRIVE_DATA') { reloadDrivesAfterWrite(); return; }
     alert(`Couldn't load that drive page: ${error.message}`);
   } finally {
@@ -1579,14 +1613,106 @@ async function changeDrivePage(direction) {
   }
 }
 
-// Re-query from page one; subsequent paging retains these filters.
+function queueDrivePageResize() {
+  if (drivePageResizeFrame !== null) return;
+  drivePageResizeFrame = requestAnimationFrame(() => {
+    drivePageResizeFrame = null;
+    fitDrivePageToViewport();
+  });
+}
+
+async function fitDrivePageToViewport() {
+  const list = document.getElementById('drives-list');
+  if (!drivePageModel || !loadedFilePath || driveViewLoading || drivePageResizing || !list.clientHeight) return;
+  // Reserve a date heading for each card so a page also fits when every drive
+  // is from a different day. Keep the largest observed row for stable paging.
+  const headers = Array.from(list.querySelectorAll('.drive-date-header'));
+  const headingHeight = Math.max(32, ...headers.map((header) => header.getBoundingClientRect().height));
+  for (const card of list.querySelectorAll('.drive-item')) {
+    drivePageRowHeight = Math.max(drivePageRowHeight,
+      card.getBoundingClientRect().height + 8 + headingHeight);
+  }
+  const size = Math.max(1, Math.min(1000, Math.floor((list.clientHeight - 8) / drivePageRowHeight)));
+  if (size === drivePageModel.current().limit) return;
+  const gen = driveCacheGen;
+  const sequence = ++overviewSelectionSequence;
+  drivePageResizing = true;
+  try {
+    const state = await drivePageModel.setPageSize(size, selectedDriveId ?? drives[0]?.id);
+    if (gen !== driveCacheGen || sequence !== overviewSelectionSequence) return;
+    await applyDrivePageState(state, { preserveSelection: true });
+    queueDrivePageResize();
+  } catch (error) {
+    if (gen !== driveCacheGen || sequence !== overviewSelectionSequence) return;
+    if (error.code === 'STALE_DRIVE_DATA') { reloadDrivesAfterWrite(); return; }
+    alert(`Couldn't resize the drive page: ${error.message}`);
+  } finally {
+    drivePageResizing = false;
+  }
+}
+
+function initDrivePagination() {
+  drivePageModel = window.DrivePageModel.createDrivePageModel({
+    pageSize: 3,
+    fetchPage: (query) => window.electronAPI.listDriveSummaries({ ...query, gen: driveCacheGen }),
+  });
+  document.getElementById('drive-page-prev').addEventListener('click', () => changeDrivePage('previous'));
+  document.getElementById('drive-page-next').addEventListener('click', () => changeDrivePage('next'));
+  document.getElementById('drive-page-jump').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const input = document.getElementById('drive-page-number');
+    if (input.reportValidity()) changeDrivePage(Number(input.value));
+  });
+  new ResizeObserver(queueDrivePageResize).observe(document.getElementById('drives-list'));
+}
+
+// Commit the list and full filtered overview together, ignoring superseded loads.
+async function loadDriveView({ refreshPage = false } = {}) {
+  const sequence = ++driveViewSequence;
+  const gen = driveCacheGen;
+  const filters = { ...driveFilters };
+  driveViewLoading = true;
+  try {
+    const [state, overview] = await Promise.all([
+      refreshPage ? drivePageModel.refresh() : drivePageModel.load(filters),
+      window.electronAPI.listDriveOverview({ ...filters, gen }),
+    ]);
+    if (sequence !== driveViewSequence || gen !== driveCacheGen) return null;
+    if (!overview.success) {
+      throw Object.assign(new Error(overview.error || 'Failed to load drive map'), {
+        code: overview.code,
+      });
+    }
+    overviewRoutes = overview.overviewRoutes ?? [];
+    return state;
+  } catch (error) {
+    if (sequence !== driveViewSequence || gen !== driveCacheGen) return null;
+    throw error;
+  } finally {
+    if (sequence === driveViewSequence) driveViewLoading = false;
+  }
+}
+
+async function refreshDriveView() {
+  ++overviewSelectionSequence;
+  try {
+    const state = await loadDriveView({ refreshPage: true });
+    if (state) await applyDrivePageState(state, { overviewChanged: true, preserveSelection: true });
+  } catch (error) {
+    if (error.code === 'STALE_DRIVE_DATA') { await reloadDrivesAfterWrite(); return; }
+    throw error;
+  }
+}
+
 async function applyDriveFilters() {
   if (!drivePageModel || !loadedFilePath) return;
+  ++overviewSelectionSequence;
   const pager = document.getElementById('drive-pager');
   pager?.classList.add('is-loading');
   try {
-    const state = await drivePageModel.load({ ...driveFilters });
-    await applyDrivePageState(state);
+    const state = await loadDriveView();
+    if (!state) return;
+    await applyDrivePageState(state, { overviewChanged: true });
     logAction(`drive filter — tag=${driveFilters.tag || '(none)'} range=${driveFilters.startDate || '…'}→${driveFilters.endDate || '…'} → ${state.total} drive(s)`);
   } catch (error) {
     if (error.code === 'STALE_DRIVE_DATA') { reloadDrivesAfterWrite(); return; }
@@ -1596,26 +1722,28 @@ async function applyDriveFilters() {
   }
 }
 
-async function applyLoadedDriveData(result, filePath) {
+async function applyLoadedDriveData(result, filePath, { preservePage = false } = {}) {
+  ++overviewSelectionSequence;
+  preservePage = preservePage && loadedFilePath === filePath;
   loadedFilePath = filePath;
   localStorage.setItem('lastDriveDataPath', filePath);
   pendingExternalReload = false;
   window.electronAPI.watchDriveData(filePath);
   driveCacheGen = result.cacheGen;
-  // Preserve active filters across automatic reloads.
-  const state = await drivePageModel.load({ ...driveFilters });
+  const state = await loadDriveView({ refreshPage: preservePage });
+  if (!state) return;
+  if (selectedDriveId !== null) deselectDrive({ skipFit: true });
   drivePageState = state;
   drives = state.drives;
-  overviewRoutes = result.overviewRoutes ?? [];
   hasSummonDrives = (result.aggregates?.summonDriveCount ?? 0) > 0;
   refreshAllTags(result.driveTags ?? {});
   renderTagFilter();
   document.getElementById('date-filter').classList.remove('hidden');
   renderDriveStats(drives, result);
-  await renderDriveList(drives);
-  renderOverviewOnMap({ reason: 'initial' });
-  await loadChargingSites();
   updateDrivePager();
+  await renderDriveList(drives);
+  renderOverviewOnMap({ reason: preservePage ? 'reload' : 'initial' });
+  await loadChargingSites();
   document.getElementById('btn-repair-gps').disabled = false;
   updateRevertButton();
   updateTessieButtonStates();
@@ -1624,6 +1752,7 @@ async function applyLoadedDriveData(result, filePath) {
 async function autoLoadDriveData(filePath) {
   showLoading();
   try {
+    await driveTagWriteChain;
     const result = await window.electronAPI.loadAndGroupDrives(filePath);
     if (!result.success) { hideLoading(); return; }
 
@@ -1786,15 +1915,7 @@ function fmtDuration(sec) {
 // ─── View Drives Tab ──────────────────────────────────────────────────────────
 function initViewDrivesTab() {
   document.getElementById('btn-load-drives').addEventListener('click', loadDrives);
-  drivePageModel = window.DrivePageModel.createDrivePageModel({
-    pageSize: 250,
-    fetchPage: (query) => window.electronAPI.listDriveSummaries({
-      ...query,
-      gen: driveCacheGen,
-    }),
-  });
-  document.getElementById('drive-page-prev').addEventListener('click', () => changeDrivePage('previous'));
-  document.getElementById('drive-page-next').addEventListener('click', () => changeDrivePage('next'));
+  initDrivePagination();
 
   // Date bounds are inclusive and independently optional.
   const dateStart = document.getElementById('filter-date-start');
@@ -1889,19 +2010,10 @@ function initViewDrivesTab() {
     // Cover the full-file rewrite and synchronous re-render with the overlay.
     showLoading('Removing drive…');
     try {
+      await driveTagWriteChain;
       const result = await window.electronAPI.removeDrive({ filePath: loadedFilePath, driveStartTime: drive.startTime });
-      if (!result.success) return;
-      const wasSelected = selectedDriveId === drive.id;
-      drives = drives.filter((d) => d.startTime !== drive.startTime);
-      if (wasSelected) deselectDrive({ skipFit: true });
-      // Paint the overlay before the synchronous re-render.
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      renderDriveList(drives);
-      // Rebuild map layers to remove the deleted route.
-      renderOverviewOnMap();
-      // Retain aggregate metadata across the local removal.
-      renderDriveStats(drives, lastDrivesMeta ?? { totalRoutes: 0, processedFileCount: 0 });
-      updateTessieButtonStates();
+      if (!result.success) { alert(`Failed to remove drive:\n${result.error}`); return; }
+      await reloadDrivesAfterWrite();
     } finally {
       hideLoading();
     }
@@ -1939,21 +2051,14 @@ function initViewDrivesTab() {
     // One IPC round-trip performs the batch rewrite.
     showLoading(`Removing ${targets.length} drive${targets.length === 1 ? '' : 's'}…`);
     try {
+      await driveTagWriteChain;
       const result = await window.electronAPI.removeDrives({
         filePath: loadedFilePath,
         driveStartTimes: targets.map((d) => d.startTime),
       });
       if (!result.success) { alert(`Failed to remove drives:\n${result.error}`); return; }
-      if (targets.some((d) => d.id === selectedDriveId)) deselectDrive({ skipFit: true });
-      const removed = new Set(targets.map((d) => d.startTime));
-      drives = drives.filter((d) => !removed.has(d.startTime));
-      logAction(`removed ${targets.length} drive(s) via bulk remove`);
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      renderDriveList(drives);
-      renderOverviewOnMap();
-      // Retain aggregate metadata across the local removal.
-      renderDriveStats(drives, lastDrivesMeta ?? { totalRoutes: 0, processedFileCount: 0 });
-      updateTessieButtonStates();
+      logAction(`removed ${result.removed ?? targets.length} drive(s) via bulk remove`);
+      await reloadDrivesAfterWrite();
     } finally {
       hideLoading();
     }
@@ -2350,7 +2455,7 @@ function initTessieImport() {
       }
     }
 
-    const beforeCount = drives.length;
+    const beforeCount = lastDrivesMeta?.totalDriveCount ?? drivePageState.total;
 
     confirmBtn.textContent = 'Importing…';
     logAction(`import started (${modeAtClick === 'api' ? selectedService + ' API' : modeAtClick === 'json' ? 'drive-data file' : 'CSV'})`);
@@ -2414,7 +2519,7 @@ function initTessieImport() {
     overlay.classList.add('hidden');
     await reloadDrivesAfterWrite();
 
-    const afterCount = drives.length;
+    const afterCount = lastDrivesMeta?.totalDriveCount ?? drivePageState.total;
     const visibleAdded = afterCount - beforeCount;
     const hiddenList = lastDrivesMeta?.hiddenTessieDrives ?? [];
     const hiddenBySei = hiddenList.length;
@@ -2509,7 +2614,7 @@ function initTessieImport() {
     const wantTeslascope = srcTeslascope.checked;
     removeOverlay.classList.add('hidden');
     if (!loadedFilePath || (!wantTessie && !wantTeslascope)) return;
-    const beforeCount = drives.length;
+    const beforeCount = lastDrivesMeta?.totalDriveCount ?? drivePageState.total;
 
     // Keep the overlay through consecutive full-file rewrites and reload.
     showLoading('Removing imported drives…');
@@ -2532,7 +2637,7 @@ function initTessieImport() {
     }
 
     await reloadDrivesAfterWrite();
-    const afterCount = drives.length;
+    const afterCount = lastDrivesMeta?.totalDriveCount ?? drivePageState.total;
     const sourceLabel = wantTessie && wantTeslascope ? 'imported' : (wantTessie ? 'Tessie' : 'Teslascope');
     const lines = [
       `Removed ${fmt(removed)} ${sourceLabel} drive(s).`,
@@ -2559,13 +2664,17 @@ function reloadDrivesAfterWrite() {
     try {
       do {
         _reloadQueued = false;
+        const filePath = loadedFilePath;
         showLoading();
         try {
-          const reloaded = await window.electronAPI.loadAndGroupDrives(loadedFilePath);
+          await driveTagWriteChain;
+          const reloaded = await window.electronAPI.loadAndGroupDrives(filePath);
           if (reloaded.success) {
             // Paint the overlay before the synchronous list and map rebuild.
             await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-            await applyLoadedDriveData(reloaded, loadedFilePath);
+            if (loadedFilePath === filePath) {
+              await applyLoadedDriveData(reloaded, filePath, { preservePage: true });
+            }
           }
         } finally {
           hideLoading();
@@ -2584,7 +2693,9 @@ const SOURCE_LABELS = { tessie: 'Tessie', teslascope: 'Teslascope' };
 
 function updateTessieButtonStates() {
   const hasFile = !!loadedFilePath;
-  const hasImported = drives.some((d) => isImportedSource(d.source));
+  const hasImported = (lastDrivesMeta?.aggregates?.importedDriveCount ?? 0) > 0
+    || (lastDrivesMeta?.hiddenTessieCount ?? 0) > 0
+    || overviewRoutes.some((drive) => isImportedSource(drive.source));
   document.getElementById('btn-import-tessie').disabled = !hasFile;
   document.getElementById('btn-remove-tessie').disabled = !hasFile || !hasImported;
 }
@@ -2891,6 +3002,7 @@ async function loadDrives() {
   showLoading();
 
   try {
+    await driveTagWriteChain;
     const result = await window.electronAPI.loadAndGroupDrives(filePath);
 
     if (!result.success) {
@@ -3763,6 +3875,7 @@ async function renderDriveList(drives) {
     list.innerHTML = driveFiltersActive()
       ? '<div class="empty-state">No drives match the current filters.</div>'
       : '<div class="empty-state">No drives found in this file.</div>';
+    queueDrivePageResize();
     return;
   }
 
@@ -3794,6 +3907,7 @@ async function renderDriveList(drives) {
     }
   }
   if (frag.childNodes.length) list.appendChild(frag);
+  queueDrivePageResize();
 }
 
 function formatDateHeader(dateStr) {
@@ -3846,9 +3960,13 @@ function buildDriveItem(drive) {
     ? `<div class="drive-diseng"><span class="material-icons">warning</span>${disengagements} disengagement${disengagements !== 1 ? 's' : ''}</div>`
     : '';
 
-  const tagPills = (drive.tags ?? []).map((t) =>
-    `<span class="tag-pill tag-removable" data-tag="${escapeHtml(t)}">${escapeHtml(t)}<button class="tag-remove" data-tag="${escapeHtml(t)}">&times;</button></span>`
+  const tags = drive.tags ?? [];
+  const tagPills = tags.slice(0, 2).map((t) =>
+    `<span class="tag-pill tag-removable" data-tag="${escapeHtml(t)}" title="${escapeHtml(t)}"><span class="drive-tag-label">${escapeHtml(t)}</span><button class="tag-remove" data-tag="${escapeHtml(t)}" aria-label="Remove tag ${escapeHtml(t)}">&times;</button></span>`
   ).join('');
+  const moreTags = tags.length > 2
+    ? `<button class="list-tag-more" type="button" title="Show all tags" aria-label="Show all ${tags.length} tags">+${tags.length - 2}</button>`
+    : '';
 
   const sourceLabel = SOURCE_LABELS[drive.source];
   const sourceChip = sourceLabel
@@ -3902,6 +4020,7 @@ function buildDriveItem(drive) {
     </div>
     <div class="drive-item-tags">
       ${tagPills}
+      ${moreTags}
       <button class="tag-add-btn list-tag-add" title="Add tag">+</button>
       <button class="drive-remove-btn" title="Remove drive"><span class="material-icons">delete</span></button>
     </div>
@@ -3932,6 +4051,12 @@ function buildDriveItem(drive) {
       e.stopPropagation();
       removeTag(drive, btn.dataset.tag);
     });
+  });
+
+  item.querySelector('.list-tag-more')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (selectedDriveId !== drive.id) await selectDrive(drive);
+    if (selectedDriveId === drive.id) document.getElementById('map-stats').classList.add('expanded');
   });
 
   item.querySelector('.list-tag-add').addEventListener('click', (e) => {
@@ -4105,7 +4230,32 @@ function freeDriveDetail(driveId) {
   delete d.fsdEvents;
 }
 
-async function selectDrive(drive) {
+// Selecting an overview route first opens its list page.
+async function selectOverviewDrive(driveId) {
+  if (!drivePageModel || driveViewLoading || drivePageResizing) return;
+  const sequence = ++overviewSelectionSequence;
+  const gen = driveCacheGen;
+  let drive = drives.find((candidate) => candidate.id === driveId);
+  try {
+    if (!drive) {
+      const state = await drivePageModel.showDrive(driveId);
+      if (sequence !== overviewSelectionSequence || gen !== driveCacheGen) return;
+      drive = state.drives.find((candidate) => candidate.id === driveId);
+      if (!drive) return;
+      await applyDrivePageState(state);
+      if (sequence !== overviewSelectionSequence || gen !== driveCacheGen) return;
+    }
+    await selectDrive(drive, sequence);
+  } catch (error) {
+    if (sequence !== overviewSelectionSequence || gen !== driveCacheGen) return;
+    if (error.code === 'STALE_DRIVE_DATA') { reloadDrivesAfterWrite(); return; }
+    alert(`Couldn't open that drive: ${error.message}`);
+  }
+}
+
+async function selectDrive(drive, sequence) {
+  if (driveViewLoading || drivePageResizing) return;
+  sequence ??= ++overviewSelectionSequence;
   if (selectedDriveId === drive.id) {
     deselectDrive();
     return;
@@ -4119,7 +4269,6 @@ async function selectDrive(drive) {
   const selectedEl = document.querySelector(`[data-drive-id="${drive.id}"]`);
   if (selectedEl) {
     selectedEl.classList.add('selected');
-    selectedEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   selectedDriveId = drive.id;
   logAction(`opened drive ${drive.startTime}${drive.source && drive.source !== 'sei' ? ` (${drive.source})` : ''}`);
@@ -4128,11 +4277,17 @@ async function selectDrive(drive) {
   updateOverviewStyleState();
 
   document.getElementById('btn-back-overview').classList.remove('hidden');
+  await loadSelectedDriveDetail(drive, sequence);
+}
+
+async function loadSelectedDriveDetail(drive, sequence) {
   if (!drive.points) {
     const requestedId = drive.id;
-    const detail = await window.electronAPI.getDriveDetail(drive.id, driveCacheGen);
+    const gen = driveCacheGen;
+    const detail = await window.electronAPI.getDriveDetail(drive.id, gen);
     // Discard detail that arrives after selection changed.
-    if (selectedDriveId !== requestedId) return;
+    if (selectedDriveId !== requestedId || sequence !== overviewSelectionSequence || gen !== driveCacheGen) return;
+    if (detail.code === 'STALE_DRIVE_DATA') { reloadDrivesAfterWrite(); return; }
     if (detail.success) {
       drive.points = detail.points;
       drive.fsdStates = detail.fsdStates;
@@ -4361,22 +4516,21 @@ function updateOverviewStyleState() {
   map.setFilter('overview-dim', selected ? ['!=', ['get', 'driveId'], selectedDriveId] : null);
 }
 
-function renderOverviewOnMap({ reason = 'reload' } = {}) {
-  // Stop replay and release selected-drive detail before rebuilding.
-  cleanupReplay();
-  freeDriveDetail(selectedDriveId);
-  removeMarkers(selectedMarkers);
-  removeMarkers(fsdEventMarkers);
-  selectedDriveId = null;
-  document.getElementById('map-legend').classList.add('hidden');
-  // Reload paths may enter while a drive is still open.
-  document.getElementById('btn-back-overview').classList.add('hidden');
+function renderOverviewOnMap({ preserveSelection = false, reason = 'reload' } = {}) {
+  if (!preserveSelection) {
+    cleanupReplay();
+    freeDriveDetail(selectedDriveId);
+    removeMarkers(selectedMarkers);
+    removeMarkers(fsdEventMarkers);
+    selectedDriveId = null;
+    document.getElementById('map-legend').classList.add('hidden');
+    document.getElementById('btn-back-overview').classList.add('hidden');
+  }
 
-  // Smooth sparse imported routes once in overview mode.
   const bounds = new maplibregl.LngLatBounds();
   const features = [];
   let anyTessie = false;
-  for (const drive of drives) {
+  for (const drive of overviewRoutes) {
     if (!drive.overviewPoints || drive.overviewPoints.length < 2) continue;
     const imported = isImportedSource(drive.source);
     if (imported) anyTessie = true;
@@ -4395,8 +4549,10 @@ function renderOverviewOnMap({ reason = 'reload' } = {}) {
 
   whenMapReady(() => {
     map.getSource('overview').setData({ type: 'FeatureCollection', features });
-    map.getSource('selected-route').setData(EMPTY_FC);
-    map.getSource('selected-traveled').setData(EMPTY_FC);
+    if (!preserveSelection) {
+      map.getSource('selected-route').setData(EMPTY_FC);
+      map.getSource('selected-traveled').setData(EMPTY_FC);
+    }
     updateOverviewStyleState();
   });
 
@@ -4405,7 +4561,7 @@ function renderOverviewOnMap({ reason = 'reload' } = {}) {
 
   // Preserve full-route bounds so loops remain in view after deselection.
   overviewBounds = features.length > 0 ? bounds : null;
-  if (features.length > 0) {
+  if (features.length > 0 && !preserveSelection) {
     fitMap(bounds, { padding: 30, reason });
   }
 }
@@ -5118,8 +5274,15 @@ function cleanupReplay() {
 // ─── Drive Tags ──────────────────────────────────────────────────────────────
 
 function refreshAllTags(driveTags) {
+  driveTagsByStartTime = Object.fromEntries(Object.entries(driveTags)
+    .filter(([, tags]) => Array.isArray(tags))
+    .map(([key, tags]) => [key, [...tags]]));
+  rebuildAllTags();
+}
+
+function rebuildAllTags() {
   const set = new Set();
-  for (const tags of Object.values(driveTags)) {
+  for (const tags of Object.values(driveTagsByStartTime)) {
     for (const t of tags) set.add(t);
   }
   allTags = [...set].sort();
@@ -5129,94 +5292,68 @@ function renderTagFilter() {
   const container = document.getElementById('tag-filter');
   // Avoid duplicating a user-created tag that matches the synthetic Summon filter.
   const pinSummon = hasSummonDrives && !allTags.includes('summon');
-  if (allTags.length === 0 && !pinSummon) {
+  if (allTags.length === 0 && !pinSummon && !driveFilters.tag) {
     container.classList.add('hidden');
     container.innerHTML = '';
     return;
   }
 
   container.classList.remove('hidden');
-  let html = `<button class="tag-filter-btn${driveFilters.tag === '' ? ' active' : ''}" data-tag="">All</button>`;
-  if (pinSummon) {
-    html += `<button class="tag-filter-btn${driveFilters.tag === 'summon' ? ' active' : ''}" data-tag="summon">Summon</button>`;
-  }
-  for (const t of allTags) {
-    html += `<button class="tag-filter-btn${driveFilters.tag === t ? ' active' : ''}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`;
-  }
-  container.innerHTML = html;
-
-  container.querySelectorAll('.tag-filter-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const tag = btn.dataset.tag;
-      driveFilters.tag = (driveFilters.tag === tag && tag !== '') ? '' : tag;
-      renderTagFilter();
-      applyDriveFilters();
-    });
+  const options = pinSummon ? ['summon', ...allTags] : [...allTags];
+  if (driveFilters.tag && !options.includes(driveFilters.tag)) options.push(driveFilters.tag);
+  container.innerHTML = `<label class="date-filter-label" for="drive-tag-filter">Tag</label>
+    <select id="drive-tag-filter" class="date-input" aria-label="Filter drives by tag">
+      <option value="">All drives</option>
+      ${options.map((tag) => `<option value="${escapeHtml(tag)}">${tag === 'summon' ? 'Summon' : escapeHtml(tag)}</option>`).join('')}
+    </select>`;
+  const select = container.querySelector('#drive-tag-filter');
+  select.value = driveFilters.tag;
+  select.addEventListener('change', () => {
+    driveFilters.tag = select.value;
+    applyDriveFilters();
   });
 }
 
-function rebuildAllTagsFromDrives() {
-  const set = new Set();
-  for (const d of drives) for (const t of (d.tags ?? [])) set.add(t);
-  allTags = [...set].sort();
+function editDriveTags(drive, mutate) {
+  if (!loadedFilePath) return;
+  const filePath = loadedFilePath;
+  const key = drive.startTime;
+  const libraryTags = driveTagsByStartTime;
+  // Serialize edits and calculate from the latest library tags, even when a
+  // queued click came from a card on a page that has since been replaced.
+  const write = driveTagWriteChain.then(async () => {
+    const previous = libraryTags[key] ?? drive.tags ?? [];
+    const tags = mutate([...previous]);
+    if (JSON.stringify(tags) === JSON.stringify(previous)) return null;
+    const result = await window.electronAPI.setDriveTags({ filePath, driveKey: key, tags });
+    if (!result?.success) throw new Error(result?.error || 'Write failed');
+    libraryTags[key] = tags;
+    drive.tags = tags;
+    return tags;
+  });
+  // The chain covers persistence only, so a stale-view recovery can wait for
+  // pending writes without waiting for its own UI refresh.
+  driveTagWriteChain = write.catch(() => {});
+  return write.then(async (tags) => {
+    if (!tags || filePath !== loadedFilePath) return;
+    driveTagsByStartTime[key] = tags;
+    for (const current of drives) if (current.startTime === key) current.tags = [...tags];
+    rebuildAllTags();
+    renderTagFilter();
+    if (driveFilters.tag) await refreshDriveView();
+    else await renderDriveList(drives);
+    const selected = drives.find((current) => current.id === selectedDriveId);
+    if (selected) refreshSelectedDriveTags(selected);
+    logAction(`drive tags saved: ${key}`);
+  }).catch((error) => alert(`Couldn't update drive tags: ${error.message}`));
 }
 
-async function addTag(drive, tagName) {
-  if (!loadedFilePath) return;
-  const tags = [...(drive.tags ?? [])];
-  if (tags.includes(tagName)) return;
-  tags.push(tagName);
-  drive.tags = tags;
-  logAction(`tag added: "${tagName}"`);
-
-  // Update optimistically before the full-file tag write completes.
-  if (!allTags.includes(tagName)) {
-    allTags.push(tagName);
-    allTags.sort();
-    renderTagFilter();
-  }
-  renderDriveList(drives);
-  if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
-
-  // Roll back the optimistic update if persistence fails.
-  const res = await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags });
-  if (res && res.success === false) {
-    drive.tags = (drive.tags ?? []).filter((t) => t !== tagName);
-    rebuildAllTagsFromDrives();
-    renderTagFilter();
-    renderDriveList(drives);
-    if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
-    alert(`Couldn't save tag: ${res.error || 'write failed'}`);
-  }
+function addTag(drive, tagName) {
+  return editDriveTags(drive, (tags) => tags.includes(tagName) ? tags : [...tags, tagName]);
 }
 
-async function removeTag(drive, tagName) {
-  if (!loadedFilePath) return;
-  const prev = [...(drive.tags ?? [])];
-  drive.tags = prev.filter((t) => t !== tagName);
-  logAction(`tag removed: "${tagName}"`);
-
-  // Drop an active loader-side filter when its last matching tag is removed.
-  rebuildAllTagsFromDrives();
-  if (driveFilters.tag === tagName && !allTags.includes(tagName)) {
-    driveFilters.tag = '';
-    renderTagFilter();
-    applyDriveFilters();
-  } else {
-    renderTagFilter();
-    renderDriveList(drives);
-  }
-  if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
-
-  const res = await window.electronAPI.setDriveTags({ filePath: loadedFilePath, driveKey: drive.startTime, tags: drive.tags });
-  if (res && res.success === false) {
-    drive.tags = prev;
-    rebuildAllTagsFromDrives();
-    renderTagFilter();
-    renderDriveList(drives);
-    if (selectedDriveId === drive.id) refreshSelectedDriveTags(drive);
-    alert(`Couldn't remove tag: ${res.error || 'write failed'}`);
-  }
+function removeTag(drive, tagName) {
+  return editDriveTags(drive, (tags) => tags.filter((tag) => tag !== tagName));
 }
 
 function showTagSuggestions(drive, query) {

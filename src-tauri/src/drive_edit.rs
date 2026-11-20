@@ -123,6 +123,7 @@ pub async fn set_drive_tags(app: AppHandle, args: TagArgs) -> Value {
             Ok(()) => {
                 let loader = app2.state::<LoaderService>();
                 if let Err(e) = loader.with_index(|ix| ix.set_drive_tags(&args.drive_key, &args.tags)) {
+                    loader.generation.fetch_add(1, Ordering::SeqCst);
                     logger::warn("main", format!("tag filter index not updated for {}: {e:#}", args.drive_key));
                 }
                 json!({ "success": true })

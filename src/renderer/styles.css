@@ -568,6 +568,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 .date-clear:hover { color: var(--danger); }
 
 #drives-list {
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -578,26 +579,56 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 #drive-pager {
   flex: 0 0 auto;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 6px;
   padding: 7px 4px;
   border-top: 1px solid var(--border);
   color: var(--text-dim);
   font-size: 11px;
 }
 
-#drive-pager button {
-  width: 28px;
-  height: 26px;
-  display: grid;
-  place-items: center;
+#drive-page-label {
+  flex-basis: 100%;
+  text-align: center;
+}
+
+#drive-page-jump {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+#drive-page-number {
+  width: 48px;
+  padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-elevated);
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  text-align: center;
+  color-scheme: dark;
+}
+
+#drive-page-number:focus-visible { outline: 1px solid var(--accent); }
+#drive-pager button {
+  min-width: 30px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
   color: var(--text);
   cursor: pointer;
 }
+
+#drive-pager button .material-icons { font-size: 18px; }
 
 #drive-pager button:disabled {
   opacity: 0.35;
@@ -605,10 +636,8 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 }
 
 .drive-date-header {
-  position: sticky;
-  top: 0;
+  flex-shrink: 0;
   z-index: 10;
-  /* Blur masks cards scrolling beneath the translucent toolbar. */
   background: rgba(11, 14, 19, 0.72);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -622,6 +651,7 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 
 /* ── Drive cards ───────────────────────────────────────────────────────── */
 .drive-item {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -634,10 +664,6 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
   flex-shrink: 0;
-  scroll-margin-top: 44px;
-  /* Defer off-screen layout while preserving an estimated card height. */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 140px;
 }
 .drive-item:hover {
   border-color: rgba(110, 231, 183, 0.45);
@@ -657,7 +683,28 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   background: rgba(52, 211, 153, 0.07);
 }
 
-#tab-drives { position: relative; }
+#tab-drives {
+  position: relative;
+  overflow: hidden;
+  gap: 6px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+#tab-drives > :not(#drives-list) { flex-shrink: 0; }
+#tab-drives > .btn-row button { padding: 6px 8px; }
+#btn-load-drives { padding-top: 8px; padding-bottom: 8px; }
+
+@media (max-height: 800px) {
+  #app-header { padding-top: 8px; padding-bottom: 8px; }
+  #tab-bar { margin-top: 4px; }
+  .tab-btn { padding-top: 5px; padding-bottom: 5px; }
+  #tab-drives { gap: 4px; }
+  #tab-drives > .btn-row button { padding-top: 4px; padding-bottom: 4px; }
+  #btn-load-drives { padding-top: 4px; padding-bottom: 4px; }
+  #panel-footer .footer-left { flex-direction: row; align-items: center; gap: 8px; }
+  .drive-item { padding: 8px; gap: 6px; }
+  .drive-date-header { padding-top: 6px; padding-bottom: 4px; }
+}
 
 #multi-select-bar {
   position: absolute;
@@ -902,35 +949,38 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
 
 .drive-item-tags {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
 }
 
-/* Tag filter bar */
-#tag-filter {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 0;
+.drive-item-tags .tag-pill { min-width: 0; max-width: 110px; flex: 0 1 auto; }
+.drive-tag-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drive-item-tags button { flex-shrink: 0; }
+.list-tag-more {
+  padding: 1px 4px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(52, 211, 153, 0.12);
+  color: var(--blue-light);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
 }
 
-.tag-filter-btn {
-  padding: 3px 10px;
-  border-radius: 12px;
-  border: none;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-  outline: none;
+#tag-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
 }
-.tag-filter-btn:hover { color: var(--text); }
-.tag-filter-btn.active {
-  background: rgba(52, 211, 153, 0.15);
-  color: var(--blue-light);
+
+#drive-tag-filter {
+  min-width: 0;
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 12px;
+  color-scheme: dark;
 }
 
 /* Tag list (used in the map-stats header) */
@@ -970,6 +1020,23 @@ input[type="date"].text-input::-webkit-calendar-picker-indicator:hover { opacity
   gap: 5px;
   margin-top: 6px;
 }
+
+/* Keep tag editing inside the card without expanding a fitted page. */
+.list-tag-input-row {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 36px;
+  z-index: 20;
+  margin-top: 0;
+  padding: 8px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.list-tag-suggestions { max-height: 76px; overflow-y: auto; }
 
 .tag-input {
   flex: 0 1 160px;

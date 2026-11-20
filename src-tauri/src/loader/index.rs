@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
+use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::de::IgnoredAny;
 use serde_json::{json, Map, Value};
@@ -50,7 +51,7 @@ fn canceled() -> anyhow::Error {
     anyhow!("Drive data indexing canceled").context("ABORT_ERR")
 }
 
-/// `|tag|tag|` lower-cased tag set for whole-tag LIKE filtering.
+/// JSON quotes keep separators inside a tag distinct from separators between tags.
 fn encode_tag_set(tags: &[Value]) -> String {
     let clean: Vec<String> = tags
         .iter()
@@ -60,6 +61,7 @@ fn encode_tag_set(tags: &[Value]) -> String {
             other => other.to_string().trim().to_lowercase(),
         })
         .filter(|s| !s.is_empty())
+        .map(|s| Value::String(s).to_string())
         .collect();
     if clean.is_empty() { String::new() } else { format!("|{}|", clean.join("|")) }
 }
@@ -67,6 +69,31 @@ fn encode_tag_set(tags: &[Value]) -> String {
 fn next_day_string(date: &str) -> Option<String> {
     let d = chrono::NaiveDate::parse_from_str(date.get(..10)?, "%Y-%m-%d").ok()?;
     Some(d.succ_opt()?.format("%Y-%m-%d").to_string())
+}
+
+fn drive_filters(query: &Value) -> (String, Vec<SqlValue>) {
+    let mut conditions = vec!["1 = 1"];
+    let mut binds = Vec::new();
+    let tag = query["tag"].as_str().unwrap_or("").trim().to_lowercase();
+    if !tag.is_empty() {
+        conditions.push("instr(tags, ?) > 0");
+        binds.push(format!("|{}|", Value::String(tag)).into());
+    }
+    if let Some(start) = query["startDate"].as_str().filter(|s| !s.is_empty()) {
+        conditions.push("start_time >= ?");
+        binds.push(start.chars().take(10).collect::<String>().into());
+    }
+    if let Some(stop) = query["endDate"].as_str().and_then(next_day_string) {
+        conditions.push("start_time < ?");
+        binds.push(stop.into());
+    }
+    (format!("WHERE {}", conditions.join(" AND ")), binds)
+}
+
+#[derive(serde::Deserialize)]
+struct OverviewPoints {
+    #[serde(default, rename = "overviewPoints")]
+    points: Vec<[f64; 2]>,
 }
 
 impl DriveIndex {
@@ -139,28 +166,23 @@ impl DriveIndex {
     pub fn list_drive_summaries(&self, query: &Value) -> Result<Value> {
         let num = |k: &str, d: f64| query.get(k).and_then(Value::as_f64).filter(|v| *v != 0.0).unwrap_or(d);
         let limit = num("limit", 250.0).clamp(1.0, 1000.0) as i64;
-        let offset = num("offset", 0.0).max(0.0) as i64;
-        let s = |k: &str| query.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        let mut wheres: Vec<&str> = Vec::new();
-        let mut binds: Vec<String> = Vec::new();
-        let tag = s("tag").trim().to_lowercase();
-        if !tag.is_empty() {
-            wheres.push("tags LIKE ?");
-            binds.push(format!("%|{tag}|%"));
+        let mut offset = num("offset", 0.0).max(0.0) as i64;
+        let (clause, binds) = drive_filters(query);
+        if let Some(id) = query["driveId"].as_i64() {
+            let id = SqlValue::Integer(id);
+            let start_time: String = self.db.query_row(
+                &format!("SELECT start_time FROM drives {clause} AND id = ?"),
+                params_from_iter(binds.iter().chain([&id])),
+                |row| row.get(0),
+            ).optional()?.ok_or_else(|| super::coded("DRIVE_NOT_FOUND", "Drive not found in the current filters"))?;
+            let rank_params = [SqlValue::Text(start_time), id];
+            let ahead: i64 = self.db.query_row(
+                &format!("SELECT COUNT(*) FROM drives {clause} AND (start_time, id) > (?, ?)"),
+                params_from_iter(binds.iter().chain(rank_params.iter())),
+                |row| row.get(0),
+            )?;
+            offset = ahead / limit * limit;
         }
-        let start = s("startDate");
-        if !start.is_empty() {
-            wheres.push("start_time >= ?");
-            binds.push(start.chars().take(10).collect());
-        }
-        let end = s("endDate");
-        if !end.is_empty() {
-            if let Some(stop) = next_day_string(&end) {
-                wheres.push("start_time < ?");
-                binds.push(stop);
-            }
-        }
-        let clause = if wheres.is_empty() { String::new() } else { format!("WHERE {}", wheres.join(" AND ")) };
         let total: i64 = self
             .db
             .query_row(&format!("SELECT COUNT(*) FROM drives {clause}"), params_from_iter(binds.iter()), |r| r.get(0))?;
@@ -173,6 +195,35 @@ impl DriveIndex {
             drives.push(serde_json::from_str::<Value>(&row?)?);
         }
         Ok(json!({ "total": total, "offset": offset, "limit": limit, "drives": drives }))
+    }
+
+    pub fn list_drive_overview(&self, query: &Value) -> Result<Value> {
+        let (clause, binds) = drive_filters(query);
+        let total: i64 = self.db.query_row(
+            &format!("SELECT COUNT(*) FROM drives {clause}"),
+            params_from_iter(binds.iter()),
+            |row| row.get(0),
+        )?;
+        let total = usize::try_from(total)?;
+        // Share a point budget across the matching routes, keeping both endpoints.
+        let max_points = (200_000 / total.max(1)).clamp(2, 120);
+        let mut stmt = self.db.prepare(
+            &format!("SELECT id, source, summary FROM drives {clause} ORDER BY start_time DESC, id DESC"),
+        )?;
+        let mut rows = stmt.query(params_from_iter(binds.iter()))?;
+        let mut routes = Vec::with_capacity(total);
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let source: String = row.get(1)?;
+            let summary: String = row.get(2)?;
+            let OverviewPoints { points } = serde_json::from_str(&summary)?;
+            routes.push(json!({
+                "id": id,
+                "source": source,
+                "overviewPoints": downsample_overview(&points, max_points),
+            }));
+        }
+        Ok(json!({ "overviewRoutes": routes }))
     }
 
     pub fn get_drive_detail(&self, id: i64, max_points: f64) -> Result<Option<Value>> {
@@ -228,26 +279,30 @@ impl DriveIndex {
 
     /// Keep tag filtering consistent with an in-session tag edit.
     pub fn set_drive_tags(&self, start_time: &str, tags: &[Value]) -> Result<()> {
-        let summary: Option<String> = self
-            .db
-            .query_row("SELECT summary FROM drives WHERE start_time = ?1", [start_time], |r| r.get(0))
-            .optional()?;
-        let is_summon = summary
-            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-            .and_then(|v| v.get("summon").and_then(Value::as_bool))
-            .unwrap_or(false);
-        let mut filter = tags.to_vec();
-        if is_summon {
-            filter.push(json!("summon"));
-        }
-        self.db.execute("UPDATE drives SET tags = ?1 WHERE start_time = ?2", params![encode_tag_set(&filter), start_time])?;
+        let tx = self.db.unchecked_transaction()?;
+        let mut summon_tags = tags.to_vec();
+        summon_tags.push(json!("summon"));
+        tx.execute(
+            "UPDATE drives
+             SET tags = CASE WHEN json_extract(summary, '$.summon') THEN ?2 ELSE ?1 END,
+                 summary = json_set(summary, '$.tags', json(?3))
+             WHERE start_time = ?4",
+            params![
+                encode_tag_set(tags),
+                encode_tag_set(&summon_tags),
+                serde_json::to_string(tags)?,
+                start_time,
+            ],
+        )?;
         let mut all = self.drive_tags()?;
         if tags.is_empty() {
             all.remove(start_time);
         } else {
             all.insert(start_time.into(), Value::Array(tags.to_vec()));
         }
-        self.set_meta("driveTags", &Value::Object(all))
+        self.set_meta("driveTags", &Value::Object(all))?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn delete_drives_by_start_times(&self, start_times: &[String]) -> Result<u64> {
@@ -489,7 +544,7 @@ fn put_charging_history(index: &DriveIndex, h: &super::charging::ChargingHistory
 
 // ── Windowed grouping ───────────────────────────────────────────────────────
 
-fn downsample_overview(points: &[[f64; 4]], max: usize) -> Vec<[f64; 2]> {
+fn downsample_overview<const N: usize>(points: &[[f64; N]], max: usize) -> Vec<[f64; 2]> {
     if points.is_empty() {
         return Vec::new();
     }
@@ -968,13 +1023,67 @@ mod tests {
     }
 
     #[test]
+    fn list_and_overview_match_literal_tags_across_pages() {
+        let f = fixture(&json!({}));
+        put_drive(&f.index, 1, "2026-07-10T08:00:00", &["worka1", "1000", "home|office"], false);
+        put_drive(&f.index, 2, "2026-07-15T09:30:00", &["Work_1", "100%", "home|\"office\""], false);
+        put_drive(&f.index, 3, "2026-07-20T12:00:00", &["work_1"], false);
+        put_drive(&f.index, 4, "2026-07-21T12:00:00", &["work_1"], false);
+        let points: Vec<[f64; 2]> = (0..121).map(|n| [f64::from(n) / 10.0, 20.0]).collect();
+        f.index.db.execute(
+            "UPDATE drives SET summary = json_set(summary, '$.overviewPoints', json(?1))",
+            [serde_json::to_string(&points).unwrap()],
+        ).unwrap();
+
+        assert_eq!(total(&f, json!({ "tag": "home" })), 0);
+        for tag in ["100%", "home|\"office\""] {
+            let page = f.index.list_drive_summaries(&json!({ "tag": tag })).unwrap();
+            assert_eq!(page["total"], 1);
+            assert_eq!(page["drives"][0]["id"], 2);
+        }
+        let query = json!({ "tag": "WORK_1", "limit": 1, "endDate": "2026-07-20" });
+        let page = f.index.list_drive_summaries(&query).unwrap();
+        assert_eq!(page["total"], 2);
+        assert_eq!(page["drives"][0]["id"], 3);
+        let overview = f.index.list_drive_overview(&query).unwrap();
+        let routes = overview["overviewRoutes"].as_array().unwrap();
+        assert_eq!(routes.len(), 2);
+        assert_eq!((routes[0]["id"].as_i64(), routes[1]["id"].as_i64()), (Some(3), Some(2)));
+        let compact = routes[1]["overviewPoints"].as_array().unwrap();
+        assert_eq!(compact.len(), 120);
+        assert_eq!(compact[0], json!(points[0]));
+        assert_eq!(compact[119], json!(points[120]));
+    }
+
+    #[test]
+    fn drive_id_locates_its_filtered_page_with_tied_start_times() {
+        let f = fixture(&json!({}));
+        for id in 1..=4 {
+            put_drive(&f.index, id, "2026-07-15T09:30:00", &[if id == 4 { "Home" } else { "Work" }], false);
+        }
+        let page = f.index.list_drive_summaries(&json!({ "driveId": 1, "tag": "work", "limit": 2 })).unwrap();
+        assert_eq!(page["total"], 3);
+        assert_eq!(page["offset"], 2);
+        assert_eq!(page["drives"][0]["id"], 1);
+        let error = f.index.list_drive_summaries(&json!({ "driveId": 4, "tag": "work", "limit": 2 })).unwrap_err();
+        assert_eq!(super::super::error_json(&error)["code"], "DRIVE_NOT_FOUND");
+    }
+
+    #[test]
     fn set_drive_tags_keeps_tag_filtering_truthful_after_an_edit() {
         let f = fixture(&json!({}));
         put_drive(&f.index, 1, "2026-07-15T09:30:00", &[], false);
+        put_drive(&f.index, 2, "2026-07-15T09:30:00", &[], true);
         assert_eq!(total(&f, json!({ "tag": "errand" })), 0);
 
         f.index.set_drive_tags("2026-07-15T09:30:00", &[json!("Errand")]).unwrap();
-        assert_eq!(total(&f, json!({ "tag": "errand" })), 1);
+        let page = f.index.list_drive_summaries(&json!({ "tag": "errand" })).unwrap();
+        assert_eq!(page["total"], 2);
+        assert_eq!(page["drives"][0]["id"], 2);
+        assert_eq!(page["drives"][1]["id"], 1);
+        assert_eq!(page["drives"][0]["tags"], json!(["Errand"]));
+        assert_eq!(page["drives"][1]["tags"], json!(["Errand"]));
+        assert_eq!(total(&f, json!({ "tag": "summon" })), 1);
         assert_eq!(Value::Object(f.index.drive_tags().unwrap()), json!({ "2026-07-15T09:30:00": ["Errand"] }));
 
         f.index.set_drive_tags("2026-07-15T09:30:00", &[]).unwrap();
