@@ -2838,7 +2838,7 @@ https://github.com/purpleprotocol/mimalloc_rust/tree/master/libmimalloc-sys
 Copyright 2019 Octavian Oncescu
 MIT: the standard text in "Standard licence texts: MIT", above.
 
-libsqlite3-sys 0.39.1 (MIT)
+libsqlite3-sys 0.40.0 (MIT)
 https://github.com/rusqlite/rusqlite
 Copyright (c) 2014 The rusqlite developers
 MIT: the standard text in "Standard licence texts: MIT", above.
@@ -3736,7 +3736,7 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
 OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-rusqlite 0.41.1 (MIT)
+rusqlite 0.42.0 (MIT)
 https://github.com/rusqlite/rusqlite
 Copyright (c) 2014 The rusqlite developers
 MIT: the standard text in "Standard licence texts: MIT", above.
