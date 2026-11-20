@@ -1,8 +1,8 @@
 {
   "versions": [
     {
-      "version": "2026.46.1",
-      "date": "2026-11-11",
+      "version": "2026.47.1",
+      "date": "2026-11-20",
       "title": "Drive Map and Pagination",
       "changes": [
         {
@@ -28,6 +28,14 @@
         {
           "type": "improvement",
           "description": "Process New Drives appears first in the Processing tab. Both processing buttons have tooltips."
+        },
+        {
+          "type": "improvement",
+          "description": "Settings > Support > Licenses opens the licenses of the open-source software Sentry Drive includes."
+        },
+        {
+          "type": "improvement",
+          "description": "Updated dependencies."
         }
       ]
     },

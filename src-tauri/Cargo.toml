@@ -1,6 +1,6 @@
 [package]
 name = "sentry-drive"
-version = "2026.46.1"
+version = "2026.47.1"
 description = "Sentry Drive (Tauri preview)"
 authors = ["Sentry-Six"]
 license = "MIT"
